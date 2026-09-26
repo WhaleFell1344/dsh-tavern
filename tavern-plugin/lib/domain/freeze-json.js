@@ -1,3 +1,4 @@
+import {createOrderedNumericIndex} from './ordered-numeric-index.js'
 import {createIndexedArrayApi} from './indexed-array.js'
 // Internal immutable projections may share JSON subtrees across revisions.
 // Public editable reads must still detach them before returning.
@@ -25,4 +26,19 @@ export function createImmutableJsonIndex(options) {
 export function immutableArrayChanges(before,after) {
   const index=indexedOwners.get(after)
   return index && index===indexedOwners.get(before) ? index.changed(before,after) : null
+}
+
+export function createImmutableOrderedJsonIndex(options) {
+  const index=createOrderedNumericIndex(options)
+  const owner={changed(before,after){
+    if(index.info(before)?.count!==index.info(after)?.count)return null
+    const changes=index.changed(before,after)
+    if(!changes || changes.some(row=>row.before===undefined || row.after===undefined))return null
+    return changes.map(row=>index.rank(after,row.key))
+  }}
+  const brand=value=>{immutable.add(value);indexedOwners.set(value,owner);return value}
+  return {...index,
+    from(entries){return brand(index.from(entries.map(([key,value])=>[key,freezeJson(value)])))},
+    update(source,entries){return brand(index.update(source,entries.map(([key,value])=>[key,freezeJson(value)])))}
+  }
 }
