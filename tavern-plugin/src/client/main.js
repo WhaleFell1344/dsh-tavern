@@ -517,6 +517,19 @@ window.__ModuleLoader__.load({
 			return state;
 		}
 
+		function useScopedLiveTavernView(sessionId, revision, paths) {
+			const key = JSON.stringify(paths);
+			const selection = React.useMemo(function () { return liveTavernView.select(sessionId, paths); }, [sessionId, key]);
+			const state = React.useSyncExternalStore(selection.subscribe, selection.getSnapshot, selection.getSnapshot);
+			const previous = React.useRef({ sessionId: sessionId, revision: revision });
+			React.useEffect(function () {
+				const last = previous.current;
+				previous.current = { sessionId: sessionId, revision: revision };
+				if (last.sessionId === sessionId && last.revision !== revision) liveTavernView.invalidate(sessionId);
+			}, [sessionId, revision]);
+			return state;
+		}
+
 		function useTavernCoordination(sessionId, revision) {
 			const [state, setState] = React.useState(function () { return tavernCoordination.getSnapshot(sessionId); });
 			React.useEffect(function () { return tavernCoordination.subscribe(sessionId, setState); }, [sessionId]);
@@ -5769,7 +5782,7 @@ window.__ModuleLoader__.load({
 				const location = props.node.location;
 				const turnRef = location && (location.kind === "turn" || location.kind === "step") ? location.turn : null;
 				const turn = turnRef ? Number(turnRef.turn) : 0;
-				const liveState = useLiveTavernView(props.sessionId, String(data.time || ""));
+				const liveState = useScopedLiveTavernView(props.sessionId, String(data.time || ""), [["inputSources", String(turn)], ["inputTemplateDisplays", String(turn)]]);
 				const parts = userContentParts(data.content);
 				const text = tavernUserTextForTurn(liveState.view, turn, data.content);
 				const [copied, setCopied] = React.useState(false);
@@ -5977,7 +5990,7 @@ window.__ModuleLoader__.load({
 				return React.createElement("div", { className: "dsh-tavern-assistant", "data-streaming": data.status === "running" || undefined }, rendered, illustration, mvuReceiptNode, inlineStatus);
 			}
 			function TavernForkAssistantAction(props) {
-				const liveState = useLiveTavernView(props.sessionId, String(props.messageId || ""));
+				const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [["mode"], ["forkTurnsByMessageId", String(props.messageId || "")]]);
 				const [forking, setForking] = React.useState(false);
 				const view = liveState.view;
 				const forkTurn = Number(view && view.forkTurnsByMessageId && view.forkTurnsByMessageId[String(props.messageId || "")]) || 0;

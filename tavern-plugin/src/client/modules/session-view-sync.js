@@ -129,7 +129,7 @@ function createSessionViewReader(maxSessions = 4) {
           sessions.set(sessionId, { view, cursor: result.viewCursor, sequence: requestSequence });
           while (sessions.size > maxSessions) sessions.delete(sessions.keys().next().value);
         }
-        return Object.assign({}, result, { view });
+        return Object.assign({}, result, { view, viewBase: result.viewDelta ? base.view : undefined });
       }
     };
   };
