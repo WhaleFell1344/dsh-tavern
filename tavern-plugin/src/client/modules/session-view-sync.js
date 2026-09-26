@@ -2,7 +2,7 @@
 function createSessionViewReader(maxSessions = 4) {
   const sessions = new Map();
   const index = createSessionViewReader.indexApi ||= createIndexedArrayApi();
-  const receiptLookup = createSessionViewReader.receiptLookup ||= createReceiptTurnLookup(index);
+  const receiptLookup = createSessionViewReader.receiptLookup ||= createReceiptTurnLookup(index,createSessionViewReader.onReceiptLookupVisit);
   let sequence = 0;
   return function begin(sessionId) {
     const base = sessions.get(sessionId);
@@ -94,32 +94,59 @@ function createSessionViewReader(maxSessions = 4) {
 }
 
 // Weak array-version keys preserve concurrent/older views without retaining them.
-function createReceiptTurnLookup(index) {
+function createReceiptTurnLookup(index,onVisit = () => {}) {
   const versions = new WeakMap();
-  const valid = turn => Number.isSafeInteger(turn) && turn >= 0 && turn < 0xffffffff;
+  // Number-to-string has bounded length for IEEE-754 turns, including infinities.
+  // A character trie avoids history-sized Map copies while retaining old roots.
+  const turnKey = value => { const turn=Number(value); return Number.isNaN(turn) ? null : String(turn); };
+  function get(root,key) {
+    let node=root;
+    for (const character of key) { onVisit(); node=node?.[character]; }
+    return node?.$;
+  }
+  function put(root,key,value,offset=0) {
+    onVisit();
+    const next={...root}, character=offset===key.length ? "$" : key[offset];
+    const child=offset===key.length ? value : put(root?.[character],key,value,offset+1);
+    if (child===undefined) delete next[character]; else next[character]=child;
+    return Object.keys(next).length ? next : undefined;
+  }
+  function change(root,key,id,row) {
+    if (key===null) return root;
+    const old=get(root,key);
+    let next;
+    if (old?.rows) {
+      const rows=index.update(old.rows,[[id,row]],Math.max(old.rows.length,id+1));
+      const count=index.info(rows).eligible;
+      if (count>1) next={rows};
+      else if (count===1) { const last=index.previous(rows,rows.length); next={id:last,row:rows[last]}; }
+    } else if (row!==undefined) {
+      next=old && old.id!==id
+        ? {rows:index.update([],[[old.id,old.row],[id,row]],Math.max(old.id,id)+1)} : {id,row};
+    } else if (old?.id!==id) next=old;
+    return put(root,key,next);
+  }
   function remember(rows,before,entries) {
     if (versions.has(rows)) return;
-    const previous = before && versions.get(before);
-    if (previous && rows.length === before.length && entries.every(([id,row]) => Number(row?.turn) === Number(before[id]?.turn))) {
-      versions.set(rows,index.update(previous,entries.map(([,row]) => [Number(row.turn),row.receipt || null])));
-      return;
+    let root;
+    if (before && versions.has(before)) {
+      root=versions.get(before);
+      const changed=new Map(entries);
+      // Clear all old owners first, so swaps and duplicate-turn promotion work.
+      for (const [id] of changed) if (id<before.length) root=change(root,turnKey(before[id]?.turn),id,undefined);
+      for (let id=rows.length;id<before.length;id++) if (!changed.has(id)) root=change(root,turnKey(before[id]?.turn),id,undefined);
+      for (const [id,row] of changed) if (id<rows.length) root=change(root,turnKey(row?.turn),id,row);
+    } else {
+      for (let id=0;id<rows.length;id++) { const row=rows[id]; root=change(root,turnKey(row?.turn),id,row); }
     }
-    const seen = new Set(), updates = [];
-    let length = 0;
-    for (const row of rows) {
-      const turn = Number(row?.turn);
-      // Duplicate or unusual legacy turns retain the exact reverse-scan rule.
-      if (!valid(turn) || seen.has(turn)) { versions.set(rows,null); return; }
-      seen.add(turn); length = Math.max(length,turn+1);
-      updates.push([turn,row.receipt || null]);
-    }
-    versions.set(rows,index.update([],updates,length));
+    versions.set(rows,root);
   }
   function read(rows,turn) {
-    const source = versions.get(rows), key = Number(turn);
-    if (source) return valid(key) ? source[key] || null : null;
-    for (let id=rows.length-1;id>=0;id--) if (Number(rows[id] && rows[id].turn) === key) return rows[id].receipt || null;
-    return null;
+    const key=turnKey(turn);
+    if (key===null) return null;
+    const bucket=get(versions.get(rows),key);
+    const row=bucket?.rows ? bucket.rows[index.previous(bucket.rows,bucket.rows.length)] : bucket?.row;
+    return row?.receipt || null;
   }
   return {remember,read,has:rows=>versions.has(rows)};
 }
