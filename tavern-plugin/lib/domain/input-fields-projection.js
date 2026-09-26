@@ -8,12 +8,16 @@ export function createInputFieldsProjection({maxEntries=8,maxBytes=8*1024*1024,o
     const previous=cache.get(chat.id),messages=Array.isArray(chat.messages)?chat.messages:[]
     const dirty=indices && [...indices]
     let reuse=previous && previous.revision===baseRevision && Array.isArray(changedHeaderFields) && !changedHeaderFields.includes('runtimeInputs')
-      && dirty && previous.roles.length===messages.length && dirty.every(id=>Number.isSafeInteger(id)&&id>=0&&id<messages.length&&previous.roles[id]===messages[id]?.role)
+      && dirty && previous.roles.length<=messages.length && dirty.every(id=>Number.isSafeInteger(id)&&id>=0&&id<messages.length&&(id>=previous.roles.length || previous.roles[id]===messages[id]?.role))
     let sources,displays,roleRows,runtimeSources
     if(reuse){
-      roleRows=previous.roles;runtimeSources=previous.runtimeSources
+      const appended=[]
+      const positions=new Set(dirty)
+      for(let id=previous.roles.length;id<messages.length;id++){appended.push([id,messages[id]?.role]);positions.add(id)}
+      roleRows=appended.length?roles.update(previous.roles,appended,messages.length):previous.roles
+      runtimeSources=previous.runtimeSources
       const sourceSets=[],sourceRemoves=[],displaySets=[],displayRemoves=[]
-      for(const id of dirty){
+      for(const id of positions){
         const message=messages[id];if(message?.role!=='user')continue
         const turn=String(1+roles.rank(roleRows,id+1)),display=displayOf(message)
         if(!display)displayRemoves.push(turn);else displaySets.push([turn,display.value])

@@ -45,3 +45,20 @@ test('role changes and unknown header coverage rebuild rather than reuse stale o
  const unknown=projector.project(chat,{baseRevision:2,indices:[],changedHeaderFields:null})
  assert.equal(unknown.inputSources[9],'new')
 })
+
+for(const count of [20,400,10000])test(`tail input append keeps ${count} historical input fields`,()=>{
+ let reads=0,visits=0
+ const projector=createInputFieldsProjection({maxBytes:128*1024*1024,onIndexVisit:()=>visits++})
+ const messages=Array.from({length:count},(_,i)=>({role:i%2?'assistant':'user',text:'body'+i,templateInputSource:true}))
+ const chat={id:'append',_storageRevision:1,messages},first=projector.project(chat)
+ const sync=createSessionViewSync(),baseline=sync('s',first)
+ const added=[...messages,{role:'assistant',text:'assistant'},{role:'user',text:'new user',templateInputSource:true}]
+ const measured=new Proxy(added,{get(target,key,receiver){if(/^\d+$/.test(String(key)))reads++;return Reflect.get(target,key,receiver)}})
+ visits=0
+ const next=projector.project({...chat,_storageRevision:2,messages:measured},{baseRevision:1,indices:[],changedHeaderFields:[]})
+ const delta=sync('s',next,baseline.viewCursor).viewDelta
+ assert.ok(reads<=5,`reads: ${reads}`);assert.ok(visits<300,`visits: ${visits}`)
+ assert.deepEqual(delta.set,[[['inputSources',String(count/2+2)],'new user']])
+ assert.equal(Object.hasOwn(first.inputSources,String(count/2+2)),false)
+ assert.equal(first.inputSources[2],next.inputSources[2])
+})
