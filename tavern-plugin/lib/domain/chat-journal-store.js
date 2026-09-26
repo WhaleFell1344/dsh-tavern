@@ -547,7 +547,7 @@ export function createChatJournalStore(options = {}) {
     for (const change of changes) {
       if (!change.path.length) { tail = 0; layoutChanged = true; break }
       if (change.path[0] !== 'messages') continue
-      if (change.path.length <= 2 || ['turn','role','greeting'].includes(change.path[2])) layoutChanged = true
+      if (change.path.length <= 2 || ['turn','role','greeting','tavernRole'].includes(change.path[2])) layoutChanged = true
       if (change.path.length > 1 && Number.isSafeInteger(change.path[1])) indices.add(change.path[1])
       else tail = Math.min(tail, change.op === 'splice' ? change.index : 0)
     }
@@ -592,15 +592,22 @@ export function createChatJournalStore(options = {}) {
     if (!changed || revision === state.revision
       || Object.values(state.chat.timeline?.operations || {}).some(op => op?.kind === 'body' && op.status === 'foreground-completed')
       || !Array.isArray(state.chat.messages)
-      || !state.chat.messages.every(row => row && typeof row === 'object' && !Array.isArray(row))) return undefined
-    const dirty = new Set(changed.indices)
-    const messages = state.chat.messages.map((row, index) => {
-      if (dirty.has(index)) return row
-      const { variables, ...display } = row
-      return display
+      || !(indexedMessages.info(state.chat.messages)?.complete ?? state.chat.messages.every(row=>row && typeof row==='object' && !Array.isArray(row)))) return undefined
+    const dirty = new Set(changed.indices), detached = new Map()
+    const source = state.chat.messages
+    const messages = createScopedMessages(source.length,[],index=>{
+      if (!detached.has(index)) {
+        const row=source[index]
+        if (dirty.has(index)) detached.set(index,copyJsonTree(row))
+        else { const {variables,...display}=row; detached.set(index,copyJsonTree(display)) }
+      }
+      return detached.get(index)
     })
-    return { ...changed, chat: structuredClone({ ...state.chat, messages }) }
+    const chat = copyJsonTree({...state.chat,messages:[]})
+    chat.messages = messages
+    return { ...changed, layoutChanged:knownChanges(chatId,state).filter(frame=>frame.revision>revision).some(frame=>frame.layoutChanged !== false), chat }
   }
+
   /** Exact-version internal commit; stale callers must use their existing merge path. */
   async function patch(chatId, expectedRevision, changes, metadata={}) {
     return serialize(chatId,async()=>{

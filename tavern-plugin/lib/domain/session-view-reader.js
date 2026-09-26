@@ -1,3 +1,4 @@
+import { helperMessagesComplete } from './tavern-helper-context.js'
 import { projectSceneImageState, projectChatBackgroundConfig } from './chat-session-state.js'
 function identity(chat) {
   const mode = chat.mode || 'story'
@@ -10,7 +11,7 @@ function matches(cached, next) {
 function canProjectDirty(previous, chat, indices) {
   const before = previous?.tavernHelper?.messages, after = chat.messages
   if (!indices || !Array.isArray(before) || !Array.isArray(after) || before.length > after.length
-    || before.some(message => message?.stub === true)) return false
+    || !helperMessagesComplete(before)) return false
   for (const index of indices) {
     if (!Number.isSafeInteger(index) || index < 0 || index >= after.length) return false
     if (index >= before.length) continue
@@ -47,7 +48,7 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
         if (delta?.baseRevision === cached.revision && delta.chat?.id === state.id
           && delta.revision === next.revision && identity(delta.chat).revision === next.revision
           && matches(cached, {...identity(delta.chat), resourceVersion: resources}) && canProjectDirty(cached.view, delta.chat, dirty)) {
-          return { chat: delta.chat, cached, dirty, resourceVersion: resources }
+          return { chat: delta.chat, cached, dirty, layoutChanged:delta.layoutChanged, resourceVersion: resources }
         }
       }
       const chat = await trace.stage('readFullChat', () => readChat(sessionId))
@@ -64,7 +65,7 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
     } else {
       const dirty = selected.dirty ?? (matches(cached, next) && cached.revision < next.revision ? await changes(chat, cached.revision) : null)
       if (matches(cached, next) && canProjectDirty(cached?.view, chat, dirty)) {
-        view = await trace.stage('projectViewDirty', () => project.dirty(chat, cached.view, dirty, currentActivity))
+        view = await trace.stage('projectViewDirty', () => project.dirty(chat, cached.view, dirty, currentActivity, {layoutChanged:selected.layoutChanged}))
         rebuild = 'dirty'
       } else {
         view = await project.full(chat, options)

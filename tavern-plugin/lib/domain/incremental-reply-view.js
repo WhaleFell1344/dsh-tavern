@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { createIndexedArrayApi } from './indexed-array.js'
+import { freezeJson } from './freeze-json.js'
 import { projectReplyHistory } from './reply-presentation.js'
 import { projectPersistentStatusView } from './persistent-status-view.js'
 
@@ -11,16 +13,23 @@ function displayDependencies(options) {
 // Derived, disposable state only. The journal remains the authority for changed indices.
 export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 1024, maxEntries = 4 } = {}) {
   const cache = new Map()
+  const sourceIndex = createIndexedArrayApi({measure:value=>48+String(value).length*2})
+  function sourceKey(message) {
+    if (!message) return JSON.stringify(message)
+    const {variables,mvu,...display} = message
+    return createHash('sha256').update(JSON.stringify(display)).digest('hex')
+  }
+  function output(result, shared) { return shared ? {...result} : structuredClone(result) }
   let bytes = 0
   const stats = { rebuilt: 0, incremental: 0, reused: 0, projectedMessages: 0 }
-  async function project(chat, options = {}, statusOptions = options) {
+  async function project(chat, options = {}, statusOptions = options, {shared = false} = {}) {
     const signature = createHash('sha256').update(JSON.stringify([displayDependencies(options), displayDependencies(statusOptions), chat.timeline?.branchId])).digest('hex')
     const previous = cache.get(chat.id)
     const revision = chat._storageRevision
     const messages = Array.isArray(chat.messages) ? chat.messages : []
     let changes
     if (previous?.signature === signature && Number.isSafeInteger(revision)) {
-      if (previous.revision === revision) { stats.reused++; return structuredClone(previous.result) }
+      if (previous.revision === revision) { stats.reused++; return output(previous.result,shared) }
       if (previous.revision < revision) {
         try { changes = await readChanges?.(chat.id, previous.revision) }
         catch { changes = undefined } // The full Chat was already read successfully.
@@ -29,10 +38,13 @@ export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 
     const compatible = changes && changes.baseRevision === previous.revision && changes.chat?._storageRevision === revision
       && changes.messageCount === messages.length && changes.denseMessages && Array.isArray(changes.indices)
       && changes.indices.every((index, at) => Number.isSafeInteger(index) && index >= 0 && index < messages.length && (at === 0 || index > changes.indices[at - 1]))
-    if (compatible && !changes.indices.length && messages.length === previous.roles.length) {
+    // MVU payloads/receipts do not participate in body or static panel projection.
+    // Check only the declared dirty sources, then retain the immutable result.
+    if (compatible && messages.length === previous.roles.length
+      && changes.indices.every(id => sourceKey(messages[id]) === previous.sources[id])) {
       if (cache.get(chat.id) === previous) previous.revision = revision
       stats.reused++
-      return structuredClone(previous.result)
+      return output(previous.result,shared)
     }
     let rows, roles, before, indices
     if (compatible) {
@@ -64,16 +76,19 @@ export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 
     }
     const projections = rows.flatMap(row => row?.projections || [])
     const status = projectPersistentStatusView(messages, projections, statusOptions)
-    const result = { ...status, presentation: null, latestSourceBacked: rows.findLast(row => row)?.latestSourceBacked || false }
-    const size = JSON.stringify([rows, result]).length * 2 + messages.length * 64 + 512
+    const result = freezeJson({ ...status, presentation: null, latestSourceBacked: rows.findLast(row => row)?.latestSourceBacked || false })
+    const sources = compatible
+      ? sourceIndex.update(previous.sources,indices.map(id=>[id,sourceKey(messages[id])]),messages.length)
+      : sourceIndex.from(messages.map(sourceKey))
+    const size = JSON.stringify([rows, result]).length * 2 + messages.length * 64 + 512 + sourceIndex.info(sources).bytes
     if (Number.isSafeInteger(revision) && size <= maxBytes && maxEntries > 0 && !(cache.get(chat.id)?.revision > revision)) {
       if (cache.has(chat.id)) { bytes -= cache.get(chat.id).size; cache.delete(chat.id) }
       while (cache.size && (bytes + size > maxBytes || cache.size >= maxEntries)) {
         const oldest = cache.keys().next().value; bytes -= cache.get(oldest).size; cache.delete(oldest)
       }
-      cache.set(chat.id, {revision, signature, rows, roles, before, result, size}); bytes += size
+      cache.set(chat.id, {revision, signature, rows, roles, before, result, size, sources}); bytes += size
     }
-    return structuredClone(result)
+    return output(result,shared)
   }
   return { project, stats: () => ({...stats, entries: cache.size, estimatedBytes: bytes}) }
 }

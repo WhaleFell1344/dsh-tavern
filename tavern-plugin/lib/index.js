@@ -1,3 +1,4 @@
+import { createScopedMessages } from './domain/scoped-messages.js'
 import {registerVariableReadTool} from './domain/read-variables.js'
 import { createBackgroundSessionRetirement, installRetiredBackgroundFilter } from './domain/background-session-retirement.js'
 import { createCardMemory, CARD_MEMORY_TOOLS } from '../packages/dsh-tavern-card-memory/index.js'
@@ -1394,7 +1395,7 @@ export async function apply(ctx) {
   }
   const liveCardUpdate = createLiveCardUpdate({readGlobals:readPromptTemplateGlobalVariables})
   ctx.effect(() => () => liveCardUpdate.dispose())
-  const incrementalReplyView = createIncrementalReplyView({ readChanges: (id, revision) => chatPersistence.readChangedSlice(id, revision) })
+  const incrementalReplyView = createIncrementalReplyView({ readChanges: (id, revision) => chatPersistence.readChangedSlice(id, revision, 'settlement') })
   async function view(chat, card, persistedProjection = false, options = {}) {
     scheduleTemplateSync(chat)
     const runtimeSettings = await requestPerformance.stage('settings', () => readTavernSettings())
@@ -1424,7 +1425,7 @@ export async function apply(ctx) {
         charName: chat.cardName, macroState: chat.macroState,
         regexScripts: composeTavernRegexScripts(cardExtensions, presetRegexScripts),
         placement: 2, isMarkdown: true, isEdit: false, depth: 0
-      }, { charName: chat.cardName, macroState: chat.macroState, regexScripts: cardExtensions.regexScripts }))
+      }, { charName: chat.cardName, macroState: chat.macroState, regexScripts: cardExtensions.regexScripts }, {shared:true}))
       replyDisplay = await liveCardUpdate.project(chat, card, replyDisplay, {charName:chat.cardName,macroState:chat.macroState,regexScripts:cardExtensions.regexScripts})
       replyDisplay.projections = withLegacyPresentationProjection(chat, replyDisplay.projections)
     }
@@ -1492,7 +1493,7 @@ export async function apply(ctx) {
       ? Math.max(0, messageCount - HELPER_MESSAGE_COLD_WINDOW)
       : (Number.isSafeInteger(options.skeletonUntil) ? Math.max(0, options.skeletonUntil) : 0)
     const helperContext = helperEnabled
-      ? await requestPerformance.stage('helperMessagesProjection', () => projectTavernHelperContext(chat, { skeletonUntil }))
+      ? await requestPerformance.stage('helperMessagesProjection', () => projectTavernHelperContext(chat, { skeletonUntil, indexed:true }))
       : null
     const rollbackEvidence = sessionDebugEvidence(chat.sessionId, true)
     const rollbackFields = rollbackViewFields(chat, rollbackEvidence)
@@ -1578,9 +1579,9 @@ export async function apply(ctx) {
     return projections
   }
   function withLegacyPresentationProjection(chat, projections) {
-    const result = Array.isArray(projections) ? projections.slice() : []
     const legacy = chat && chat.presentation
-    if (!legacy || typeof legacy !== 'object' || str(legacy.html) === '') return result
+    if (!legacy || typeof legacy !== 'object' || str(legacy.html) === '') return Array.isArray(projections) ? projections : []
+    const result = Array.isArray(projections) ? projections.slice() : []
     const turn = Math.max(1, Number(legacy.turn) || (legacy.source === 'opening' ? 1 : 0))
     if (result.some(function (projection) { return Number(projection.turn) === turn })) return result
     const messages = Array.isArray(chat.messages) ? chat.messages : []
@@ -1643,13 +1644,13 @@ export async function apply(ctx) {
     activity: chat => backgroundTasks.activity(chat),
     evidence: sessionId => sessionDebugEvidence(sessionId, true)
   })
-  function mvuReceiptsOf(chat) { return sessionStateView.receipts(chat) }
+  function mvuReceiptsOf(chat, changes) { return sessionStateView.receipts(chat, changes) }
   function rollbackViewFields(chat, evidence) { return sessionStateView.rollback(chat, evidence) }
-  function volatileSessionViewFields(chat, activity) { return sessionStateView.volatile(chat, activity) }
+  function volatileSessionViewFields(chat, activity, changes) { return sessionStateView.volatile(chat, activity, changes) }
 
   async function projectCachedSessionView(chat, previous, activity) {
     const mode = chat.mode || 'story'
-    const reused = Object.assign({}, previous, volatileSessionViewFields(chat, activity))
+    const reused = Object.assign({}, previous, volatileSessionViewFields(chat, activity, {baseRevision:chat._storageRevision,indices:[]}))
     if (mode === 'script') {
       reused.scriptProgress = await requestPerformance.stage('scriptProgress', async () => {
         const script = await readScript(chat.cardPath)
@@ -1660,16 +1661,17 @@ export async function apply(ctx) {
     }
     return reused
   }
-  async function projectDirtySessionView(chat, previous, dirtyMessageIndices, activity) {
+  async function projectDirtySessionView(chat, previous, dirtyMessageIndices, activity, {layoutChanged} = {}) {
     const card = await readChatCard(chat)
     const mode = chat.mode || 'story'
     const previousMessages = previous.tavernHelper.messages
-    const next = Object.assign({}, previous, volatileSessionViewFields(chat, activity), {
+    const changes = {baseRevision:previous.tavernHelper.stateRevision,indices:[...dirtyMessageIndices]}
+    const next = Object.assign({}, previous, volatileSessionViewFields(chat, activity, changes), {
       posture: chat.posture || '',
       guides: Array.isArray(chat.guides) ? chat.guides : []
     })
     const helperCore = await requestPerformance.stage('helperMessagesProjection', () => projectTavernHelperContext(chat, {
-      previousMessages,
+      previousMessages, previousContext:previous.tavernHelper, indexed:true, layoutChanged,
       dirtyIndices: dirtyMessageIndices
     }))
     next.tavernHelper = Object.assign({}, previous.tavernHelper, helperCore, {
@@ -1693,15 +1695,14 @@ export async function apply(ctx) {
         charName: chat.cardName, macroState: chat.macroState,
         regexScripts: composeTavernRegexScripts(cardExtensions, presetRegexScripts),
         placement: 2, isMarkdown: true, isEdit: false, depth: 0
-      }, { charName: chat.cardName, macroState: chat.macroState, regexScripts: cardExtensions.regexScripts }))
-      const renderChat = {...chat,messages:chat.messages.map((message,index) => message.variables ? message : {...message,variables:helperCore.messages[index]?.swipes_data || []})}
+      }, { charName: chat.cardName, macroState: chat.macroState, regexScripts: cardExtensions.regexScripts }, {shared:true}))
+      const renderChat = {...chat,messages:createScopedMessages(chat.messages.length,[],index=>{const message=chat.messages[index];return message.variables ? message : {...message,variables:helperCore.messages[index]?.swipes_data || []}})}
       replyDisplay = await liveCardUpdate.project(renderChat, card, replyDisplay, {charName:chat.cardName,macroState:chat.macroState,regexScripts:cardExtensions.regexScripts})
       replyDisplay.projections = withLegacyPresentationProjection(chat, replyDisplay.projections)
       next.replyProjections = replyDisplay.projections
       next.tavernStatusView = replyDisplay.statusView || null
       next.tavernStatusViews = replyDisplay.statusViews || []
     }
-    next.mvuReceipts = mvuReceiptsOf(chat)
     return next
   }
   async function projectFullSessionView(chat, { windowHelperMessages = false } = {}) {

@@ -1,3 +1,4 @@
+import { createMvuReceiptIndex } from './mvu-receipt-index.js'
 import { copyJsonTree } from './copy-json-tree.js'
 import { rollbackAvailability, hasRollbackMessages, failedTurnReplayAvailability, foregroundSuppressedTurns, supersededRegenerationErrorTurns } from './rollback-surface.js'
 import { isRescuedHistoryMessage } from './chat-history-rescue.js'
@@ -65,42 +66,8 @@ export function settlementTurn(chat) {
   }
 
 export function createSessionStateView({ activity: activityOf, evidence: evidenceOf }) {
-  function mvuReceiptsOf(chat) {
-    const messages = Array.isArray(chat && chat.messages) ? chat.messages : []
-    const receipts = []
-    const activity = activityOf(chat)
-    const latest = messages.findLast(function (message) { return message && message.role === 'assistant' })
-    for (const message of messages) {
-      if (!message || message.role !== 'assistant' || !message.mvu) continue
-      const turn = Math.max(0, Number(message.turn) || (message.greeting === true ? 1 : 0))
-      if (turn === 0) continue
-      const stored = message.mvu.receipt
-      const diagnostics = Array.isArray(message.mvu.diagnostics) ? message.mvu.diagnostics : []
-      const receipt = stored && typeof stored === 'object' ? structuredClone(stored) : {
-        version: 1,
-        status: message.mvu.pending === true ? 'pending' : (diagnostics.length > 0 ? 'error' : (message.mvu.modified === true ? 'updated' : 'unchanged')),
-        summary: '',
-        changes: [],
-        failures: diagnostics.map(function (item) { return { command: str(item.command), message: str(item.message) } })
-      }
-      if (message === latest && activity.reason === 'interrupted' && activity.role === 'settlement') {
-        receipt.status = 'interrupted'
-        receipt.summary = '后台结算因服务重启或异常退出而中断，请重试结算；正文和已保存变量保留。'
-      }
-      receipts.push({ turn, receipt })
-    }
-    // Keep recent history short on the wire; always retain actionable statuses.
-    const notable = new Set(['pending', 'error', 'interrupted', 'partial', 'stale'])
-    const notableRows = []
-    const quietRows = []
-    for (const row of receipts) {
-      if (notable.has(str(row.receipt && row.receipt.status))) notableRows.push(row)
-      else quietRows.push(row)
-    }
-    const byTurn = new Map()
-    for (const row of notableRows.concat(quietRows.slice(-3))) byTurn.set(row.turn, row)
-    return [...byTurn.values()].sort((left, right) => left.turn - right.turn)
-  }
+  const receiptIndex = createMvuReceiptIndex()
+  function mvuReceiptsOf(chat, changes) { return receiptIndex(chat,activityOf(chat),changes) }
   function rollbackViewFields(chat, evidence = evidenceOf(chat.sessionId)) {
     const nodes = evidence.session?.surface?.nodes
     const rollbackState = Array.isArray(nodes) ? rollbackAvailability(chat, { events: evidence.events, nodes }) : {
@@ -130,7 +97,7 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
 
   // Cache hits receive projectChatSessionState; keep its inputs in sync with
   // these readers (including rollback and MVU receipts), not full history.
-  function volatileSessionViewFields(chat, activity) {
+  function volatileSessionViewFields(chat, activity, changes) {
     let scriptProgress = null
     return {
       ...rollbackViewFields(chat),
@@ -141,7 +108,7 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
       scriptProgress,
       statusBarPlacement: chat.statusBarPlacement === 'body' ? 'body' : 'sidebar',
       updatedAt: chat.updatedAt || 0,
-      mvuReceipts: mvuReceiptsOf(chat)
+      mvuReceipts: mvuReceiptsOf(chat, changes)
     }
   }
 
