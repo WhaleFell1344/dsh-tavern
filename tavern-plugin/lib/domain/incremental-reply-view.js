@@ -12,7 +12,7 @@ function displayDependencies(options) {
 }
 
 // Derived, disposable state only. The journal remains the authority for changed indices.
-export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 1024, maxEntries = 4, onIndexVisit = () => {} } = {}) {
+export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 1024, maxEntries = 4, onIndexVisit = () => {}, onStatusMatch = () => {}, onStatusFilter = () => {} } = {}) {
   const cache = new Map()
   const sourceIndex = createIndexedArrayApi({measure:value=>48+String(value).length*2})
   const rowIndex = createIndexedArrayApi({eligible:value=>Boolean(value),measure:value=>JSON.stringify(value).length*2,visit:onIndexVisit})
@@ -92,20 +92,21 @@ export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 
     const projections = compatible ? projectionIndex.update(previous.projections,projectionEdits) : projectionIndex.from(projectionEdits)
     const targets = targetIndex.update(compatible ? previous.targets : [],targetEdits,messages.length)
     const hasStatusRules = (statusOptions.regexScripts || []).some(rule => rule && rule.disabled !== true && rule.enabled !== false && statusViewDeclaration(rule))
-    const status = hasStatusRules ? projectPersistentStatusView(messages, projections, statusOptions, {latestTurn:Math.max(1,targetIndex.maximum(targets))}) : {projections,statusView:null,statusViews:[]}
+    const statusSummary={latestTurn:Math.max(1,targetIndex.maximum(targets)),previous:compatible?previous.statusState:undefined,onMatch:onStatusMatch,onFilter:onStatusFilter}
+    const status = hasStatusRules ? projectPersistentStatusView(messages, projections, statusOptions, statusSummary) : {projections,statusView:null,statusViews:[]}
     const latest = rowIndex.previous(rows,rows.length)
     const result = freezeJson({ ...status, presentation: null, latestSourceBacked: rows[latest]?.latestSourceBacked || false })
     const sources = compatible
       ? sourceIndex.update(previous.sources,indices.map(id=>[id,sourceKey(messages[id])]),messages.length)
       : sourceIndex.from(messages.map(sourceKey))
-    const resultSize = hasStatusRules ? JSON.stringify(result).length*2 : projectionIndex.info(projections).bytes + 256
+    const resultSize = hasStatusRules ? statusSummary.filteredBytes + JSON.stringify(result.statusViews).length*2 : projectionIndex.info(projections).bytes + 256
     const size = targetIndex.info(targets).bytes + rowIndex.info(rows).bytes + metadataIndex.info(roles).bytes + metadataIndex.info(before).bytes + resultSize + 512 + sourceIndex.info(sources).bytes
     if (Number.isSafeInteger(revision) && size <= maxBytes && maxEntries > 0 && !(cache.get(chat.id)?.revision > revision)) {
       if (cache.has(chat.id)) { bytes -= cache.get(chat.id).size; cache.delete(chat.id) }
       while (cache.size && (bytes + size > maxBytes || cache.size >= maxEntries)) {
         const oldest = cache.keys().next().value; bytes -= cache.get(oldest).size; cache.delete(oldest)
       }
-      cache.set(chat.id, {revision, signature, rows, roles, before, result, size, sources, projections, targets}); bytes += size
+      cache.set(chat.id, {revision, signature, rows, roles, before, result, size, sources, projections, targets, statusState:statusSummary.next}); bytes += size
     }
     return output(result,shared)
   }

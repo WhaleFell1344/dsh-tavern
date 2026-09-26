@@ -1,7 +1,12 @@
 import { statusViewDeclaration } from './status-view-declaration.js'
+import { createIndexedArrayApi } from './indexed-array.js'
+import { createImmutableJsonIndex, immutableArrayChanges } from './freeze-json.js'
 import { createHash } from 'node:crypto'
 import { applyTavernRegexText } from './tavern-regex-display.js'
 import { projectDisplayParts, resolveDisplayIdentityMacros } from './reply-presentation.js'
+
+const matchIndex = createIndexedArrayApi({eligible:row=>Boolean(row?.origin),maximum:row=>row?.legacy?1:0,measure:row=>JSON.stringify([row.origin,row.content,[...row.removed]]).length*2})
+const filteredIndex = createImmutableJsonIndex({measure:row=>JSON.stringify(row).length*2})
 
 function contentOf(part) {
   return String(part && (part.content ?? part.html) || '')
@@ -19,7 +24,10 @@ function projectStatusView(messages, projections, options, compile, summary) {
     if (message?.role === 'assistant') latestTurn = Math.max(latestTurn, Number(message.turn) || inferredTurn)
   }
   const templates = new Map()
-  const removedParts = new Set()
+  const prior = summary?.previous
+  const changes = prior ? immutableArrayChanges(prior.source,sourceProjections) : null
+  const matchStates = new Map()
+  let legacy = false
   const rules = Array.isArray(options.regexScripts) ? options.regexScripts : []
   const enabled = rules.filter(rule => rule && rule.disabled !== true && rule.enabled !== false)
   function legacyMatches(part, projection, rule) {
@@ -40,18 +48,31 @@ function projectStatusView(messages, projections, options, compile, summary) {
       let origin = null
       let templateContent = content
       const viewId = 'status-' + createHash('sha256').update(declaration.key + ':' + templateIndex).digest('hex').slice(0, 16)
-      for (const projection of sourceProjections) {
+      const matchKey = declaration.key + ':' + templateIndex + ':' + revision
+      const oldMatches = prior?.matches.get(matchKey)
+      function match(projection) {
+        summary?.onMatch?.()
         const parts = (projection.parts || []).filter(part => String(part.kind === 'html' ? contentOf(part) : part.text || '').trim())
         const matches = part => part.kind === 'html' && (part.statusKey ? part.statusKey === declaration.key : contentOf(part) === content || legacyMatches(part, projection, rule))
         const index = parts.findIndex(matches)
-        if (index >= 0) {
-          for (const part of parts.filter(matches)) removedParts.add(part)
-          origin = { sourceTurn: projection.turn, sourcePartIndex: index }
-          // Fixed HTML follows the latest card template. Stateful EJS history
-          // and source-dependent regex replacements retain their captured output;
-          // do not replay historical side effects or serve raw EJS.
-          if (/<%|&lt;%/.test(String(rule.replaceString)) || /\$\d+|\$<[^>]+>|\{\{match\}\}/i.test(String(rule.replaceString))) templateContent = resolveDisplayIdentityMacros(contentOf(parts[index]), options)
+        return {
+          origin:index < 0 ? null : {sourceTurn:projection.turn,sourcePartIndex:index},
+          content:index < 0 ? content : resolveDisplayIdentityMacros(contentOf(parts[index]),options),
+          removed:new Set(index < 0 ? [] : parts.filter(matches)),
+          legacy:parts.some(part=>!part.statusKey && Number.isInteger(part.statusRule))
         }
+      }
+      let candidates
+      if (oldMatches && changes && matchIndex.maximum(oldMatches)===0) {
+        candidates=matchIndex.update(oldMatches,changes.map(id=>[id,match(sourceProjections[id])]),sourceProjections.length)
+      } else candidates=matchIndex.from(sourceProjections.map(match))
+      matchStates.set(matchKey,candidates)
+      legacy ||= matchIndex.maximum(candidates)>0
+      const last=matchIndex.previous(candidates,candidates.length)
+      if(last>=0){
+        origin=candidates[last].origin
+        // Captured dynamic templates retain the latest matching source output.
+        if (/<%|&lt;%/.test(String(rule.replaceString)) || /\$\d+|\$<[^>]+>|\{\{match\}\}/i.test(String(rule.replaceString))) templateContent=candidates[last].content
       }
       if (!origin && !/<%|&lt;%|\$\d+|\$<[^>]+>|\{\{match\}\}/i.test(String(rule.replaceString))) {
         // Template synchronization can remove the rendered marker before the
@@ -83,18 +104,32 @@ function projectStatusView(messages, projections, options, compile, summary) {
   const statusViews = [...templates.values()]
   const contents = new Set(statusViews.map(view => view.content))
 
+  const legacyRemoved = new Set()
+  if(legacy) for(const rows of matchStates.values()) for(const row of rows) for(const part of row.removed) legacyRemoved.add(part)
+  const matchedRows=[...matchStates.values()]
+  function filter(projection,id) {
+    summary?.onFilter?.()
+    const parts=(projection.parts || []).filter(part=>!(part.kind==='html' && (contents.has(contentOf(part)) || legacyRemoved.has(part) || matchedRows.some(rows=>rows[id]?.removed.has(part)))))
+    return parts.length===(projection.parts || []).length ? projection : {...projection,parts,text:parts.map(part=>part.kind==='html'?contentOf(part):part.text || '').join('')}
+  }
+  const contentSignature=JSON.stringify([...contents])
+  const incremental=summary && prior && changes && !legacy && !prior.legacy && prior.contentSignature===contentSignature
+  const filtered=incremental ? filteredIndex.update(prior.filtered,changes.map(id=>[id,filter(sourceProjections[id],id)]),sourceProjections.length)
+    : summary ? filteredIndex.from(sourceProjections.map(filter)) : sourceProjections.map(filter)
+  if(summary){
+    summary.next={source:sourceProjections,matches:matchStates,filtered,contentSignature,legacy}
+    summary.filteredBytes=filteredIndex.info(filtered).bytes + matchedRows.reduce((size,rows)=>size+matchIndex.info(rows).bytes,0)
+  }
   return {
-    projections: sourceProjections.map(projection => {
-      const parts = (projection.parts || []).filter(part => !(part.kind === 'html' && (contents.has(contentOf(part)) || removedParts.has(part))))
-      return parts.length === (projection.parts || []).length ? projection : { ...projection, parts, text: parts.map(part => part.kind === 'html' ? contentOf(part) : part.text || '').join('') }
-    }),
+    projections: filtered,
     statusView: statusViews[0] || null,
     statusViews
   }
 }
 
 
-/** Cache only rule compilation; message origins and target turns remain live. */
+/** Rule compilation is shared. Incremental match state belongs to the caller
+ * that supplies a versioned immutable projection and retains its summary. */
 export function createPersistentStatusProjector({ maxCacheBytes = 4 * 1024 * 1024, maxCacheEntries = 128 } = {}) {
   const cache = new Map()
   let bytes = 0, hits = 0, misses = 0
