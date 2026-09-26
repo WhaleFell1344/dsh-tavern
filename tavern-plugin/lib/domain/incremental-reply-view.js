@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createIndexedArrayApi } from './indexed-array.js'
-import { freezeJson } from './freeze-json.js'
+import { freezeJson, createImmutableOrderedJsonIndex } from './freeze-json.js'
+import { statusViewDeclaration } from './status-view-declaration.js'
 import { projectReplyHistory } from './reply-presentation.js'
 import { projectPersistentStatusView } from './persistent-status-view.js'
 
@@ -11,15 +12,18 @@ function displayDependencies(options) {
 }
 
 // Derived, disposable state only. The journal remains the authority for changed indices.
-export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 1024, maxEntries = 4 } = {}) {
+export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 1024, maxEntries = 4, onIndexVisit = () => {} } = {}) {
   const cache = new Map()
   const sourceIndex = createIndexedArrayApi({measure:value=>48+String(value).length*2})
+  const rowIndex = createIndexedArrayApi({eligible:value=>Boolean(value),measure:value=>JSON.stringify(value).length*2,visit:onIndexVisit})
+  const metadataIndex = createIndexedArrayApi({visit:onIndexVisit})
+  const projectionIndex = createImmutableOrderedJsonIndex({measure:value=>JSON.stringify(value).length*2,visit:onIndexVisit})
   function sourceKey(message) {
     if (!message) return JSON.stringify(message)
     const {variables,mvu,...display} = message
     return createHash('sha256').update(JSON.stringify(display)).digest('hex')
   }
-  function output(result, shared) { return shared ? {...result} : structuredClone(result) }
+  function output(result, shared) { return shared ? {...result} : structuredClone({...result,projections:Array.from(result.projections)}) }
   let bytes = 0
   const stats = { rebuilt: 0, incremental: 0, reused: 0, projectedMessages: 0 }
   async function project(chat, options = {}, statusOptions = options, {shared = false} = {}) {
@@ -48,9 +52,9 @@ export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 
     }
     let rows, roles, before, indices
     if (compatible) {
-      rows = previous.rows.slice(0, messages.length)
-      roles = previous.roles.slice(0, messages.length)
-      before = previous.before.slice(0, messages.length)
+      rows = previous.rows
+      roles = previous.roles
+      before = previous.before
       indices = [...changes.indices]
       const structural = messages.length !== previous.roles.length || indices.some(i => messages[i]?.role !== previous.roles[i])
       if (structural) {
@@ -63,30 +67,42 @@ export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 
       indices = Array.from({length: messages.length}, (_, i) => i)
       stats.rebuilt++
     }
+    const rowEdits = new Map(), roleEdits = new Map(), beforeEdits = new Map()
+    const at = (edits,values,id) => edits.has(id) ? edits.get(id) : values[id]
+    const projectionEdits = []
     const projectMessages = projectReplyHistory.prepare(options)
     for (const index of indices) {
       const message = messages[index]
-      before[index] = index === 0 ? 1 : before[index - 1] + (roles[index - 1] === 'user' ? 1 : 0)
-      roles[index] = message?.role
-      if (message?.role !== 'assistant') { rows[index] = null; continue }
-      const turn = Math.max(0, Number(message.turn) || (message.greeting === true ? 1 : before[index]))
-      if (turn === 0) { rows[index] = null; continue }
-      rows[index] = projectMessages([{...message, turn}])
+      beforeEdits.set(index, index === 0 ? 1 : at(beforeEdits,before,index-1) + (at(roleEdits,roles,index-1) === 'user' ? 1 : 0))
+      roleEdits.set(index,message?.role)
+      if (message?.role !== 'assistant') { rowEdits.set(index,null); projectionEdits.push([index,undefined]); continue }
+      const turn = Math.max(0, Number(message.turn) || (message.greeting === true ? 1 : beforeEdits.get(index)))
+      if (turn === 0) { rowEdits.set(index,null); projectionEdits.push([index,undefined]); continue }
+      const row = freezeJson(projectMessages([{...message, turn}]))
+      rowEdits.set(index,row)
+      projectionEdits.push([index,row.projections[0]])
       stats.projectedMessages++
     }
-    const projections = rows.flatMap(row => row?.projections || [])
-    const status = projectPersistentStatusView(messages, projections, statusOptions)
-    const result = freezeJson({ ...status, presentation: null, latestSourceBacked: rows.findLast(row => row)?.latestSourceBacked || false })
+    if (compatible) for (let id=messages.length;id<previous.rows.length;id++) projectionEdits.push([id,undefined])
+    rows = rowIndex.update(rows,[...rowEdits],messages.length)
+    roles = metadataIndex.update(roles,[...roleEdits],messages.length)
+    before = metadataIndex.update(before,[...beforeEdits],messages.length)
+    const projections = compatible ? projectionIndex.update(previous.projections,projectionEdits) : projectionIndex.from(projectionEdits)
+    const hasStatusRules = (statusOptions.regexScripts || []).some(rule => rule && rule.disabled !== true && rule.enabled !== false && statusViewDeclaration(rule))
+    const status = hasStatusRules ? projectPersistentStatusView(messages, projections, statusOptions) : {projections,statusView:null,statusViews:[]}
+    const latest = rowIndex.previous(rows,rows.length)
+    const result = freezeJson({ ...status, presentation: null, latestSourceBacked: rows[latest]?.latestSourceBacked || false })
     const sources = compatible
       ? sourceIndex.update(previous.sources,indices.map(id=>[id,sourceKey(messages[id])]),messages.length)
       : sourceIndex.from(messages.map(sourceKey))
-    const size = JSON.stringify([rows, result]).length * 2 + messages.length * 64 + 512 + sourceIndex.info(sources).bytes
+    const resultSize = hasStatusRules ? JSON.stringify(result).length*2 : projectionIndex.info(projections).bytes + 256
+    const size = rowIndex.info(rows).bytes + metadataIndex.info(roles).bytes + metadataIndex.info(before).bytes + resultSize + 512 + sourceIndex.info(sources).bytes
     if (Number.isSafeInteger(revision) && size <= maxBytes && maxEntries > 0 && !(cache.get(chat.id)?.revision > revision)) {
       if (cache.has(chat.id)) { bytes -= cache.get(chat.id).size; cache.delete(chat.id) }
       while (cache.size && (bytes + size > maxBytes || cache.size >= maxEntries)) {
         const oldest = cache.keys().next().value; bytes -= cache.get(oldest).size; cache.delete(oldest)
       }
-      cache.set(chat.id, {revision, signature, rows, roles, before, result, size, sources}); bytes += size
+      cache.set(chat.id, {revision, signature, rows, roles, before, result, size, sources, projections}); bytes += size
     }
     return output(result,shared)
   }

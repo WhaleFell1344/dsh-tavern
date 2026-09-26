@@ -50,10 +50,11 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
     const messages = view?.tavernHelper?.messages, replies = view?.replyProjections
     const receipts=view?.mvuReceipts
     const receiptChanges=keyedReceipts ? null : immutableArrayChanges(base?.receiptSource?.deref(),receipts)
+    const replyChanges = immutableArrayChanges(base?.replySource?.deref(),replies)
     const sameReplies = isImmutableJson(replies) && base?.replySource?.deref() === replies
     const arrays = [
       {path:['tavernHelper','messages'],value:messages,previous:base?.messageHashes,dirty:dirtyMessageIndices},
-      {path:['replyProjections'],value:replies,previous:base?.replyHashes,dirty:sameReplies ? new Set() : null},
+      {path:['replyProjections'],value:replies,previous:base?.replyHashes,dirty:replyChanges ? new Set(replyChanges) : sameReplies ? new Set() : null},
       ...keyedReceipts ? [] : [{path:['mvuReceipts'],value:receipts,previous:base?.receiptHashes,dirty:receiptChanges ? new Set(receiptChanges) : null}]
     ]
     const messageSet = [], messageRemove = []
