@@ -79,3 +79,35 @@ test('display header does not copy unused undo history',()=>{
  header.rollbackUndo.before.messages[0].text='outside'
  assert.equal(source.rollbackUndo.before.messages[0].text,'old body')
 })
+
+for(const count of [20,400,10000])test(`large internal header records detach only accessed keys at ${count}`,()=>{
+ let reads=0,enumerations=0
+ const source=new Proxy(Object.fromEntries(Array.from({length:count},(_,id)=>[String(id),{value:id}])),{
+  get(target,key,receiver){reads++;return Reflect.get(target,key,receiver)},
+  ownKeys(target){enumerations++;return Reflect.ownKeys(target)}
+ })
+ const header=copyLazyHistoryHeader({regeneratedDshTurns:source,runtimeInputs:source})
+ const spread={...header}
+ assert.equal(reads,0);assert.equal(enumerations,0)
+ assert.equal(spread.runtimeInputs['0'].value,0);assert.equal(reads,1)
+ spread.runtimeInputs['0'].value=99
+ assert.equal(header.regeneratedDshTurns['0'].value,0)
+ spread.runtimeInputs.new={value:1};delete spread.runtimeInputs['1']
+ assert.equal(Object.hasOwn(spread.runtimeInputs,'1'),false)
+ assert.equal(copyLazyHistoryHeader({runtimeInputs:source}).runtimeInputs['0'].value,0)
+ assert.equal(enumerations,0)
+ const plain=JSON.parse(JSON.stringify(spread.runtimeInputs))
+ assert.equal(plain['0'].value,99);assert.equal(Object.hasOwn(plain,'1'),false);assert.equal(plain.new.value,1)
+ assert.equal(Object.keys(plain).length,count)
+})
+
+test('lazy header records preserve JSON key order and special own keys after edits',()=>{
+ const source=JSON.parse('{"2":2,"a":1,"b":2,"__proto__":{"value":3}}')
+ const record=copyLazyHistoryHeader({runtimeInputs:source}).runtimeInputs
+ record['1']=1;delete record.a;record.a=3
+ assert.deepEqual(Object.keys(record),['1','2','b','__proto__','a'])
+ record.__proto__.value=4
+ assert.equal(source.__proto__.value,3)
+ assert.equal(Object.getPrototypeOf(record),Object.prototype)
+ assert.equal(JSON.parse(JSON.stringify(record)).__proto__.value,4)
+})
