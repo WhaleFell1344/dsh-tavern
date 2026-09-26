@@ -1454,7 +1454,7 @@ export async function apply(ctx) {
       if (event.type === 'assistant/message' && event.data?.message?.source?.kind === 'model') messagesByTurn.set(turn, event.data.message.id)
     }
     for (const [turn, messageId] of messagesByTurn) if (messageId) forkTurnsByMessageId[messageId] = turn
-    const {inputSources,inputTemplateDisplays}=inputFieldsProjection.project(persistedProjection ? chat : {...chat,_storageRevision:undefined})
+    const {inputSources,inputTemplateDisplays}=inputFieldsProjection.project(persistedProjection ? chat : {...chat,_storageRevision:undefined}, options.inputChanges)
     const cardUpdate = ['story', 'script'].includes(chat.mode || 'story') && chat.requestMode !== 'sillytavern'
       ? await cardUpdateStatus(chat) : { available: false }
     const helperEnabled = hasTavernScriptRuntime(chat, cardExtensions.helperScripts)
@@ -1690,7 +1690,7 @@ export async function apply(ctx) {
     }
     return next
   }
-  async function projectFullSessionView(chat, { windowHelperMessages = false } = {}) {
+  async function projectFullSessionView(chat, { windowHelperMessages = false, inputChanges } = {}) {
     const mode = chat.mode || 'story', isCard = mode === 'card', cardPath = str(chat.cardPath)
     let card = null, cardReadError = null
     try { card = isCard && cardPath === '' ? null : await requestPerformance.stage('readCard', () => readChatCard(chat)) }
@@ -1700,7 +1700,7 @@ export async function apply(ctx) {
       card = { name: chat.cardName || chat.cardPath }
     }
     const result = await requestPerformance.stage('projectView', () => view(chat, card, true, {
-      skeletonUntil: windowHelperMessages === true
+      skeletonUntil: windowHelperMessages === true, inputChanges
     }))
     if (cardReadError) result.cardReadError = cardReadError
     if (isCard) result.workspace = workspaceViewOf(chat)

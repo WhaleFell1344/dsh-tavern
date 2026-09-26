@@ -42,17 +42,21 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
       const resources = await resourceVersion(state)
       const cached = cache.get(state.id), next = {...identity(state), resourceVersion: resources}
       if (matches(cached, next) && cached.revision === next.revision) return { chat: state, cached, resourceVersion: resources }
+      let verifiedDelta
       if (matches(cached, next) && cached.revision < next.revision && readViewDelta) {
         const delta = await trace.stage('readViewDelta', () => readViewDelta(state.id, cached.revision))
         const dirty = delta && new Set(delta.indices)
         if (delta?.baseRevision === cached.revision && delta.chat?.id === state.id
           && delta.revision === next.revision && identity(delta.chat).revision === next.revision
-          && matches(cached, {...identity(delta.chat), resourceVersion: resources}) && canProjectDirty(cached.view, delta.chat, dirty)) {
-          return { chat: delta.chat, cached, dirty, layoutChanged:delta.layoutChanged, changedHeaderFields:delta.changedHeaderFields, resourceVersion: resources }
+          && matches(cached, {...identity(delta.chat), resourceVersion: resources})) {
+          verifiedDelta=delta
+          if (canProjectDirty(cached.view, delta.chat, dirty)) return { chat: delta.chat, cached, dirty, layoutChanged:delta.layoutChanged, changedHeaderFields:delta.changedHeaderFields, resourceVersion: resources }
         }
       }
       const chat = await trace.stage('readFullChat', () => readChat(sessionId))
-      return { chat, cached: chat && cache.get(chat.id), resourceVersion: resources }
+      const evidence=chat && verifiedDelta && chat.id===verifiedDelta.chat.id && identity(chat).revision===verifiedDelta.revision
+        ? {dirty:new Set(verifiedDelta.indices),layoutChanged:verifiedDelta.layoutChanged,changedHeaderFields:verifiedDelta.changedHeaderFields} : {}
+      return { chat, cached: chat && cache.get(chat.id), resourceVersion: resources, ...evidence }
     })
     const { chat, cached } = selected
     if (chat === undefined) return { view: null, revision: 0, chat: undefined }
@@ -68,7 +72,7 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
         view = await trace.stage('projectViewDirty', () => project.dirty(chat, cached.view, dirty, currentActivity, {layoutChanged:selected.layoutChanged,changedHeaderFields:selected.changedHeaderFields}))
         rebuild = 'dirty'
       } else {
-        view = await project.full(chat, options)
+        view = await project.full(chat, {...options,inputChanges:matches(cached,next) && dirty ? {baseRevision:cached.revision,indices:dirty,changedHeaderFields:selected.changedHeaderFields} : undefined})
         rebuild = 'full'
       }
       if (!view?.tavernHelper?.messagesPending) {

@@ -62,3 +62,30 @@ for(const count of [20,400,10000])test(`tail input append keeps ${count} histori
  assert.equal(Object.hasOwn(first.inputSources,String(count/2+2)),false)
  assert.equal(first.inputSources[2],next.inputSources[2])
 })
+
+for(const count of [20,400,10000])test(`tail input truncation avoids reading the ${count}-row retained prefix`,()=>{
+ let reads=0,visits=0
+ const projector=createInputFieldsProjection({maxBytes:128*1024*1024,onIndexVisit:()=>visits++})
+ const messages=Array.from({length:count},(_,i)=>({role:i%2?'assistant':'user',text:'body'+i,templateInputSource:true}))
+ const chat={id:'truncate',_storageRevision:1,messages},first=projector.project(chat)
+ const sync=createSessionViewSync(),baseline=sync('s',first)
+ const shortened=new Proxy(messages.slice(0,-2),{get(target,key,receiver){if(/^\d+$/.test(String(key)))reads++;return Reflect.get(target,key,receiver)}})
+ visits=0
+ const next=projector.project({...chat,_storageRevision:2,messages:shortened},{baseRevision:1,indices:[],changedHeaderFields:[]})
+ const delta=sync('s',next,baseline.viewCursor).viewDelta
+ assert.equal(reads,0);assert.ok(visits<300,`visits: ${visits}`)
+ assert.deepEqual(delta.set,[])
+ assert.deepEqual(delta.remove,[['inputSources',String(count/2+1)]])
+ assert.equal(first.inputSources[count/2+1],'body'+(count-2))
+})
+
+test('truncated user override restores runtime baseline and removes its display',()=>{
+ const projector=createInputFieldsProjection()
+ const chat={id:'restore',_storageRevision:1,runtimeInputs:{'2':{source:'runtime'}},messages:[{role:'user',text:'override',templateInputSource:true,tavernPluginData:{template_display:{source:'override',swipe:0,html:'display'}}}]}
+ const first=projector.project(chat)
+ const next=projector.project({...chat,_storageRevision:2,messages:[]},{baseRevision:1,indices:[],changedHeaderFields:[]})
+ assert.equal(next.inputSources[2],'runtime')
+ assert.equal(Object.hasOwn(next.inputTemplateDisplays,'2'),false)
+ assert.equal(first.inputSources[2],'override');assert.equal(first.inputTemplateDisplays[2],'display')
+ assert.deepEqual(JSON.parse(JSON.stringify(next)),JSON.parse(JSON.stringify(createInputFieldsProjection().project({...chat,messages:[]}))))
+})
