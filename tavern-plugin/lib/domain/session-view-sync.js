@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createIndexedArrayApi } from './indexed-array.js'
-import { isImmutableJson, immutableArrayChanges, isImmutableOrderedArray, immutableOrderedChanges } from './freeze-json.js'
+import { createImmutableTurnFields, immutableTurnFieldChanges, isImmutableJson, immutableArrayChanges, isImmutableOrderedArray, immutableOrderedChanges } from './freeze-json.js'
 
 // Reader cursors retain fingerprints only; never retain another full chat snapshot.
 export function createSessionViewSync({ maxReaders = 32 } = {}) {
   const readers = new Map()
+  const fieldHashes = createImmutableTurnFields()
   const messageHashes = createIndexedArrayApi()
   const immutableHashes = new WeakMap()
   function hashValue(value) {
@@ -53,14 +54,24 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
     for (const field of ['inputSources','inputTemplateDisplays']) {
       const value=view[field], old=base?.inputFields?.get(field)
       if(isImmutableJson(value) && old?.source?.deref()===value){inputFields.set(field,old);continue}
-      const hashes=new Map()
+      const changed=old && immutableTurnFieldChanges(old.source?.deref(),value)
+      if(changed){
+        const sets=[],removes=[]
+        for(const entry of changed){
+          if(entry.after===undefined){removes.push(entry.key);if(Object.hasOwn(old.hashes,entry.key))inputRemove.push([field,entry.key])}
+          else {const hash=hashValue(entry.after);sets.push([entry.key,hash]);if(old.hashes[entry.key]!==hash)inputSet.push([[field,entry.key],entry.after])}
+        }
+        inputFields.set(field,{hashes:fieldHashes.update(old.hashes,sets,removes),source:new WeakRef(value)})
+        continue
+      }
+      const hashes=Object.create(null)
       if(value && typeof value==='object')for(const [key,item] of Object.entries(value)){
         if(item===undefined)continue
-        const hash=hashValue(item);hashes.set(key,hash)
-        if(old?.hashes.get(key)!==hash)inputSet.push([[field,key],item])
+        const hash=hashValue(item);hashes[key]=hash
+        if(old?.hashes[key]!==hash)inputSet.push([[field,key],item])
       }
-      if(old)for(const key of old.hashes.keys())if(!hashes.has(key))inputRemove.push([field,key])
-      inputFields.set(field,{hashes,source:isImmutableJson(value)?new WeakRef(value):undefined})
+      if(old)for(const key of Object.keys(old.hashes))if(!Object.hasOwn(hashes,key))inputRemove.push([field,key])
+      inputFields.set(field,{hashes:fieldHashes.from(hashes),source:isImmutableJson(value)?new WeakRef(value):undefined})
     }
     const messages = view?.tavernHelper?.messages, replies = view?.replyProjections
     const receipts=view?.mvuReceipts

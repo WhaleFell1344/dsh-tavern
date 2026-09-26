@@ -1,4 +1,4 @@
-import { freezeJson } from './domain/freeze-json.js'
+import { createInputFieldsProjection } from './domain/input-fields-projection.js'
 import { createScopedMessages } from './domain/scoped-messages.js'
 import {registerVariableReadTool} from './domain/read-variables.js'
 import { createBackgroundSessionRetirement, installRetiredBackgroundFilter } from './domain/background-session-retirement.js'
@@ -1396,6 +1396,7 @@ export async function apply(ctx) {
   }
   const liveCardUpdate = createLiveCardUpdate({readGlobals:readPromptTemplateGlobalVariables})
   ctx.effect(() => () => liveCardUpdate.dispose())
+  const inputFieldsProjection = createInputFieldsProjection()
   const incrementalReplyView = createIncrementalReplyView({ readChanges: (id, revision) => chatPersistence.readChangedSlice(id, revision, 'settlement') })
   async function view(chat, card, persistedProjection = false, options = {}) {
     scheduleTemplateSync(chat)
@@ -1453,26 +1454,7 @@ export async function apply(ctx) {
       if (event.type === 'assistant/message' && event.data?.message?.source?.kind === 'model') messagesByTurn.set(turn, event.data.message.id)
     }
     for (const [turn, messageId] of messagesByTurn) if (messageId) forkTurnsByMessageId[messageId] = turn
-    const inputSources = {}
-    const inputTemplateDisplays = {}
-    let inputTurn = 1
-    for (const message of chat.messages || []) {
-      if (message.role !== "user") continue
-      inputTurn++
-      const display = message.tavernPluginData?.template_display
-      if (display && display.source === (message.sourceText ?? message.text) && display.swipe === (message.swipeId || 0)) inputTemplateDisplays[inputTurn] = display.html
-    }
-    const runtimeInputs = chat.runtimeInputs && typeof chat.runtimeInputs === 'object' ? chat.runtimeInputs : {}
-    for (const turn of Object.keys(runtimeInputs)) {
-      const input = runtimeInputs[turn]
-      inputSources[turn] = str(input && input.source)
-    }
-    inputTurn = 1
-    for (const message of chat.messages || []) {
-      if (message.role !== 'user') continue
-      inputTurn++
-      if (message.templateHistoryEdit || message.templateInputSource) inputSources[inputTurn] = message.sourceText ?? message.text
-    }
+    const {inputSources,inputTemplateDisplays}=inputFieldsProjection.project(persistedProjection ? chat : {...chat,_storageRevision:undefined})
     const cardUpdate = ['story', 'script'].includes(chat.mode || 'story') && chat.requestMode !== 'sillytavern'
       ? await cardUpdateStatus(chat) : { available: false }
     const helperEnabled = hasTavernScriptRuntime(chat, cardExtensions.helperScripts)
@@ -1523,8 +1505,8 @@ export async function apply(ctx) {
       latestAssistantMessageId,
       forkTurnsByMessageId,
       latestAssistantTurn: latestStoryTurn,
-      inputSources: freezeJson(inputSources),
-      inputTemplateDisplays: freezeJson(inputTemplateDisplays),
+      inputSources,
+      inputTemplateDisplays,
       ...rollbackFields,
       presentation: null,
       replyProjections: replyDisplay.projections,
@@ -1663,7 +1645,7 @@ export async function apply(ctx) {
     }
     return reused
   }
-  async function projectDirtySessionView(chat, previous, dirtyMessageIndices, activity, {layoutChanged} = {}) {
+  async function projectDirtySessionView(chat, previous, dirtyMessageIndices, activity, {layoutChanged,changedHeaderFields} = {}) {
     const card = await readChatCard(chat)
     const mode = chat.mode || 'story'
     const previousMessages = previous.tavernHelper.messages
@@ -1672,6 +1654,7 @@ export async function apply(ctx) {
       posture: chat.posture || '',
       guides: Array.isArray(chat.guides) ? chat.guides : []
     })
+    Object.assign(next,inputFieldsProjection.project(chat,{baseRevision:changes.baseRevision,indices:dirtyMessageIndices,changedHeaderFields}))
     const helperCore = await requestPerformance.stage('helperMessagesProjection', () => projectTavernHelperContext(chat, {
       previousMessages, previousContext:previous.tavernHelper, indexed:true, layoutChanged,
       dirtyIndices: dirtyMessageIndices
