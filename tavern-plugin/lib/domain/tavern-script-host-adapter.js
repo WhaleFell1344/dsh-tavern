@@ -1,3 +1,4 @@
+import { createMvuWorkingCopy, projectMvuReceipt } from './mvu-working-copy.js'
 import { randomUUID } from 'node:crypto'
 import { diffJson } from './json-mutation.js'
 import { createFullPromptTemplateSync } from './full-prompt-template-sync.js'
@@ -12,6 +13,7 @@ import {
   appendTavernHelperMessages,
   lastTavernHelperVariables,
   projectTavernHelperContext,
+  projectTavernHelperMessage,
   replaceTavernHelperMessages,
   replaceTavernHelperVariables
 } from './tavern-helper-context.js'
@@ -43,6 +45,48 @@ export function createTavernScriptHostAdapter(options = {}) {
   const templateCharacters = createJsonValueProjectionCache({ capacity: 8, maxBytes: 16 * 1024 * 1024 })
   const mutationTails = new Map()
   const settlementTransactions = new Map()
+  // One detached base, never writable or exposed to callers. Incremental storage
+  // reads replace changed rows; cache eviction only costs a cold full read.
+  let settlementBase = null
+  const settlementSizes = new WeakMap()
+  function rememberSettlementBase(chat) {
+    const limit = 64 * 1024 * 1024
+    function size(value) {
+      if (typeof value === 'string') return value.length * 2 + 24
+      if (!value || typeof value !== 'object') return 16
+      if (settlementSizes.has(value)) return settlementSizes.get(value)
+      let bytes = 32
+      for (const key of Object.keys(value)) {
+        bytes += key.length * 2 + 24 + size(value[key])
+        if (bytes > limit) break
+      }
+      settlementSizes.set(value, bytes)
+      return bytes
+    }
+    settlementBase = size(chat) <= limit ? chat : null
+    return chat
+  }
+  async function readSettlementChat(sessionId) {
+    const cached = settlementBase
+    if (cached?.sessionId === sessionId && options.resolveChatSlice && options.resolveChangedChatSlice) {
+      const selected = await options.resolveChatSlice(sessionId, [])
+      if (selected?.denseMessages && selected.chat.id === cached.id) {
+        if (selected.chat._storageRevision === cached._storageRevision) return cached
+        const changed = await options.resolveChangedChatSlice(sessionId, cached._storageRevision)
+        if (changed?.denseMessages && changed.chat.id === cached.id && changed.chat.sessionId === sessionId
+          && changed.baseRevision === cached._storageRevision) {
+          const messages = cached.messages.slice(0, changed.messageCount)
+          changed.indices.forEach((index,i) => { messages[index] = changed.chat.messages[i] })
+          if (messages.length === changed.messageCount && Array.from({length:messages.length},(_,i)=>Boolean(messages[i])).every(Boolean)) {
+            return rememberSettlementBase({ ...changed.chat, messages })
+          }
+        }
+      }
+    }
+    const chat = await resolveChat(sessionId)
+    if (options.resolveChatSlice && options.resolveChangedChatSlice) rememberSettlementBase(chat)
+    return chat
+  }
 
   function assertDependencies() {
     for (const name of ['resolveChat', 'writeChat', 'readCard', 'worldBooks', 'scriptDispatch']) {
@@ -107,7 +151,8 @@ export function createTavernScriptHostAdapter(options = {}) {
       updated: true,
       transactional: true,
       ...(multiple ? { targets: target } : { target }),
-      context: projectTavernHelperContext(transaction.draft)
+      ...(transaction.compact ? { contextDelta: projectMvuReceipt(transaction.work, multiple ? target : [target]) }
+        : { context: projectTavernHelperContext(transaction.draft) })
     }
   }
 
@@ -176,6 +221,8 @@ export function createTavernScriptHostAdapter(options = {}) {
       && contextBaseline.lifecycleRevision === (chat.tavernHelperLifecycleRevision || 0)
       && (chat.messages || []).every(message => message && typeof message === 'object')
     let patched = false
+    const transaction = settlementTransactions.get(str(sessionId))
+    if (transaction && (!option?.type || option.type === 'message')) transaction.work.touch(option?.message_id)
     const updated = replaceTavernHelperVariables(chat, { option, variables })
     const transactional = transactionResult(sessionId, updated, false, eventId)
     if (transactional !== null) return transactional
@@ -241,6 +288,7 @@ export function createTavernScriptHostAdapter(options = {}) {
       delete patch.message
       return patch
     })
+    if (transaction) for (const patch of patches) if (patch && typeof patch === 'object') transaction.work.touch(patch.message_id)
     const updated = replaceTavernHelperMessages(chat, patches)
     if (chat.mvu && chat.mvu.owner === 'official') {
       const opening = Array.isArray(chat.messages) ? chat.messages[0] : null
@@ -282,8 +330,8 @@ export function createTavernScriptHostAdapter(options = {}) {
     return { updated: true, targets: created, context: projectTavernHelperContext(chat) }
   }
 
-  async function worldbookRecord(sessionId, requestedName, template = false) {
-    const chat = await resolveChat(sessionId)
+  async function worldbookRecord(sessionId, requestedName, template = false, suppliedChat) {
+    const chat = suppliedChat || await resolveChat(sessionId)
     if (template) assertTemplateChat(chat); else await assertScriptEnabled(chat)
     const card = await options.readCard(chat)
     const record = await options.worldBooks.bound(chat.cardPath, card, chat)
@@ -544,9 +592,9 @@ export function createTavernScriptHostAdapter(options = {}) {
     return { updated: true, extensionSettings }
   }
 
-  async function context(sessionId, chatValue, transientUserText = '') {
+  async function context(sessionId, chatValue, transientUserText = '', indices) {
     const chat = chatValue || await resolveChat(sessionId)
-    const draft = structuredClone(chat)
+    const draft = { ...chat, messages: (chat.messages || []).slice() }
     const userText = str(transientUserText).trim()
     if (userText !== '') {
       const previousVariables = lastTavernHelperVariables(draft.messages)
@@ -554,12 +602,19 @@ export function createTavernScriptHostAdapter(options = {}) {
       if (previousVariables !== undefined) message.variables = [structuredClone(previousVariables)]
       draft.messages.push(message)
     }
-    const projected = projectTavernHelperContext(draft)
+    const projected = projectTavernHelperContext(indices ? { ...draft, messages: [] } : draft)
+    if (indices) {
+      projected.messages = indices.map(i => projectTavernHelperMessage(draft.messages[i], i))
+      for (let i=0;i<draft.messages.length;i++) {
+        const row=draft.messages[i], turn=Math.max(0,Number(row.turn)||(row.greeting?1:0))
+        if (row.role === 'assistant' && turn) projected.turnMessageIds[String(turn)] = i
+      }
+    }
     if (options.globalVariables && typeof options.globalVariables.read === 'function') {
       projected.globalVariables = await options.globalVariables.read()
     }
     try {
-      const resolved = await worldbookRecord(sessionId, 'current')
+      const resolved = await worldbookRecord(sessionId, 'current', false, chat)
       projected.worldbook = projectTavernHelperWorldbook(resolved.record.view)
     } catch {}
     return projected
@@ -580,7 +635,7 @@ export function createTavernScriptHostAdapter(options = {}) {
       try { await options.diagnostics?.record(sessionId, { diagnosticId: input.diagnosticId, messageId: input.messageId, swipeId: input.swipeId, stage, ...details }) } catch {}
     }
     if (settlementTransactions.has(sessionId)) throw new Error('当前对话已有 MVU 变量结算正在执行')
-    const current = await resolveChat(sessionId)
+    const current = await readSettlementChat(sessionId)
     assertMvuEnabled(current)
     const operationId = str(input.operationId).trim()
     if (operationId === '') throw new Error('MVU 变量结算缺少 operationId')
@@ -607,9 +662,13 @@ export function createTavernScriptHostAdapter(options = {}) {
       return { updated: false, deferred: true, deferredReason: 'runtime-busy', context: projectTavernHelperContext(current) }
     }
     const originalText = str((message.swipes && message.swipes[swipeId]) ?? message.sourceText ?? message.text)
+    const eventId = 'mvu-work:' + randomUUID()
+    const work = createMvuWorkingCopy(current, eventId)
+    work.touch(messageId)
     const transaction = {
-      draft: structuredClone(current),
-      eventId: 'mvu-work:' + randomUUID(),
+      work, compact: input.compactContext === true,
+      draft: work.chat,
+      eventId,
       messageId,
       swipeId,
       mutations: 0
@@ -621,24 +680,48 @@ export function createTavernScriptHostAdapter(options = {}) {
     }
     settlementTransactions.set(sessionId, transaction)
     try {
-      const eventContext = await context(sessionId, transaction.draft)
-      const projected = eventContext.messages[messageId]
-      if (!projected) throw new Error('MVU 变量结算投影楼层不存在')
-      // Upstream MVU reads the previous valid floor as its update baseline.
-      // Override only the dispatch projection; historical floors stay untouched.
-      if (input.baselineVariables) {
-        const prior = eventContext.messages.slice(0, messageId).findLast(item => item.variables?.stat_data !== undefined && item.variables?.schema !== undefined)
-        if (prior) prior.variables = structuredClone(input.baselineVariables)
-      }
       const internalText = str(input.storyText).trim() + '\n\n' + command
-      projected.message = internalText
-      if (!Array.isArray(projected.swipes)) projected.swipes = [originalText]
-      projected.swipes[swipeId] = internalText
-      const availability = options.scriptDispatch.status?.(sessionId)
       const hasMvuSnapshot = value => value && value.stat_data !== undefined && value.schema !== undefined
-      const currentSnapshot = hasMvuSnapshot(projected.variables) === true
-      const priorSnapshot = eventContext.messages.slice(0, messageId).some(item => hasMvuSnapshot(item.variables))
-      await record('runtime-dispatch', { availability, baseline: { currentSnapshot, priorSnapshot, usesCurrentFallback: currentSnapshot && !priorSnapshot } })
+      let priorId = -1
+      for (let i=messageId-1;i>=0;i--) {
+        const row=current.messages[i]
+        if (hasMvuSnapshot(row.variables?.[row.swipeId || 0])) { priorId=i; break }
+      }
+      async function executionContext(baseline) {
+        transaction.compact = input.compactContext === true || baseline?.workContextVersion === 1
+        let indices
+        if (baseline?.workContextVersion === 1 && baseline.complete === true && !baseline.full
+          && baseline.chatId === current.id && baseline.lifecycleRevision === (current.tavernHelperLifecycleRevision || 0)
+          && Number.isSafeInteger(baseline.stateRevision) && !baseline.transaction) {
+          if (baseline.stateRevision === current._storageRevision && baseline.messageCount === current.messages.length) indices=[]
+          else {
+            const changed = await options.resolveChangedChatSlice?.(sessionId, baseline.stateRevision)
+            if (changed?.denseMessages && changed.chat.id === current.id && changed.chat._storageRevision === current._storageRevision) indices=changed.indices
+          }
+        }
+        if (indices) indices=[...new Set([...indices,messageId,...(priorId>=0 && input.baselineVariables ? [priorId] : [])])].filter(i=>i<current.messages.length)
+        const projected = await context(sessionId, transaction.draft, '', indices)
+        const target = indices ? projected.messages.find(row=>row.message_id===messageId) : projected.messages[messageId]
+        if (input.baselineVariables && priorId>=0) {
+          const prior=indices ? projected.messages.find(row=>row.message_id===priorId) : projected.messages[priorId]
+          prior.variables=structuredClone(input.baselineVariables)
+        }
+        target.message=internalText
+        if (!Array.isArray(target.swipes)) target.swipes=[originalText]
+        target.swipes[swipeId]=internalText
+        if (transaction.compact) projected.transaction={eventId,sequence:work.sequence}
+        if (!indices) return projected
+        const {messages,...header}=projected
+        return {contextDelta:{version:2,kind:'dispatch',chatId:current.id,
+          lifecycleRevision:current.tavernHelperLifecycleRevision||0,baseRevision:baseline.stateRevision,
+          stateRevision:current._storageRevision,eventId,messageCount:current.messages.length,header,messages}}
+      }
+      transaction.executionContext = executionContext
+      const lazy = options.scriptDispatch.supportsContextProjection === true
+      const eventContext = lazy ? null : await executionContext()
+      const availability = options.scriptDispatch.status?.(sessionId)
+      const currentSnapshot=hasMvuSnapshot(transaction.draft.messages[messageId].variables?.[swipeId])
+      await record('runtime-dispatch', { availability, baseline: { currentSnapshot, priorSnapshot:priorId>=0, usesCurrentFallback:currentSnapshot && priorId<0 } })
       async function initializationRejected(error) {
         const validation = { changes: [], sideEffects: [], failures: [{ message: error }] }
         await record('runtime-initialization-failed', { error })
@@ -655,7 +738,7 @@ export function createTavernScriptHostAdapter(options = {}) {
         await record('runtime-deferred', { availability })
         return { updated: false, deferred: true, deferredReason: 'runtime-not-ready', context: projectTavernHelperContext(current) }
       }
-      const dispatched = await options.scriptDispatch.dispatch(sessionId, 'MESSAGE_RECEIVED', [messageId], eventContext, { eventId: transaction.eventId, signal: input.signal })
+      const dispatched = await options.scriptDispatch.dispatch(sessionId, 'MESSAGE_RECEIVED', [messageId], eventContext, { eventId: transaction.eventId, signal: input.signal, ...(lazy ? { contextForBaseline: executionContext } : {}) })
       await record('runtime-completed', { handled: dispatched.handled === true, timedOut: dispatched.timedOut === true, executionLost: dispatched.executionLost === true, claimTimedOut: dispatched.claimTimedOut === true, phase: dispatched.phase, disposed: dispatched.disposed === true, error: dispatched.error, diagnostics: dispatched.diagnostics || [] })
       if (dispatched.handled !== true) {
         if (dispatched.initializationFailed === true) return await initializationRejected(str(dispatched.error))
@@ -691,10 +774,10 @@ export function createTavernScriptHostAdapter(options = {}) {
           else delete settled[key]
         }
       }
-      const beforeVariables = input.baselineVariables || projectTavernHelperContext(current).messages[messageId].variables
-      const proposedContext = projectTavernHelperContext(transaction.draft)
+      const beforeVariables = input.baselineVariables || current.messages[messageId].variables?.[swipeId] || {}
+      const afterVariables = transaction.draft.messages[messageId].variables?.[swipeId] || {}
       const validation = typeof input.validate === 'function'
-        ? await input.validate({ before: beforeVariables, after: proposedContext.messages[messageId].variables })
+        ? await input.validate({ before: beforeVariables, after: afterVariables })
         : null
       if (validation && validation.failures.length > 0) {
         await record('validation-rejected', { failures: validation.failures, externalEffects: transaction.externalEffects === true })
@@ -704,9 +787,10 @@ export function createTavernScriptHostAdapter(options = {}) {
         }
       }
       // The browser event can take time; recheck the target before committing its draft.
-      const latest = await resolveChat(sessionId)
+      const selected = await options.resolveChatSlice?.(sessionId, [messageId])
+      const latest = selected ? { ...selected.chat, messages: Object.assign([], { [messageId]: selected.chat.messages[0] }) } : await resolveChat(sessionId)
       if (!mutationIsCurrent(latest, expectedLifecycleRevision)
-        || Number(latest.messages[messageId]?.swipeId || 0) !== swipeId) return staleMutation(latest)
+        || Number(latest.messages[messageId]?.swipeId || 0) !== swipeId) return { updated:false, stale:true }
       const effect = createMvuSettlementEffect({
         operationId, chatId: current.id, sessionId,
         branchId: input.branchId, basedOnRevision: input.basedOnRevision,
@@ -722,7 +806,8 @@ export function createTavernScriptHostAdapter(options = {}) {
         messageId,
         swipeId,
         effect,
-        context: projectTavernHelperContext(transaction.draft)
+        variables: structuredClone(afterVariables),
+        ...(input.compactResult === true ? {} : { context: projectTavernHelperContext(transaction.draft) })
       }
     } catch (error) {
       await record('runtime-or-persistence-failed', { error: str(error && error.message || error) })
@@ -752,7 +837,14 @@ export function createTavernScriptHostAdapter(options = {}) {
     saveChatData,
     loadWorldInfo,
     saveWorldInfo,
-    claimWork: function (sessionId, runtimeId, ready, initializationError) { return options.scriptDispatch.claim(sessionId, runtimeId, ready, initializationError) },
+    claimWork: function (sessionId, runtimeId, ready, initializationError, baseline) { return options.scriptDispatch.claimWithContext ? options.scriptDispatch.claimWithContext(sessionId, runtimeId, ready, initializationError, baseline) : options.scriptDispatch.claim(sessionId, runtimeId, ready, initializationError) },
+    async transactionContext(sessionId, eventId) {
+      const transaction=settlementTransactions.get(str(sessionId))
+      assertTransactionEvent(transaction,eventId)
+      if (!transaction) return context(sessionId)
+      if (transaction.work.sequence === 0) return transaction.executionContext({workContextVersion:1,full:true})
+      return {...await context(sessionId,transaction.draft),transaction:{eventId:transaction.eventId,sequence:transaction.work.sequence}}
+    },
     startWork: function (sessionId, eventId, leaseToken, runtimeId) { return options.scriptDispatch.start(sessionId, eventId, leaseToken, runtimeId) },
     workState: function (sessionId, eventId, leaseToken, runtimeId, keepAlive) { return options.scriptDispatch.workState(sessionId, eventId, leaseToken, runtimeId, keepAlive) },
     heartbeatRuntime: function (sessionId, runtimeId, ready, initializationError) { return { active: options.scriptDispatch.touch(sessionId, runtimeId, ready, initializationError) } },

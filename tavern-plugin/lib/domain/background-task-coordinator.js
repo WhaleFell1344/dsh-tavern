@@ -220,6 +220,26 @@ export function createBackgroundTaskCoordinator(options = {}) {
       },
       async commit(input = {}) {
         return await serialize(begun.chat.id, async function () {
+          const metadata = { source: 'background.' + str(role) + '.commit', operationId: begun.value.operationId }
+          // This opt-in seam declares every floor the settlement callback can read/write.
+          // Keep variable effects, delivery cleanup, receipt and timeline in one CAS frame.
+          if (Array.isArray(input.messageIndices) && store.readSlice && store.patchChat) {
+            const indices = [...new Set(input.messageIndices)]
+            for (let attempt = 0; attempt < 2; attempt++) {
+              const selected = await store.readSlice(begun.chat.id, indices)
+              const legacy = Object.values(selected?.chat.timeline?.operations || {}).some(op => op?.kind === 'body' && op.status === 'foreground-completed')
+              if (!selected?.denseMessages || selected.chat.timeline?.schemaVersion !== 1 || legacy) break
+              const messages = Array(selected.messageCount).fill(null)
+              indices.forEach((id,i) => { messages[id] = selected.chat.messages[i] })
+              const before = { ...selected.chat, messages }
+              const completed = timeline.complete({chat:before,operationId:begun.value.operationId,basedOn:begun.value.basedOn,
+                outcome:{status:input.status||'success',stateChanged:input.stateChanged===true,participant:input.participant||null},apply:input.apply})
+              const changes = diffJson(before,completed.chat)
+              if (changes.some(c => c.path[0] === 'messages' && (!indices.includes(c.path[1]) || c.path.length < 2))) break
+              const saved = await store.patchChat(begun.chat.id,before._storageRevision,changes,metadata)
+              if (saved) return {chat:{...completed.chat,...saved,messages:completed.chat.messages},status:completed.value.status}
+            }
+          }
           let status = 'missing'
           const saved = await store.updateChat(begun.chat.id, function (latest) {
             const completed = timeline.complete({
@@ -235,7 +255,7 @@ export function createBackgroundTaskCoordinator(options = {}) {
             })
             status = completed.value.status
             return completed.chat
-          }, { source: 'background.' + str(role) + '.commit', operationId: begun.value.operationId })
+          }, metadata)
           return saved === undefined ? { chat: null, status: 'missing' } : { chat: saved, status }
         })
       },

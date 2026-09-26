@@ -1749,6 +1749,7 @@ window.__ModuleLoader__.load({
 			const { parent, token, copy, identity, onContext, onEvent } = options;
 			let nextId = 1;
 			const pending = Object.create(null);
+            let contextReady = null;
 			function post(message) { parent.postMessage(Object.assign({}, message, { token: token }), "*"); }
 			function request(method, args) {
 				// A card may replace its document; DOM listeners must be restored before RPC.
@@ -1763,8 +1764,8 @@ window.__ModuleLoader__.load({
 			function receive(event) {
 				const data = event && event.data;
 				if (event.source !== parent || !data || data.token !== token) return;
-				if (data.type === "dsh-tavern-helper-context") { onContext({ context: data.context || {} }); return; }
-				if (data.type === "dsh-tavern-helper-event" || data.type === "dsh-tavern-helper-event-ack" || data.type === "dsh-tavern-helper-event-query") { onEvent(data); return; }
+				if (data.type === "dsh-tavern-helper-context") { const ready = Promise.resolve(onContext(data.contextDelta ? {contextDelta:data.contextDelta} : { context: data.context || {} })); contextReady = ready; ready.then(function () { if (contextReady === ready) contextReady = null; }, function (error) { console.error(error); }); return; }
+				if (data.type === "dsh-tavern-helper-event" || data.type === "dsh-tavern-helper-event-ack" || data.type === "dsh-tavern-helper-event-query") { if (contextReady) contextReady.then(function () { onEvent(data); }, function (error) { console.error(error); }); else onEvent(data); return; }
 				if (data.type !== "dsh-tavern-helper-response") return;
 				const task = pending[data.requestId];
 				if (!task) return;
@@ -1975,9 +1976,11 @@ window.__ModuleLoader__.load({
 				// Do not conceal an unsupported local splice/reorder with a host refresh.
 				if (!layoutMatches()) return;
 				const variablesOnly = variableDelta && !acknowledged && revision === variableDelta.stateRevision
-                    && lastRevision === variableDelta.baseRevision && rows.length === (value.messages || []).length;
+                    && lastRevision === (variableDelta.kind === 'transaction' ? variableDelta.stateRevision : variableDelta.baseRevision)
+                    && (variableDelta.version === 2 || rows.length === (value.messages || []).length);
+                const changedRows = variableDelta?.version === 2 ? new Set((variableDelta.messages || []).map(m=>m.message_id)) : new Set([variableDelta?.messageId]);
                 const nextRows = (value.messages || []).map(function (message, index) {
-                    if (variablesOnly && index !== variableDelta.messageId) {
+                    if (variablesOnly && rows[index] && !changedRows.has(index)) {
                         const row = rows[index];
                         if (same(pluginData(row.view), row.base)) row.revision = revision;
                         return row;
@@ -2339,7 +2342,7 @@ window.__ModuleLoader__.load({
 				onContext: async function (result, method) {
                     if (result.contextDelta) {
                         const next = modules.applyVariableReceipt(state, result.contextDelta);
-                        if (next === null) await transport.request("getTavernHelperContext", {});
+                        if (next === null) await transport.request("getTavernHelperContext", result.contextDelta.version === 2 ? {eventId:result.contextDelta.eventId} : {});
                         else if (next !== state) { state = next; if (facade) facade.sync(state, result.contextDelta); }
                         return;
                     }
@@ -2349,7 +2352,7 @@ window.__ModuleLoader__.load({
 						|| Number(incoming.lifecycleRevision || 0) < Number(state.lifecycleRevision || 0)
                         || (Number(incoming.lifecycleRevision || 0) === Number(state.lifecycleRevision || 0)
                             && Number(incoming.stateRevision || 0) < Number(state.stateRevision || 0)))) return;
-					if (incoming) state = Object.assign({}, state, copy(incoming));
+					if (incoming) { state = Object.assign({}, state, copy(incoming)); if (!incoming.transaction) delete state.transaction; }
 					if (result.worldbook) state.worldbook = copy(result.worldbook);
 					// Chat-data saves acknowledge their own submitted snapshot separately.
 					if (incoming && facade && method !== "saveTavernChatData") facade.sync(state);
@@ -3794,7 +3797,7 @@ window.__ModuleLoader__.load({
 					onMvuLoadState(record.mvuLoadState);
 				}
 			}
-			function emitToRecord(record, name, args, context, diagnostics, hostEventId) {
+			async function emitToRecord(record, name, args, context, diagnostics, hostEventId) {
 				const initializationError = mvuInitializationError(record);
 				if (initializationError) {
 					if (diagnostics) diagnostics.push({ kind: "initialization", name: name, level: "error", ready: false, initializationFailed: true, scriptId: "__dsh_official_mvu__", message: initializationError });
@@ -3803,8 +3806,21 @@ window.__ModuleLoader__.load({
 				if (diagnostics) diagnostics.push({ kind: "dispatch", name: name, ready: record.subscriptionsReady, initializationFailed: record.initializationFailed, subscribed: record.subscriptions.has(String(name)) });
 				if (!record.loaded || !record.subscriptionsReady || record.initializationFailed) return Promise.resolve(args);
 				if (context && typeof context === "object") {
-					record.context = decorateHelperContext(context, record.context);
-					post(record, { type: "dsh-tavern-helper-context", context: record.context });
+                    if (context.contextDelta) {
+                        const next = applyTavernVariableReceipt(record.context, context.contextDelta);
+                        if (next === null) {
+                            const snapshot = await invoke("getTavernHelperContext", {eventId:hostEventId}, record.sessionId);
+                            if (records.get(record.id) !== record) throw new Error("脚本运行时已失效");
+                            record.context = decorateHelperContext(snapshot.context, record.context);
+                            post(record,{type:"dsh-tavern-helper-context",context:record.context});
+                        } else {
+                            record.context=next;
+                            post(record,{type:"dsh-tavern-helper-context",contextDelta:context.contextDelta});
+                        }
+                    } else {
+                        record.context = decorateHelperContext(context, record.context);
+                        post(record, { type: "dsh-tavern-helper-context", context: record.context });
+                    }
 				}
 				if (!record.subscriptions.has(String(name))) return Promise.resolve(args);
 				const eventId = String(hostEventId || "") || "host-event-" + (++eventSequence);
@@ -3954,8 +3970,15 @@ window.__ModuleLoader__.load({
 				if (record && record.fingerprint !== fingerprint) { removeRecord("shared"); record = null; }
 				if (!record) record = createRecord(nextSessionId, scripts, context, trustedCardMode, viewer);
 				else {
-					record.context = context;
-					post(record, { type: "dsh-tavern-helper-context", context: context });
+                    if (record.context.transaction && pendingEvents.has(record.context.transaction.eventId)
+                        && Number(context.lifecycleRevision || 0) === Number(record.context.lifecycleRevision || 0)) {
+                        // A committed view refresh must not replace an executing draft.
+                        record.deferredContext = context;
+                    } else {
+                        record.deferredContext = null;
+                        record.context = context;
+                        post(record, { type: "dsh-tavern-helper-context", context: context });
+                    }
 					queuedEvents.forEach(function (event) {
 						if (record.subscriptionsReady && record.subscriptions.has(String(event.name))) post(record, { type: "dsh-tavern-helper-event", name: event.name, args: event.args });
 					});
@@ -4071,6 +4094,11 @@ window.__ModuleLoader__.load({
 						closeEventId(eventId);
 						hostWindow.clearTimeout(pending.timer);
                         post(record, { type: "dsh-tavern-helper-event-ack", eventId: eventId });
+                        if (record.deferredContext) {
+                            record.context = record.deferredContext;
+                            record.deferredContext = null;
+                            post(record,{type:"dsh-tavern-helper-context",context:record.context});
+                        }
 						const completeData = pending.completeData || data;
 						if (completeData.error) {
 							const script = record.scripts.get(String(completeData.scriptId || pending.activeScriptId || ""));
@@ -4171,7 +4199,8 @@ window.__ModuleLoader__.load({
                             if (!result || !result.contextDelta || records.get(record.id) !== record) return result;
                             const next = applyTavernVariableReceipt(record.context, result.contextDelta);
                             if (next === null) {
-                                const snapshot = await invoke("getTavernHelperContext", {}, record.sessionId);
+                                const snapshot = await invoke("getTavernHelperContext", result.contextDelta.version === 2 ? {eventId:result.contextDelta.eventId} : {}, record.sessionId);
+                                record.context = decorateHelperContext(snapshot.context, record.context);
                                 return Object.assign({}, result, { contextDelta: undefined, context: snapshot.context });
                             }
                             record.context = next;
@@ -4210,7 +4239,7 @@ window.__ModuleLoader__.load({
 						syncMvuDataReadiness(record);
 					}
 					post(record, { type: "dsh-tavern-helper-response", requestId: data.requestId, ok: true, result: result });
-					if ((data.method === "updateTavernHelperPrompts" || data.method === "updateTavernHelperVariables" || data.method === "updateTavernHelperMessages" || data.method === "createTavernHelperMessages" || data.method === "replaceTavernHelperWorldbook" || data.method === "saveTavernExtensionSettings" || data.method === "saveTavernWorldInfo" || data.method === "saveTavernChatData") && result && result.updated !== false && result.stale !== true && records.get(record.id) === record) reportMutation(record.sessionId, data.method, result.contextDelta ? Object.assign({}, result, { context: record.context }) : result);
+					if ((data.method === "updateTavernHelperPrompts" || data.method === "updateTavernHelperVariables" || data.method === "updateTavernHelperMessages" || data.method === "createTavernHelperMessages" || data.method === "replaceTavernHelperWorldbook" || data.method === "saveTavernExtensionSettings" || data.method === "saveTavernWorldInfo" || data.method === "saveTavernChatData") && result && !result.transactional && result.updated !== false && result.stale !== true && records.get(record.id) === record) reportMutation(record.sessionId, data.method, result.contextDelta ? Object.assign({}, result, { context: record.context }) : result);
 				}, function (error) {
 					post(record, { type: "dsh-tavern-helper-response", requestId: data.requestId, ok: false, error: String(error && error.message || error), errorCode: String(error && error.code || "") });
 				});
@@ -4240,7 +4269,11 @@ window.__ModuleLoader__.load({
 					const record = records.get("shared");
 					const scripts = record ? Array.from(record.scripts.values()).map(function (script) { return { id: script.id, loaded: script.loaded, subscriptionsReady: script.subscriptionsReady, initializationFailed: script.initializationFailed }; }) : [];
 					const initializationError = mvuInitializationError(record);
-					return { sessionId: activeSessionId, frameCount: record ? 1 : 0, scriptIds: scripts.map(function (script) { return script.id; }), scripts: scripts, ...(record && record.scripts.has("__dsh_official_mvu__") ? { mvuDataReady: mvuDataReady(record) } : {}), ...(record && record.mvuLoadState ? { mvuLoadState: record.mvuLoadState } : {}), ...(initializationError ? { initializationError: initializationError } : {}) };
+					const baseline=record && record.context;
+                    const contextBaseline=baseline ? {workContextVersion:1,chatId:baseline.chatId,stateRevision:baseline.stateRevision,
+                        lifecycleRevision:Number(baseline.lifecycleRevision)||0,messageCount:(baseline.messages||[]).length,
+                        transaction:baseline.transaction,complete:!baseline.messagesPending && (baseline.messages||[]).every(m=>m && !m.stub)} : {workContextVersion:1,full:true};
+                    return { contextBaseline:contextBaseline, sessionId: activeSessionId, frameCount: record ? 1 : 0, scriptIds: scripts.map(function (script) { return script.id; }), scripts: scripts, ...(record && record.scripts.has("__dsh_official_mvu__") ? { mvuDataReady: mvuDataReady(record) } : {}), ...(record && record.mvuLoadState ? { mvuLoadState: record.mvuLoadState } : {}), ...(initializationError ? { initializationError: initializationError } : {}) };
 				}
 			});
 		}
@@ -4432,7 +4465,7 @@ window.__ModuleLoader__.load({
 					// A ready viewer cannot advertise settlement readiness: promotion
 					// rebuilds the sandbox with the official core before accepting work.
 					const inspection = ownershipKnown && !active ? { scripts: [] } : currentRuntime.inspect();
-					const result = await invokeWithDeadline("claimTavernScriptWork", currentLease, inspection);
+					const result = await invokeWithDeadline("claimTavernScriptWork", currentLease, inspection, {contextBaseline: inspection.contextBaseline || {workContextVersion:1,full:true}});
 					if (lease !== currentLease) {
 						if (result && result.active) releaseLease(currentLease);
 						return;
