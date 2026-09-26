@@ -7,6 +7,9 @@ import { applyTavernRegexText } from './tavern-regex-display.js'
 import { projectDisplayParts, resolveDisplayIdentityMacros } from './reply-presentation.js'
 
 const sourceIndex = createStatusSourceIndex()
+const dependencyIndex = createStatusSourceIndex({readRow:(projection,id)=>
+  typeof projection.turn==='number' && !Number.isNaN(projection.turn) && (projection.parts || []).some(part=>!part.statusKey && Number.isInteger(part.statusRule))
+    ? {turn:projection.turn,source:id} : undefined})
 const matchIndex = createIndexedArrayApi({eligible:row=>Boolean(row?.origin),maximum:row=>row?.legacy?1:0,measure:row=>JSON.stringify([row.origin,row.content,[...row.removed]]).length*2})
 const fallbackIndex = createIndexedArrayApi({eligible:row=>Boolean(row),measure:row=>JSON.stringify(row).length*2})
 const filteredIndex = createImmutableJsonIndex({measure:row=>JSON.stringify(row).length*2})
@@ -30,6 +33,9 @@ function projectStatusView(messages, projections, options, compile, summary) {
   const prior = summary?.previous
   let legacySources = prior?.legacySources ? sourceIndex.update(prior.legacySources,sourceMessages,summary.messageIndices) : null
   const changes = prior ? immutableArrayChanges(prior.source,sourceProjections) : null
+  let legacyDependencies = prior?.legacyDependencies ? dependencyIndex.update(prior.legacyDependencies,sourceProjections,changes) : null
+  const legacyDirty = changes && prior?.legacySources && legacySources && legacyDependencies ? new Set(changes) : null
+  if(legacyDirty)for(const turn of sourceIndex.changed(prior.legacySources,legacySources))for(const id of dependencyIndex.values(legacyDependencies,turn))legacyDirty.add(id)
   const matchStates = new Map(), fallbackStates = new Map()
   let legacy = false
   const rules = Array.isArray(options.regexScripts) ? options.regexScripts : []
@@ -67,8 +73,9 @@ function projectStatusView(messages, projections, options, compile, summary) {
         }
       }
       let candidates
-      if (oldMatches && changes && matchIndex.maximum(oldMatches)===0) {
-        candidates=matchIndex.update(oldMatches,changes.map(id=>[id,match(sourceProjections[id])]),sourceProjections.length)
+      if (oldMatches && changes && (matchIndex.maximum(oldMatches)===0 || legacyDirty)) {
+        const dirty=matchIndex.maximum(oldMatches)===0 ? changes : [...legacyDirty]
+        candidates=matchIndex.update(oldMatches,dirty.map(id=>[id,match(sourceProjections[id])]),sourceProjections.length)
       } else candidates=matchIndex.from(sourceProjections.map(match))
       matchStates.set(matchKey,candidates)
       legacy ||= matchIndex.maximum(candidates)>0
@@ -122,6 +129,10 @@ function projectStatusView(messages, projections, options, compile, summary) {
   const statusViews = [...templates.values()]
   const contents = new Set(statusViews.map(view => view.content))
 
+  if(summary && legacy){
+    legacySources ||= sourceIndex.update(null,sourceMessages)
+    legacyDependencies ||= dependencyIndex.update(null,sourceProjections)
+  }
   const legacyRemoved = new Set()
   if(legacy) for(const rows of matchStates.values()) for(const row of rows) for(const part of row.removed) legacyRemoved.add(part)
   const matchedRows=[...matchStates.values()]
@@ -135,8 +146,8 @@ function projectStatusView(messages, projections, options, compile, summary) {
   const filtered=incremental ? filteredIndex.update(prior.filtered,changes.map(id=>[id,filter(sourceProjections[id],id)]),sourceProjections.length)
     : summary ? filteredIndex.from(sourceProjections.map(filter)) : sourceProjections.map(filter)
   if(summary){
-    summary.next={source:sourceProjections,matches:matchStates,filtered,contentSignature,legacy,fallbacks:fallbackStates,legacySources}
-    summary.filteredBytes=(legacySources?sourceIndex.bytes(legacySources):0) + [...fallbackStates.values()].reduce((size,state)=>size+fallbackIndex.info(state.openings).bytes+fallbackIndex.info(state.receipts).bytes,0) + filteredIndex.info(filtered).bytes + matchedRows.reduce((size,rows)=>size+matchIndex.info(rows).bytes,0)
+    summary.next={source:sourceProjections,matches:matchStates,filtered,contentSignature,legacy,fallbacks:fallbackStates,legacySources,legacyDependencies}
+    summary.filteredBytes=(legacyDependencies?dependencyIndex.bytes(legacyDependencies):0) + (legacySources?sourceIndex.bytes(legacySources):0) + [...fallbackStates.values()].reduce((size,state)=>size+fallbackIndex.info(state.openings).bytes+fallbackIndex.info(state.receipts).bytes,0) + filteredIndex.info(filtered).bytes + matchedRows.reduce((size,rows)=>size+matchIndex.info(rows).bytes,0)
   }
   return {
     projections: filtered,
