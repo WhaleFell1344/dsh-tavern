@@ -17,7 +17,7 @@ const tick=()=>new Promise(r=>setImmediate(r))
 for(const rows of [20,400]) test(`MVU ${rows} floors: bounded wire and atomic scoped commit including historical edits`,async t=>{
  const root=await mkdtemp(join(tmpdir(),'mvu-delta-'));t.after(()=>rm(root,{recursive:true,force:true}))
  const persistence=createChatPersistence({store:createChatJournalStore({dataRoot:root})})
- await persistence.write({id:'c',sessionId:'s',mode:'story',mvu:{enabled:true},messages:Array.from({length:rows},(_,i)=>({role:'assistant',turn:i+1,text:'body',swipeId:0,variables:[{stat_data:{hp:10,padding:'x'.repeat(4096)},schema:{}}],mvu:{pending:i===rows-1}}))})
+ await persistence.write({id:'c',sessionId:'s',mode:'story',timeline:{schemaVersion:1,branchId:'b',revision:1,checkpoints:Array.from({length:rows},(_,i)=>({id:'checkpoint-'+i,beforeRevision:i})),operations:{},participants:{}},mvu:{enabled:true},messages:Array.from({length:rows},(_,i)=>({role:'assistant',turn:i+1,text:'body',swipeId:0,variables:[{stat_data:{hp:10,padding:'x'.repeat(4096)},schema:{}}],mvu:{pending:i===rows-1}}))})
  let fullUpdates=0,conflict=true
  const coordinator=createBackgroundTaskCoordinator({timeline:createStoryTimeline(),store:{readChat:persistence.read,writeChat:persistence.write,
   updateChat:(...args)=>{fullUpdates++;return persistence.update(...args)},readSlice:persistence.readSlice,
@@ -58,10 +58,11 @@ for(const rows of [20,400]) test(`MVU ${rows} floors: bounded wire and atomic sc
  assert.equal(result.context,undefined)
  assert.equal(result.variables.stat_data.hp,7)
  assert.equal((await persistence.read('c')).messages[2].variables[0].stat_data.hp,10,'draft did not leak')
- const completed=await task.commit({messageIndices:[2,rows-1],stateChanged:true,apply(d){applyMvuSettlementEffect(d,result.effect);d.messages.at(-1).mvu={pending:false,receipt:{status:'updated'}}}})
+ const completed=await task.commit({messageIndices:[2,rows-1],stateChanged:true,apply(d,scope){applyMvuSettlementEffect(d,result.effect,scope);d.messages.at(-1).mvu={pending:false,receipt:{status:'updated'}}}})
  assert.equal(completed.status,'committed')
  assert.equal(fullUpdates,0,'commit must use a single scoped CAS, not full update')
  const disk=await createChatJournalStore({dataRoot:root}).read('c')
+ assert.deepEqual(disk.timeline.checkpoints,Array.from({length:rows},(_,i)=>({id:'checkpoint-'+i,beforeRevision:i})),'scoped metadata must preserve historical rollback checkpoints')
  assert.equal(disk.messages[2].variables[0].stat_data.hp,7)
  assert.equal(disk.messages.at(-1).mvu.pending,false)
  assert.equal(disk.messages[0].displayRuntime.captured,true)

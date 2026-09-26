@@ -396,7 +396,10 @@ export function createChatJournalStore(options = {}) {
     const {messages:rawMessages,...allHead}=chat
     const messages=Array.isArray(rawMessages)?rawMessages:[]
     if(indices.some(i=>!Number.isSafeInteger(i)||i<0||i>=messages.length))throw new Error('消息楼层不存在')
-    let head=allHead
+    // Settlement never reads historical rollback checkpoints. Keep them on disk
+    // and in full reads, but do not copy them into each scoped transaction.
+    let head = fields === 'settlement' && allHead.timeline
+      ? {...allHead, timeline:{...allHead.timeline, checkpoints:[]}} : allHead
     if (Array.isArray(fields)) {
       head = {}
       for (const field of fields) {
@@ -485,7 +488,7 @@ export function createChatJournalStore(options = {}) {
       if(!state || state.revision!==expectedRevision)return undefined
       // An acknowledged no-op is not a story edit: keep undo points valid.
       // Check the exact revision and transaction guard under the same lock.
-      if(changes.length===0){metadata.assertCurrent?.();return slice(state.chat,[]).chat}
+      if(changes.length===0){metadata.assertCurrent?.();return slice(state.chat,[],metadata.returnProjection).chat}
       const paths=layout(chatId)
       // Cache and disk must contain the same JSON. Canonicalize only changed
       // payloads, never copy the complete chat on this fast path.
@@ -518,7 +521,7 @@ export function createChatJournalStore(options = {}) {
       rememberState(chatId, await version(chatId), {...state,chat:next,revision:frame.revision,legacy:false,
         snapshot:rotated || state.snapshot,open:rotated ? null : open,openFrameCount:rotated ? 0 : state.openFrameCount+1,openInvalidLine:0},
         rememberChanges(recentChanges, frame.revision, changes))
-      return slice(next,[]).chat
+      return slice(next,[],metadata.returnProjection).chat
     })
   }
 

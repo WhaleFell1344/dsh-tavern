@@ -1,3 +1,4 @@
+import { createScopedMessages } from './scoped-messages.js'
 function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 }
@@ -588,7 +589,14 @@ export function createStoryTimeline(options = {}) {
   }
 
   function complete(input) {
-    const chat = ensure(input && input.chat)
+    // Scoped callers supply detached selected rows, indexed by original floor.
+    // Normalize metadata without serializing an N-element sparse array.
+    const scoped = Array.isArray(input?.messageIndices)
+    const chat = ensure(scoped ? {...input.chat, messages: []} : input && input.chat)
+    if (scoped) {
+      chat.messages = createScopedMessages(input.chat.messages.length,
+        input.messageIndices.map(id => [id, clone(input.chat.messages[id])]))
+    }
     const operation = chat.timeline.operations[str(input && input.operationId)]
     if (operation === undefined || operation.status !== 'running' || !sameBasedOn(operation.basedOn, input && input.basedOn) || !sameBasedOn(operation.basedOn, basedOn(chat))) {
       if (operation !== undefined && operation.status === 'running') operation.status = 'stale'

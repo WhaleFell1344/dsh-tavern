@@ -2567,8 +2567,8 @@ export async function apply(ctx) {
           stateChanged: Boolean(mvuResult?.effect?.changes?.length) || Boolean(mvuResult && mvuResult.receipt && mvuResult.receipt.status === 'updated') ||
             str(result && result.posture).trim() !== '',
           participant: taskRun.participant({ sessionId: backgroundSessionId, boundary: backgroundBoundary }),
-          apply(draft) {
-            if (mvuResult && mvuResult.effect) applyMvuSettlementEffect(draft, mvuResult.effect)
+          apply(draft, scope) {
+            if (mvuResult && mvuResult.effect) applyMvuSettlementEffect(draft, mvuResult.effect, scope)
             stat = applySettlement(draft, result)
             if (mvuTarget && mvuResult === null && backgroundTasksSettings.variables === false) {
               const target = draft.messages[mvuTarget.messageId]

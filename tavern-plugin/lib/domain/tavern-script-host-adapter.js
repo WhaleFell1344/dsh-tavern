@@ -594,13 +594,13 @@ export function createTavernScriptHostAdapter(options = {}) {
 
   async function context(sessionId, chatValue, transientUserText = '', indices) {
     const chat = chatValue || await resolveChat(sessionId)
-    const draft = { ...chat, messages: (chat.messages || []).slice() }
+    const draft = { ...chat, messages: chat.messages || [] }
     const userText = str(transientUserText).trim()
     if (userText !== '') {
       const previousVariables = lastTavernHelperVariables(draft.messages)
       const message = { role: 'user', text: userText, swipeId: 0, swipes: [userText], variables: [] }
       if (previousVariables !== undefined) message.variables = [structuredClone(previousVariables)]
-      draft.messages.push(message)
+      draft.messages = draft.messages.concat(message)
     }
     const projected = projectTavernHelperContext(indices ? { ...draft, messages: [] } : draft)
     if (indices) {
@@ -795,7 +795,7 @@ export function createTavernScriptHostAdapter(options = {}) {
         operationId, chatId: current.id, sessionId,
         branchId: input.branchId, basedOnRevision: input.basedOnRevision,
         expectedLifecycleRevision, messageId, swipeId,
-        before: current, after: transaction.draft
+        before: current, after: transaction.draft, messageIndices: work.dirty
       })
       await record('prepared', { mutations: transaction.mutations })
       return {

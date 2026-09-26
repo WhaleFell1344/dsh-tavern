@@ -1,8 +1,9 @@
+import { createScopedMessages } from './scoped-messages.js'
 import { projectTavernHelperMessage } from './tavern-helper-context.js'
 
 // The base is a private, detached read. Never hand its shared rows to a writer.
 export function createMvuWorkingCopy(base, eventId) {
-  const chat = { ...base, messages: (base.messages || []).slice() }
+  const chat = { ...base, messages: createScopedMessages((base.messages || []).length, [], id => base.messages[id]) }
   for (const key of ['variables', 'mvu', 'tavernScriptPrompts', 'tavernHelperScriptVariables', 'macroState']) {
     if (base[key] !== undefined) chat[key] = structuredClone(base[key])
   }
