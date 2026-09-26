@@ -1,3 +1,4 @@
+import { createStatusPartIndex } from './status-part-index.js'
 import { createStatusSourceIndex } from './status-source-index.js'
 import { statusViewDeclaration } from './status-view-declaration.js'
 import { createIndexedArrayApi } from './indexed-array.js'
@@ -6,6 +7,7 @@ import { createHash } from 'node:crypto'
 import { applyTavernRegexText } from './tavern-regex-display.js'
 import { projectDisplayParts, resolveDisplayIdentityMacros } from './reply-presentation.js'
 
+const partIndex = createStatusPartIndex()
 const sourceIndex = createStatusSourceIndex()
 const dependencyIndex = createStatusSourceIndex({readRow:(projection,id)=>
   typeof projection.turn==='number' && !Number.isNaN(projection.turn) && (projection.parts || []).some(part=>!part.statusKey && Number.isInteger(part.statusRule))
@@ -133,21 +135,39 @@ function projectStatusView(messages, projections, options, compile, summary) {
     legacySources ||= sourceIndex.update(null,sourceMessages)
     legacyDependencies ||= dependencyIndex.update(null,sourceProjections)
   }
+  let partState=null,partBytes=0
+  const filterDirty=new Set(changes || [])
+  if(summary && (legacy || prior?.partState)){
+    const reuse=prior?.partState && changes
+    const positions=reuse ? [...changes] : Array.from({length:sourceProjections.length},(_,i)=>i)
+    if(reuse)for(let i=sourceProjections.length;i<prior.source.length;i++)positions.push(i)
+    const projectionEdits=positions.map(i=>[i,reuse?prior.source[i]?.parts:undefined,sourceProjections[i]?.parts])
+    const removalEdits=[]
+    for(const key of new Set([...matchStates.keys(),...reuse?prior.matches.keys():[]])){
+      const before=reuse?prior.matches.get(key):undefined,after=matchStates.get(key)
+      const indices=before && after ? matchIndex.changed(before,after) : Array.from({length:after?.length || 0},(_,i)=>i)
+      if(before)for(let i=after?.length || 0;i<before.length;i++)indices.push(i)
+      for(const i of indices)removalEdits.push([before?.[i]?.removed,after?.[i]?.removed])
+    }
+    const updated=partIndex.update(reuse?prior.partState:null,projectionEdits,removalEdits)
+    partState=updated.state;partBytes=updated.bytes
+    for(const id of updated.affected)filterDirty.add(id)
+  }
   const legacyRemoved = new Set()
-  if(legacy) for(const rows of matchStates.values()) for(const row of rows) for(const part of row.removed) legacyRemoved.add(part)
+  if(legacy && !summary) for(const rows of matchStates.values()) for(const row of rows) for(const part of row.removed) legacyRemoved.add(part)
   const matchedRows=[...matchStates.values()]
   function filter(projection,id) {
     summary?.onFilter?.()
-    const parts=(projection.parts || []).filter(part=>!(part.kind==='html' && (contents.has(contentOf(part)) || legacyRemoved.has(part) || matchedRows.some(rows=>rows[id]?.removed.has(part)))))
+    const parts=(projection.parts || []).filter(part=>!(part.kind==='html' && (contents.has(contentOf(part)) || (partState && partIndex.has(partState,part)) || legacyRemoved.has(part) || matchedRows.some(rows=>rows[id]?.removed.has(part)))))
     return parts.length===(projection.parts || []).length ? projection : {...projection,parts,text:parts.map(part=>part.kind==='html'?contentOf(part):part.text || '').join('')}
   }
   const contentSignature=JSON.stringify([...contents])
-  const incremental=summary && prior && changes && !legacy && !prior.legacy && prior.contentSignature===contentSignature
-  const filtered=incremental ? filteredIndex.update(prior.filtered,changes.map(id=>[id,filter(sourceProjections[id],id)]),sourceProjections.length)
+  const incremental=summary && prior && changes && (!(legacy || prior.legacy) || prior.partState) && prior.contentSignature===contentSignature
+  const filtered=incremental ? filteredIndex.update(prior.filtered,[...filterDirty].filter(id=>id<sourceProjections.length).map(id=>[id,filter(sourceProjections[id],id)]),sourceProjections.length)
     : summary ? filteredIndex.from(sourceProjections.map(filter)) : sourceProjections.map(filter)
   if(summary){
-    summary.next={source:sourceProjections,matches:matchStates,filtered,contentSignature,legacy,fallbacks:fallbackStates,legacySources,legacyDependencies}
-    summary.filteredBytes=(legacyDependencies?dependencyIndex.bytes(legacyDependencies):0) + (legacySources?sourceIndex.bytes(legacySources):0) + [...fallbackStates.values()].reduce((size,state)=>size+fallbackIndex.info(state.openings).bytes+fallbackIndex.info(state.receipts).bytes,0) + filteredIndex.info(filtered).bytes + matchedRows.reduce((size,rows)=>size+matchIndex.info(rows).bytes,0)
+    summary.next={source:sourceProjections,matches:matchStates,filtered,contentSignature,legacy,fallbacks:fallbackStates,legacySources,legacyDependencies,partState}
+    summary.filteredBytes=partBytes + (legacyDependencies?dependencyIndex.bytes(legacyDependencies):0) + (legacySources?sourceIndex.bytes(legacySources):0) + [...fallbackStates.values()].reduce((size,state)=>size+fallbackIndex.info(state.openings).bytes+fallbackIndex.info(state.receipts).bytes,0) + filteredIndex.info(filtered).bytes + matchedRows.reduce((size,rows)=>size+matchIndex.info(rows).bytes,0)
   }
   return {
     projections: filtered,
