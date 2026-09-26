@@ -270,8 +270,12 @@ export function createChatPersistence(options = {}) {
     const selected=await records.readSlice(chatId,indices,fields)
     return selected ? {...selected,chat:normalize(selected.chat)} : undefined
   }
-  async function readChangedSlice(chatId, revision) {
-    const selected = await records.readChangedSlice?.(chatId, revision)
+  async function readSettlementBase(chatId) {
+    const selected = await records.readSettlementBase?.(chatId)
+    return selected ? {...selected,chat:normalize(selected.chat)} : undefined
+  }
+  async function readChangedSlice(chatId, revision, fields) {
+    const selected = await records.readChangedSlice?.(chatId, revision, fields)
     return selected ? {...selected, chat: normalize(selected.chat)} : undefined
   }
   async function readChangedIndices(chatId, revision) {
@@ -295,5 +299,5 @@ export function createChatPersistence(options = {}) {
     await records.remove(chatId)
   }
 
-  return Object.freeze({ read, readSessionState, readSceneImageState, readSettlementCheckpoint, readBackgroundConfig, readDisplayRuntimeState, readSlice, readChangedSlice, readChangedIndices, readViewDelta, patch, readRevision, write, update, version, remove })
+  return Object.freeze({ read, readSessionState, readSceneImageState, readSettlementCheckpoint, readBackgroundConfig, readDisplayRuntimeState, readSlice, readSettlementBase, readChangedSlice, readChangedIndices, readViewDelta, patch, readRevision, write, update, version, remove })
 }

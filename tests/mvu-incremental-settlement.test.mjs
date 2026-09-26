@@ -16,7 +16,8 @@ const tick=()=>new Promise(r=>setImmediate(r))
 
 for(const rows of [20,400]) test(`MVU ${rows} floors: bounded wire and atomic scoped commit including historical edits`,async t=>{
  const root=await mkdtemp(join(tmpdir(),'mvu-delta-'));t.after(()=>rm(root,{recursive:true,force:true}))
- const persistence=createChatPersistence({store:createChatJournalStore({dataRoot:root})})
+ let visits=0, fullReads=0
+ const persistence=createChatPersistence({store:createChatJournalStore({dataRoot:root,onIndexedMessageVisit:()=>visits++})})
  await persistence.write({id:'c',sessionId:'s',mode:'story',timeline:{schemaVersion:1,branchId:'b',revision:1,checkpoints:Array.from({length:rows},(_,i)=>({id:'checkpoint-'+i,beforeRevision:i})),operations:{},participants:{}},mvu:{enabled:true},messages:Array.from({length:rows},(_,i)=>({role:'assistant',turn:i+1,text:'body',swipeId:0,variables:[{stat_data:{hp:10,padding:'x'.repeat(4096)},schema:{}}],mvu:{pending:i===rows-1}}))})
  let fullUpdates=0,conflict=true
  const coordinator=createBackgroundTaskCoordinator({timeline:createStoryTimeline(),store:{readChat:persistence.read,writeChat:persistence.write,
@@ -29,16 +30,20 @@ for(const rows of [20,400]) test(`MVU ${rows} floors: bounded wire and atomic sc
  const task=await coordinator.begin(await persistence.read('c'),'settlement')
  let browser=projectTavernHelperContext(await persistence.read('c'))
  const gate=createTavernScriptDispatch();t.after(()=>gate.dispose('s'));gate.touch('s','browser',true)
- const adapter=createTavernScriptHostAdapter({resolveChat:()=>persistence.read('c'),writeChat:persistence.write,
+ const adapter=createTavernScriptHostAdapter({resolveChat:()=>{fullReads++;return persistence.read('c')},writeChat:persistence.write,
+  resolveSettlementBase:()=>persistence.readSettlementBase('c'),
   resolveChatSlice:(_s,indices)=>persistence.readSlice('c',indices),resolveChangedChatSlice:(_s,revision)=>persistence.readChangedSlice('c',revision),
   readCard:async()=>({}),worldBooks:{bound:async()=>null},scriptDispatch:gate})
  // Advance storage after the browser baseline, proving changed-floor synchronization.
  await persistence.update('c',d=>{d.messages[1].text='new history';return d})
+ visits=0
  const settlement=adapter.settleMvuUpdate({operationId:task.operationId,branchId:task.basedOn.branchId,basedOnRevision:task.basedOn.revision,
   sessionId:'s',messageId:rows-1,swipeId:0,compactResult:true,storyText:'body',command:'<UpdateVariable/>',baselineVariables:browser.messages.at(-1).variables})
  while(!gate.status('s').busy) await tick()
  const offer=await adapter.claimWork('s','browser',true,'',{workContextVersion:1,complete:true,chatId:'c',stateRevision:browser.stateRevision,lifecycleRevision:0,messageCount:rows})
  assert.ok(offer.event.context.contextDelta)
+ assert.equal(fullReads,0,'settlement must not load full history')
+ assert.ok(visits<=256,`dispatch visited ${visits} indexed nodes`)
  assert.ok(JSON.stringify(offer).length<45000,JSON.stringify(offer).length)
  browser=helperClient.applyTavernVariableReceipt(browser,offer.event.context.contextDelta)
  assert.equal(browser.messages[1].message,'new history')

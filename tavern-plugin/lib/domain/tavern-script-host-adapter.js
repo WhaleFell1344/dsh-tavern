@@ -45,6 +45,7 @@ export function createTavernScriptHostAdapter(options = {}) {
   const templateCharacters = createJsonValueProjectionCache({ capacity: 8, maxBytes: 16 * 1024 * 1024 })
   const mutationTails = new Map()
   const settlementTransactions = new Map()
+  const settlementReaders = new WeakMap()
   // One detached base, never writable or exposed to callers. Incremental storage
   // reads replace changed rows; cache eviction only costs a cold full read.
   let settlementBase = null
@@ -67,6 +68,11 @@ export function createTavernScriptHostAdapter(options = {}) {
     return chat
   }
   async function readSettlementChat(sessionId) {
+    const selectedBase = await options.resolveSettlementBase?.(sessionId)
+    if (selectedBase) {
+      settlementReaders.set(selectedBase.chat, selectedBase)
+      return selectedBase.chat
+    }
     const cached = settlementBase
     if (cached?.sessionId === sessionId && options.resolveChatSlice && options.resolveChangedChatSlice) {
       const selected = await options.resolveChatSlice(sessionId, [])
@@ -605,10 +611,9 @@ export function createTavernScriptHostAdapter(options = {}) {
     const projected = projectTavernHelperContext(indices ? { ...draft, messages: [] } : draft)
     if (indices) {
       projected.messages = indices.map(i => projectTavernHelperMessage(draft.messages[i], i))
-      for (let i=0;i<draft.messages.length;i++) {
-        const row=draft.messages[i], turn=Math.max(0,Number(row.turn)||(row.greeting?1:0))
-        if (row.role === 'assistant' && turn) projected.turnMessageIds[String(turn)] = i
-      }
+      // An indexed dispatch is allowed only when floor identity/turn mapping
+      // did not change. Keep the browser's already complete turn index.
+      delete projected.turnMessageIds
     }
     if (options.globalVariables && typeof options.globalVariables.read === 'function') {
       projected.globalVariables = await options.globalVariables.read()
@@ -682,8 +687,9 @@ export function createTavernScriptHostAdapter(options = {}) {
     try {
       const internalText = str(input.storyText).trim() + '\n\n' + command
       const hasMvuSnapshot = value => value && value.stat_data !== undefined && value.schema !== undefined
-      let priorId = -1
-      for (let i=messageId-1;i>=0;i--) {
+      const indexedBase = settlementReaders.get(current)
+      let priorId = indexedBase ? indexedBase.previousMvu(messageId) : -1
+      for (let i=indexedBase ? -1 : messageId-1;i>=0;i--) {
         const row=current.messages[i]
         if (hasMvuSnapshot(row.variables?.[row.swipeId || 0])) { priorId=i; break }
       }
@@ -695,8 +701,8 @@ export function createTavernScriptHostAdapter(options = {}) {
           && Number.isSafeInteger(baseline.stateRevision) && !baseline.transaction) {
           if (baseline.stateRevision === current._storageRevision && baseline.messageCount === current.messages.length) indices=[]
           else {
-            const changed = await options.resolveChangedChatSlice?.(sessionId, baseline.stateRevision)
-            if (changed?.denseMessages && changed.chat.id === current.id && changed.chat._storageRevision === current._storageRevision) indices=changed.indices
+            const changed = await options.resolveChangedChatSlice?.(sessionId, baseline.stateRevision, 'settlement')
+            if (changed?.denseMessages && changed.layoutChanged === false && changed.chat.id === current.id && changed.chat._storageRevision === current._storageRevision) indices=changed.indices
           }
         }
         if (indices) indices=[...new Set([...indices,messageId,...(priorId>=0 && input.baselineVariables ? [priorId] : [])])].filter(i=>i<current.messages.length)
@@ -787,7 +793,7 @@ export function createTavernScriptHostAdapter(options = {}) {
         }
       }
       // The browser event can take time; recheck the target before committing its draft.
-      const selected = await options.resolveChatSlice?.(sessionId, [messageId])
+      const selected = await options.resolveChatSlice?.(sessionId, [messageId], 'settlement')
       const latest = selected ? { ...selected.chat, messages: Object.assign([], { [messageId]: selected.chat.messages[0] }) } : await resolveChat(sessionId)
       if (!mutationIsCurrent(latest, expectedLifecycleRevision)
         || Number(latest.messages[messageId]?.swipeId || 0) !== swipeId) return { updated:false, stale:true }

@@ -722,7 +722,8 @@ export async function apply(ctx) {
     }
     return chat
   }
-  const chatJournalStore = createChatJournalStore({ dataRoot, legacyData: profileData, now: Date.now, logger: console })
+  const chatJournalStore = createChatJournalStore({ dataRoot, legacyData: profileData, now: Date.now, logger: console, backgroundSnapshots: true })
+  ctx.effect(() => () => chatJournalStore.flushMaintenance(), 'dsh-tavern: finish queued Chat snapshots')
   const chatPersistence = createChatPersistence({ store: chatJournalStore, normalize: normalizeChat, now: Date.now })
   async function readChat(chatId) {
     const chat = await chatPersistence.read(chatId)
@@ -1280,10 +1281,17 @@ export async function apply(ctx) {
       await sessionStore.flush(session)
     },
     resolveChat: chatForSession,
-    resolveChatSlice: async (sessionId,indices) => {
+    resolveSettlementBase: async sessionId => {
+      const chatId = (await readSessionMap())[sessionId]
+      if (!chatId) return undefined
+      const selected = await chatPersistence.readSettlementBase(chatId)
+      if (!selected || selected.chat.sessionId !== sessionId || selected.chat.backgroundConfigVersion !== 1 || selected.chat.conversationFeaturesVersion !== 1) return undefined
+      return selected
+    },
+    resolveChatSlice: async (sessionId,indices,fields) => {
       const chatId=(await readSessionMap())[sessionId]
       if(!chatId)return undefined
-      const selected=await chatPersistence.readSlice(chatId,indices)
+      const selected=await chatPersistence.readSlice(chatId,indices,fields)
       if(!selected || selected.chat.sessionId!==sessionId || selected.chat.backgroundConfigVersion!==1 || selected.chat.conversationFeaturesVersion!==1)return undefined
       return selected
     },
@@ -1298,10 +1306,10 @@ export async function apply(ctx) {
       if(!selected || selected.chat.sessionId!==sessionId || selected.chat.backgroundConfigVersion!==1 || selected.chat.conversationFeaturesVersion!==1)return undefined
       return selected
     },
-    resolveChangedChatSlice: async (sessionId,revision) => {
+    resolveChangedChatSlice: async (sessionId,revision,fields) => {
       const chatId=(await readSessionMap())[sessionId]
       if(!chatId)return undefined
-      const selected=await chatPersistence.readChangedSlice(chatId,revision)
+      const selected=await chatPersistence.readChangedSlice(chatId,revision,fields)
       if(!selected || selected.chat.sessionId!==sessionId || selected.chat.backgroundConfigVersion!==1 || selected.chat.conversationFeaturesVersion!==1)return undefined
       return selected
     },

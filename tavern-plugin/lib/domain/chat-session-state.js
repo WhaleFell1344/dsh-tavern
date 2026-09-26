@@ -22,7 +22,7 @@ export function projectChatSessionState(chat) {
   const pendingMvuSettlement = pendingMvuSettlementState(chat)
   // Legacy timeline inspection migrates a foreground body using its full text.
   if (Object.values(chat.timeline?.operations || {}).some(operation =>
-    operation?.kind === 'body' && operation.status === 'foreground-completed')) return { ...structuredClone(chat), pendingMvuSettlement }
+    operation?.kind === 'body' && operation.status === 'foreground-completed')) return { ...copyJsonTree(chat), pendingMvuSettlement }
   const selected = { pendingMvuSettlement }
   for (const key of ['id', 'sessionId', '_storageRevision', 'mode', 'cardPath', 'cardContextRevision',
     'backgroundConfigVersion', 'conversationFeaturesVersion', 'disabledWritingSkills', 'contextCompaction', 'updatedAt', 'timeline', 'candidateAgent',

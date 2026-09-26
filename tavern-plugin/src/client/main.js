@@ -1973,18 +1973,11 @@ window.__ModuleLoader__.load({
 				}
 				if (revision < lastRevision && !acknowledged) return;
 				chatId = String(value.chatId || ""); lifecycleRevision = Number(value.lifecycleRevision || 0);
-				// Do not conceal an unsupported local splice/reorder with a host refresh.
-				if (!layoutMatches()) return;
-				const variablesOnly = variableDelta && !acknowledged && revision === variableDelta.stateRevision
+                const variablesOnly = variableDelta && !acknowledged && revision === variableDelta.stateRevision
                     && lastRevision === (variableDelta.kind === 'transaction' ? variableDelta.stateRevision : variableDelta.baseRevision)
-                    && (variableDelta.version === 2 || rows.length === (value.messages || []).length);
+                    && rows.length === (value.messages || []).length;
                 const changedRows = variableDelta?.version === 2 ? new Set((variableDelta.messages || []).map(m=>m.message_id)) : new Set([variableDelta?.messageId]);
-                const nextRows = (value.messages || []).map(function (message, index) {
-                    if (variablesOnly && rows[index] && !changedRows.has(index)) {
-                        const row = rows[index];
-                        if (same(pluginData(row.view), row.base)) row.revision = revision;
-                        return row;
-                    }
+                function mergeRow(message, index) {
 					const core = coreOf(message), remote = copy(message.pluginData || {});
 					let row = rows[index];
 					if (!row || !same(identity(row.core), identity(core))) {
@@ -1997,8 +1990,21 @@ window.__ModuleLoader__.load({
 					row.core = core;
 					if (ack || same(pluginData(row.view), remote)) { row.base = remote; row.revision = revision; }
 					return row;
-				});
-				rows = nextRows; chat.splice(0, chat.length, ...rows.map(row => row.view));
+                }
+                if (variablesOnly) {
+                    // Preserve arbitrary unsaved plugin edits, including an invalid
+                    // layout elsewhere. Full save still checks every row; a receipt
+                    // must neither scan nor silently repair untouched plugin data.
+                    if (chat.length !== rows.length || [...changedRows].some(id => !rows[id] || chat[id] !== rows[id].view)) return;
+                    for (const id of changedRows) {
+                        rows[id] = mergeRow(value.messages[id], id);
+                        chat[id] = rows[id].view;
+                    }
+                } else {
+                    if (!layoutMatches()) return;
+                    rows = (value.messages || []).map(mergeRow);
+                    chat.splice(0, chat.length, ...rows.map(row => row.view));
+                }
 				const remoteMetadata = copy(value.chatMetadata || {}), ackMetadata = acknowledged && acknowledged.metadata;
 				mergeView(metadata, ackMetadata ? ackMetadata.data : metadataBase, remoteMetadata);
 				if (ackMetadata || same(metadata, remoteMetadata)) { metadataBase = remoteMetadata; metadataRevision = revision; }
@@ -2079,7 +2085,9 @@ window.__ModuleLoader__.load({
 		}
 
 		// @include local-variables.js
-		// @include variable-receipts.js
+		// @include-domain indexed-array.js
+        // @include variable-receipts.js
+        applyTavernVariableReceipt.indexApi = createIndexedArrayApi({valid: row => Boolean(row && !row.stub), eligible: row => Boolean(row?.variables?.stat_data !== undefined && row?.variables?.schema !== undefined)});
 
 		function installTavernHelperFacade(options) {
 			const nativeWorldInfoSnapshots = new WeakMap();
@@ -2287,6 +2295,7 @@ window.__ModuleLoader__.load({
         }
 
 		function tavernHelperScriptBootstrap(metadata, initialContext, modules) {
+            modules.applyVariableReceipt.indexApi = modules.createIndexedArrayApi({valid: row => Boolean(row && !row.stub), eligible: row => Boolean(row?.variables?.stat_data !== undefined && row?.variables?.schema !== undefined)});
             const initializationTiming = modules.createInitializationTiming({ report: function (timings) { parent.postMessage({ type: "dsh-tavern-mvu-load-diagnostic", token: metadata.token, diagnostic: { phase: "initialization-timing", timings: timings } }, "*"); } });
             window.__dshTavernInitializationTiming = initializationTiming;
             window.addEventListener("pagehide", initializationTiming.dispose, { once: true });
@@ -2305,6 +2314,7 @@ window.__ModuleLoader__.load({
 				try { Object.defineProperty(window, "localStorage", { configurable: true, value: storage }); } catch (_) {}
 			}
 			let state = initialContext && typeof initialContext === "object" ? initialContext : {};
+            state = {...state, messages:modules.applyVariableReceipt.indexApi.from(state.messages || [])};
 			const token = String(metadata.token || "");
 			const officialMvuEnabled = metadata.officialMvu === true;
 			let lorebookSettings = { selected_global_lorebooks: [] };
@@ -2352,7 +2362,7 @@ window.__ModuleLoader__.load({
 						|| Number(incoming.lifecycleRevision || 0) < Number(state.lifecycleRevision || 0)
                         || (Number(incoming.lifecycleRevision || 0) === Number(state.lifecycleRevision || 0)
                             && Number(incoming.stateRevision || 0) < Number(state.stateRevision || 0)))) return;
-					if (incoming) { state = Object.assign({}, state, copy(incoming)); if (!incoming.transaction) delete state.transaction; }
+					if (incoming) { state = Object.assign({}, state, copy(incoming)); state.messages = modules.applyVariableReceipt.indexApi.from(state.messages || []); if (!incoming.transaction) delete state.transaction; }
 					if (result.worldbook) state.worldbook = copy(result.worldbook);
 					// Chat-data saves acknowledge their own submitted snapshot separately.
 					if (incoming && facade && method !== "saveTavernChatData") facade.sync(state);
@@ -3481,6 +3491,7 @@ window.__ModuleLoader__.load({
 			const bootstrap = '(' + tavernHelperScriptBootstrap.toString() + ')(' + safeMetadata + ',' + safeContext + ',{'
 				+ 'createInitializationTiming:' + createTavernInitializationTiming.toString() + ','
 				+ 'createTransport:' + createTavernHelperTransport.toString() + ','
+                + 'createIndexedArrayApi:' + createIndexedArrayApi.toString() + ','
                 + 'applyVariableReceipt:' + applyTavernVariableReceipt.toString() + ','
 				+ 'createEvents:' + createTavernHelperEventBus.toString() + ','
 				+ 'createPopup:' + createTavernHelperPopup.toString() + ','
@@ -3665,6 +3676,7 @@ window.__ModuleLoader__.load({
 					if (!message.name) message.name = message.is_user ? context.playerName : context.characterName;
 					message.mes = String(message.message || "");
 				}
+                context.messages = applyTavernVariableReceipt.indexApi.from(context.messages || []);
 				return context;
 			}
 			function helperContext(view, scripts) {
@@ -3682,7 +3694,10 @@ window.__ModuleLoader__.load({
 			}
 			function post(record, message) {
 				if (records.get(record.id) !== record || !record.loaded || !record.frame.contentWindow) return;
-				record.frame.contentWindow.postMessage(Object.assign({ token: record.token }, message), "*");
+				if (message.context && applyTavernVariableReceipt.indexApi.info(message.context.messages)) {
+                    message = {...message, context:{...message.context, messages:Array.from(message.context.messages)}};
+                }
+                record.frame.contentWindow.postMessage(Object.assign({ token: record.token }, message), "*");
 			}
 			function snapshot(context) {
 				const messages = Array.isArray(context && context.messages) ? context.messages : [];
@@ -3762,12 +3777,11 @@ window.__ModuleLoader__.load({
 				const core = record && record.scripts.get("__dsh_official_mvu__");
 				return core && core.initializationFailed ? "MVU 模块加载失败：" + (core.initializationError || "初始化未完成") + "\n请刷新页面或重启酒馆后重试。" : record && record.mvuDataError || "";
 			}
-			function mvuDataReady(record) {
-				return (Array.isArray(record.context && record.context.messages) ? record.context.messages : []).some(function (message) {
-					const value = message && message.variables;
-					return value && typeof value === "object" && !Array.isArray(value) && value.stat_data !== undefined && value.schema !== undefined;
-				});
-			}
+            function mvuDataReady(record) {
+                const info = applyTavernVariableReceipt.indexApi.info(record.context?.messages);
+                return info ? info.eligible > 0 : (record.context?.messages || []).some(message =>
+                    message?.variables?.stat_data !== undefined && message?.variables?.schema !== undefined);
+            }
 			function syncMvuDataReadiness(record) {
 				const core = record.scripts.get("__dsh_official_mvu__");
 				if (!core || core.initializationFailed || !record.subscriptionsReady) return;
@@ -4272,7 +4286,7 @@ window.__ModuleLoader__.load({
 					const baseline=record && record.context;
                     const contextBaseline=baseline ? {workContextVersion:1,chatId:baseline.chatId,stateRevision:baseline.stateRevision,
                         lifecycleRevision:Number(baseline.lifecycleRevision)||0,messageCount:(baseline.messages||[]).length,
-                        transaction:baseline.transaction,complete:!baseline.messagesPending && (baseline.messages||[]).every(m=>m && !m.stub)} : {workContextVersion:1,full:true};
+                        transaction:baseline.transaction,complete:!baseline.messagesPending && (applyTavernVariableReceipt.indexApi.info(baseline.messages)?.complete ?? false)} : {workContextVersion:1,full:true};
                     return { contextBaseline:contextBaseline, sessionId: activeSessionId, frameCount: record ? 1 : 0, scriptIds: scripts.map(function (script) { return script.id; }), scripts: scripts, ...(record && record.scripts.has("__dsh_official_mvu__") ? { mvuDataReady: mvuDataReady(record) } : {}), ...(record && record.mvuLoadState ? { mvuLoadState: record.mvuLoadState } : {}), ...(initializationError ? { initializationError: initializationError } : {}) };
 				}
 			});

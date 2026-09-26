@@ -3590,18 +3590,11 @@ window.__ModuleLoader__.load({
 				}
 				if (revision < lastRevision && !acknowledged) return;
 				chatId = String(value.chatId || ""); lifecycleRevision = Number(value.lifecycleRevision || 0);
-				// Do not conceal an unsupported local splice/reorder with a host refresh.
-				if (!layoutMatches()) return;
-				const variablesOnly = variableDelta && !acknowledged && revision === variableDelta.stateRevision
+                const variablesOnly = variableDelta && !acknowledged && revision === variableDelta.stateRevision
                     && lastRevision === (variableDelta.kind === 'transaction' ? variableDelta.stateRevision : variableDelta.baseRevision)
-                    && (variableDelta.version === 2 || rows.length === (value.messages || []).length);
+                    && rows.length === (value.messages || []).length;
                 const changedRows = variableDelta?.version === 2 ? new Set((variableDelta.messages || []).map(m=>m.message_id)) : new Set([variableDelta?.messageId]);
-                const nextRows = (value.messages || []).map(function (message, index) {
-                    if (variablesOnly && rows[index] && !changedRows.has(index)) {
-                        const row = rows[index];
-                        if (same(pluginData(row.view), row.base)) row.revision = revision;
-                        return row;
-                    }
+                function mergeRow(message, index) {
 					const core = coreOf(message), remote = copy(message.pluginData || {});
 					let row = rows[index];
 					if (!row || !same(identity(row.core), identity(core))) {
@@ -3614,8 +3607,21 @@ window.__ModuleLoader__.load({
 					row.core = core;
 					if (ack || same(pluginData(row.view), remote)) { row.base = remote; row.revision = revision; }
 					return row;
-				});
-				rows = nextRows; chat.splice(0, chat.length, ...rows.map(row => row.view));
+                }
+                if (variablesOnly) {
+                    // Preserve arbitrary unsaved plugin edits, including an invalid
+                    // layout elsewhere. Full save still checks every row; a receipt
+                    // must neither scan nor silently repair untouched plugin data.
+                    if (chat.length !== rows.length || [...changedRows].some(id => !rows[id] || chat[id] !== rows[id].view)) return;
+                    for (const id of changedRows) {
+                        rows[id] = mergeRow(value.messages[id], id);
+                        chat[id] = rows[id].view;
+                    }
+                } else {
+                    if (!layoutMatches()) return;
+                    rows = (value.messages || []).map(mergeRow);
+                    chat.splice(0, chat.length, ...rows.map(row => row.view));
+                }
 				const remoteMetadata = copy(value.chatMetadata || {}), ackMetadata = acknowledged && acknowledged.metadata;
 				mergeView(metadata, ackMetadata ? ackMetadata.data : metadataBase, remoteMetadata);
 				if (ackMetadata || same(metadata, remoteMetadata)) { metadataBase = remoteMetadata; metadataRevision = revision; }
@@ -3770,60 +3776,174 @@ window.__ModuleLoader__.load({
 		    }
 		  };
 		}
-		// null requests a read-only snapshot; an obsolete receipt cannot roll state back.
-		// Untouched history remains shared. This function also runs inside script iframes.
-		function applyTavernVariableReceipt(previous, delta) {
-		    if (previous && delta && delta.version === 2) {
-		        if (delta.chatId !== previous.chatId || delta.lifecycleRevision < Number(previous.lifecycleRevision || 0)) return previous;
-		        if (delta.lifecycleRevision !== Number(previous.lifecycleRevision || 0)) return null;
-		        if (delta.kind === 'transaction') {
-		            if (previous.transaction?.eventId !== delta.eventId) return previous;
-		            if (delta.sequence <= previous.transaction.sequence) return previous;
-		            if (delta.baseSequence !== previous.transaction.sequence || delta.sequence !== delta.baseSequence + 1) return null;
-		        } else if (delta.kind === 'dispatch') {
-		            if (previous.transaction || delta.baseRevision !== previous.stateRevision || previous.messagesPending) return null;
-		        } else return null;
-		        const context = Object.assign({}, previous, delta.header || {}, {
-		            stateRevision: delta.stateRevision,
-		            transaction: { eventId: delta.eventId, sequence: delta.kind === 'dispatch' ? 0 : delta.sequence }
-		        });
-		        const messages = (previous.messages || []).slice();
-		        if (delta.kind === 'dispatch') messages.length = delta.messageCount;
-		        for (const source of delta.messages || []) {
-		            const index = source.message_id;
-		            if (!Number.isInteger(index) || index < 0 || index >= messages.length) return null;
-		            const message = JSON.parse(JSON.stringify(source));
-		            // Dispatch used to decorate every floor. A compact floor must keep
-		            // these aliases too: official MVU compares name with SillyTavern.name2.
-		            message.mes = message.message;
-		            message.is_user = message.role === 'user'; message.is_system = message.role === 'system';
-		            if (!message.name) message.name = message.is_user ? (context.playerName || '你') : (context.characterName || context.character?.name || '角色');
-		            messages[index] = message;
-		        }
-		        for (let i = 0; i < messages.length; i++) if (!messages[i] || messages[i].stub) return null;
-		        context.messages = messages;
-		        for (const key of ['chatVariables', 'scriptVariables', 'scriptPrompts']) if (Object.hasOwn(delta, key)) context[key] = JSON.parse(JSON.stringify(delta[key]));
-		        return context;
+		// Shared by the host and generated iframe. Fixed seven-level radix index over
+		// JavaScript's 32-bit array indices: no linked overlays and no history-sized copy.
+		function createIndexedArrayApi(options = {}) {
+		    const states = new WeakMap();
+		    const valid = options.valid || (value => value !== undefined);
+		    const eligible = options.eligible || valid;
+		    const measure = options.measure || (() => 0);
+		    const visit = options.visit || (() => {});
+		    const width = depth => 2 ** (depth * 5);
+		    function aggregate(slots) {
+		        let count = 0, validCount = 0, eligible = 0, bytes = 320;
+		        for (const child of slots) if (child) { count += child.count; validCount += child.validCount; eligible += child.eligible; bytes += child.bytes; }
+		        return { slots, count, validCount, eligible, bytes };
 		    }
-		    if (!previous || !delta || delta.version !== 1) return null;
-		    if (delta.chatId !== previous.chatId || delta.lifecycleRevision < Number(previous.lifecycleRevision || 0)) return previous;
-		    if (delta.lifecycleRevision !== Number(previous.lifecycleRevision || 0)) return null;
-		    if (delta.stateRevision <= Number(previous.stateRevision || 0)) return previous;
-		    if (delta.baseRevision !== previous.stateRevision) return null;
-		    function copy(value) { return JSON.parse(JSON.stringify(value)); }
-		    const context = Object.assign({}, previous, { stateRevision: delta.stateRevision });
-		    if (delta.message) {
-		        if (!Number.isInteger(delta.messageId) || !previous.messages || !previous.messages[delta.messageId]) return null;
-		        context.messages = previous.messages.slice();
-		        const message = Object.assign({}, previous.messages[delta.messageId], copy(delta.message));
-		        // Retain the parent runtime's compatibility aliases without copying history.
-		        if (Object.prototype.hasOwnProperty.call(message, 'mes')) message.mes = message.message;
-		        context.messages[delta.messageId] = message;
-		    } else if (delta.chatVariables) context.chatVariables = copy(delta.chatVariables);
-		    else if (delta.scriptVariables) context.scriptVariables = copy(delta.scriptVariables);
-		    else return null;
-		    return context;
+		    function put(node, depth, id, leaf, mutable) {
+		        visit();
+		        const slots = node ? (mutable ? node.slots : node.slots.slice()) : [];
+		        const digit = Math.floor(id / width(depth)) % 32;
+		        slots[digit] = depth === 0 ? leaf : put(slots[digit], depth - 1, id, leaf, mutable);
+		        return aggregate(slots);
+		    }
+		    function lookup(node, id) {
+		        for (let depth = 6; depth >= 0; depth--) {
+		            visit();
+		            node = node?.slots[Math.floor(id / width(depth)) % 32];
+		        }
+		        return node;
+		    }
+		    function trim(node, depth, limit) {
+		        if (!node || limit <= 0) return undefined;
+		        const span = width(depth);
+		        if (limit >= span * 32) return node;
+		        const slots = node.slots.slice(0, Math.ceil(limit / span));
+		        if (depth > 0 && limit % span) slots[slots.length - 1] = trim(slots[slots.length - 1], depth - 1, limit % span);
+		        return aggregate(slots);
+		    }
+		    function checkLength(length) {
+		        if (!Number.isInteger(length) || length < 0 || length > 0xffffffff) throw new Error('Invalid indexed array length');
+		    }
+		    function view(root, length) {
+		        function index(key) { return typeof key === 'string' && /^(0|[1-9]\d*)$/.test(key) && Number(key) < length; }
+		        const array = new Proxy([], {
+		            get(target, key, receiver) {
+		                if (key === 'length') return length;
+		                return index(key) ? lookup(root, Number(key))?.value : Reflect.get(target, key, receiver);
+		            },
+		            has(target, key) { return index(key) ? Boolean(lookup(root, Number(key))) : Reflect.has(target, key); },
+		            ownKeys() {
+		                const keys = [];
+		                for (let id = 0; id < length; id++) if (lookup(root, id)) keys.push(String(id));
+		                return [...keys, 'length'];
+		            },
+		            getOwnPropertyDescriptor(target, key) {
+		                if (index(key)) {
+		                    const leaf = lookup(root, Number(key));
+		                    return leaf ? { value: leaf.value, enumerable: true, writable: false, configurable: true } : undefined;
+		                }
+		                const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+		                return key === 'length' ? { ...descriptor, value: length } : descriptor;
+		            },
+		            set() { throw new Error('Indexed array is immutable'); },
+		            defineProperty() { throw new Error('Indexed array is immutable'); },
+		            deleteProperty() { throw new Error('Indexed array is immutable'); }
+		        });
+		        states.set(array, { root, length });
+		        return array;
+		    }
+		    function leaf(value) { return { value, count: 1, validCount: valid(value) ? 1 : 0, eligible: eligible(value) ? 1 : 0, bytes: 48 + measure(value) }; }
+		    function from(source) {
+		        if (states.has(source)) return source;
+		        checkLength(source.length);
+		        let root;
+		        for (let id = 0; id < source.length; id++) if (id in source) root = put(root, 6, id, leaf(source[id]), true);
+		        return view(root, source.length);
+		    }
+		    function update(source, entries, length = source.length) {
+		        checkLength(length);
+		        const state = states.get(source) || states.get(from(source));
+		        let root = length < state.length ? trim(state.root, 6, length) : state.root;
+		        for (const [id, value] of entries) {
+		            if (!Number.isInteger(id) || id < 0 || id >= length) throw new Error('Invalid indexed array position');
+		            root = put(root, 6, id, leaf(value), false);
+		        }
+		        return view(root, length);
+		    }
+		    function previous(source, exclusive) {
+		        const state = states.get(source);
+		        if (!state) throw new Error('Unindexed array');
+		        function search(node, depth, prefix, end) {
+		            visit();
+		            if (!node?.eligible) return -1;
+		            const span = width(depth), top = Math.min(31, Math.floor((end - prefix) / span));
+		            for (let digit = top; digit >= 0; digit--) {
+		                const child = node.slots[digit];
+		                if (!child?.eligible) continue;
+		                const start = prefix + digit * span;
+		                if (depth === 0) return start;
+		                const result = search(child, depth - 1, start, Math.min(end, start + span - 1));
+		                if (result >= 0) return result;
+		            }
+		            return -1;
+		        }
+		        return search(state.root, 6, 0, Math.min(exclusive, state.length) - 1);
+		    }
+		    function info(source) {
+		        const state = states.get(source);
+		        return state && { length: state.length, complete: (state.root?.validCount || 0) === state.length, eligible: state.root?.eligible || 0,
+		            count: state.root?.count || 0, bytes: state.root?.bytes || 0 };
+		    }
+		    return { from, update, previous, info };
 		}
+        // null requests a read-only snapshot; an obsolete receipt cannot roll state back.
+        // Untouched history remains shared. This function also runs inside script iframes.
+        function applyTavernVariableReceipt(previous, delta) {
+            if (previous && delta && delta.version === 2) {
+                if (delta.chatId !== previous.chatId || delta.lifecycleRevision < Number(previous.lifecycleRevision || 0)) return previous;
+                if (delta.lifecycleRevision !== Number(previous.lifecycleRevision || 0)) return null;
+                if (delta.kind === 'transaction') {
+                    if (previous.transaction?.eventId !== delta.eventId) return previous;
+                    if (delta.sequence <= previous.transaction.sequence) return previous;
+                    if (delta.baseSequence !== previous.transaction.sequence || delta.sequence !== delta.baseSequence + 1) return null;
+                } else if (delta.kind === 'dispatch') {
+                    if (previous.transaction || delta.baseRevision !== previous.stateRevision || previous.messagesPending) return null;
+                } else return null;
+                const context = Object.assign({}, previous, delta.header || {}, {
+                    stateRevision: delta.stateRevision,
+                    transaction: { eventId: delta.eventId, sequence: delta.kind === 'dispatch' ? 0 : delta.sequence }
+                });
+                const api = applyTavernVariableReceipt.indexApi;
+                const length = delta.kind === 'dispatch' ? delta.messageCount : (previous.messages || []).length;
+                if (!Number.isInteger(length) || length < 0 || length > 0xffffffff) return null;
+                const entries = [];
+                for (const source of delta.messages || []) {
+                    const index = source.message_id;
+                    if (!Number.isInteger(index) || index < 0 || index >= length) return null;
+                    const message = JSON.parse(JSON.stringify(source));
+                    // Dispatch used to decorate every floor. A compact floor must keep
+                    // these aliases too: official MVU compares name with SillyTavern.name2.
+                    message.mes = message.message;
+                    message.is_user = message.role === 'user'; message.is_system = message.role === 'system';
+                    if (!message.name) message.name = message.is_user ? (context.playerName || '你') : (context.characterName || context.character?.name || '角色');
+                    entries.push([index, message]);
+                }
+                context.messages = api.update(previous.messages || [], entries, length);
+                if (!api.info(context.messages).complete) return null;
+                for (const key of ['chatVariables', 'scriptVariables', 'scriptPrompts']) if (Object.hasOwn(delta, key)) context[key] = JSON.parse(JSON.stringify(delta[key]));
+                return context;
+            }
+            if (!previous || !delta || delta.version !== 1) return null;
+            if (delta.chatId !== previous.chatId || delta.lifecycleRevision < Number(previous.lifecycleRevision || 0)) return previous;
+            if (delta.lifecycleRevision !== Number(previous.lifecycleRevision || 0)) return null;
+            if (delta.stateRevision <= Number(previous.stateRevision || 0)) return previous;
+            if (delta.baseRevision !== previous.stateRevision) return null;
+            function copy(value) { return JSON.parse(JSON.stringify(value)); }
+            const context = Object.assign({}, previous, { stateRevision: delta.stateRevision });
+            if (delta.message) {
+                if (!Number.isInteger(delta.messageId) || !previous.messages || !previous.messages[delta.messageId]) return null;
+
+                const message = Object.assign({}, previous.messages[delta.messageId], copy(delta.message));
+                // Retain the parent runtime's compatibility aliases without copying history.
+                if (Object.prototype.hasOwnProperty.call(message, 'mes')) message.mes = message.message;
+                context.messages = applyTavernVariableReceipt.indexApi.update(previous.messages, [[delta.messageId, message]]);
+            } else if (delta.chatVariables) context.chatVariables = copy(delta.chatVariables);
+            else if (delta.scriptVariables) context.scriptVariables = copy(delta.scriptVariables);
+            else return null;
+            return context;
+        }
+        applyTavernVariableReceipt.indexApi = createIndexedArrayApi({valid: row => Boolean(row && !row.stub), eligible: row => Boolean(row?.variables?.stat_data !== undefined && row?.variables?.schema !== undefined)});
 
 		function installTavernHelperFacade(options) {
 			const nativeWorldInfoSnapshots = new WeakMap();
@@ -4031,6 +4151,7 @@ window.__ModuleLoader__.load({
         }
 
 		function tavernHelperScriptBootstrap(metadata, initialContext, modules) {
+            modules.applyVariableReceipt.indexApi = modules.createIndexedArrayApi({valid: row => Boolean(row && !row.stub), eligible: row => Boolean(row?.variables?.stat_data !== undefined && row?.variables?.schema !== undefined)});
             const initializationTiming = modules.createInitializationTiming({ report: function (timings) { parent.postMessage({ type: "dsh-tavern-mvu-load-diagnostic", token: metadata.token, diagnostic: { phase: "initialization-timing", timings: timings } }, "*"); } });
             window.__dshTavernInitializationTiming = initializationTiming;
             window.addEventListener("pagehide", initializationTiming.dispose, { once: true });
@@ -4049,6 +4170,7 @@ window.__ModuleLoader__.load({
 				try { Object.defineProperty(window, "localStorage", { configurable: true, value: storage }); } catch (_) {}
 			}
 			let state = initialContext && typeof initialContext === "object" ? initialContext : {};
+            state = {...state, messages:modules.applyVariableReceipt.indexApi.from(state.messages || [])};
 			const token = String(metadata.token || "");
 			const officialMvuEnabled = metadata.officialMvu === true;
 			let lorebookSettings = { selected_global_lorebooks: [] };
@@ -4096,7 +4218,7 @@ window.__ModuleLoader__.load({
 						|| Number(incoming.lifecycleRevision || 0) < Number(state.lifecycleRevision || 0)
                         || (Number(incoming.lifecycleRevision || 0) === Number(state.lifecycleRevision || 0)
                             && Number(incoming.stateRevision || 0) < Number(state.stateRevision || 0)))) return;
-					if (incoming) { state = Object.assign({}, state, copy(incoming)); if (!incoming.transaction) delete state.transaction; }
+					if (incoming) { state = Object.assign({}, state, copy(incoming)); state.messages = modules.applyVariableReceipt.indexApi.from(state.messages || []); if (!incoming.transaction) delete state.transaction; }
 					if (result.worldbook) state.worldbook = copy(result.worldbook);
 					// Chat-data saves acknowledge their own submitted snapshot separately.
 					if (incoming && facade && method !== "saveTavernChatData") facade.sync(state);
@@ -5225,6 +5347,7 @@ window.__ModuleLoader__.load({
 			const bootstrap = '(' + tavernHelperScriptBootstrap.toString() + ')(' + safeMetadata + ',' + safeContext + ',{'
 				+ 'createInitializationTiming:' + createTavernInitializationTiming.toString() + ','
 				+ 'createTransport:' + createTavernHelperTransport.toString() + ','
+                + 'createIndexedArrayApi:' + createIndexedArrayApi.toString() + ','
                 + 'applyVariableReceipt:' + applyTavernVariableReceipt.toString() + ','
 				+ 'createEvents:' + createTavernHelperEventBus.toString() + ','
 				+ 'createPopup:' + createTavernHelperPopup.toString() + ','
@@ -5409,6 +5532,7 @@ window.__ModuleLoader__.load({
 					if (!message.name) message.name = message.is_user ? context.playerName : context.characterName;
 					message.mes = String(message.message || "");
 				}
+                context.messages = applyTavernVariableReceipt.indexApi.from(context.messages || []);
 				return context;
 			}
 			function helperContext(view, scripts) {
@@ -5426,7 +5550,10 @@ window.__ModuleLoader__.load({
 			}
 			function post(record, message) {
 				if (records.get(record.id) !== record || !record.loaded || !record.frame.contentWindow) return;
-				record.frame.contentWindow.postMessage(Object.assign({ token: record.token }, message), "*");
+				if (message.context && applyTavernVariableReceipt.indexApi.info(message.context.messages)) {
+                    message = {...message, context:{...message.context, messages:Array.from(message.context.messages)}};
+                }
+                record.frame.contentWindow.postMessage(Object.assign({ token: record.token }, message), "*");
 			}
 			function snapshot(context) {
 				const messages = Array.isArray(context && context.messages) ? context.messages : [];
@@ -5506,12 +5633,11 @@ window.__ModuleLoader__.load({
 				const core = record && record.scripts.get("__dsh_official_mvu__");
 				return core && core.initializationFailed ? "MVU 模块加载失败：" + (core.initializationError || "初始化未完成") + "\n请刷新页面或重启酒馆后重试。" : record && record.mvuDataError || "";
 			}
-			function mvuDataReady(record) {
-				return (Array.isArray(record.context && record.context.messages) ? record.context.messages : []).some(function (message) {
-					const value = message && message.variables;
-					return value && typeof value === "object" && !Array.isArray(value) && value.stat_data !== undefined && value.schema !== undefined;
-				});
-			}
+            function mvuDataReady(record) {
+                const info = applyTavernVariableReceipt.indexApi.info(record.context?.messages);
+                return info ? info.eligible > 0 : (record.context?.messages || []).some(message =>
+                    message?.variables?.stat_data !== undefined && message?.variables?.schema !== undefined);
+            }
 			function syncMvuDataReadiness(record) {
 				const core = record.scripts.get("__dsh_official_mvu__");
 				if (!core || core.initializationFailed || !record.subscriptionsReady) return;
@@ -6016,7 +6142,7 @@ window.__ModuleLoader__.load({
 					const baseline=record && record.context;
                     const contextBaseline=baseline ? {workContextVersion:1,chatId:baseline.chatId,stateRevision:baseline.stateRevision,
                         lifecycleRevision:Number(baseline.lifecycleRevision)||0,messageCount:(baseline.messages||[]).length,
-                        transaction:baseline.transaction,complete:!baseline.messagesPending && (baseline.messages||[]).every(m=>m && !m.stub)} : {workContextVersion:1,full:true};
+                        transaction:baseline.transaction,complete:!baseline.messagesPending && (applyTavernVariableReceipt.indexApi.info(baseline.messages)?.complete ?? false)} : {workContextVersion:1,full:true};
                     return { contextBaseline:contextBaseline, sessionId: activeSessionId, frameCount: record ? 1 : 0, scriptIds: scripts.map(function (script) { return script.id; }), scripts: scripts, ...(record && record.scripts.has("__dsh_official_mvu__") ? { mvuDataReady: mvuDataReady(record) } : {}), ...(record && record.mvuLoadState ? { mvuLoadState: record.mvuLoadState } : {}), ...(initializationError ? { initializationError: initializationError } : {}) };
 				}
 			});
