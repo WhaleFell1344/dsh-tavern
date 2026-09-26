@@ -128,3 +128,27 @@ for(const count of [20,400,10000])test(`assistant field subscriptions exclude in
  assert.match(assistant,/useScopedLiveTavernView\(props.sessionId, revision, tavernAssistantViewPaths\(\)\)/)
  assert.match(assistant,/React.createElement\(TavernInlineStatusRuntime,/)
 })
+
+for(const count of [20,400,10000])test(`keyed receipt delta wakes only its turn among ${count} subscribers`,async()=>{
+ const h=harness(),begin=h.createSessionViewReader(),jobs=[]
+ let cursor='base',seq=0,receiptDelta,sets=[]
+ const first=begin('s').accept({viewCursor:cursor,receiptSync:1,view:{mvuReceipts:Array.from({length:count},(_,turn)=>({turn,receipt:{status:'unchanged'}}))}}).view
+ const live=h.createLiveTavernViewModule({deduplicateViews:true,pollWhileBusy:false,schedule:run=>{jobs.push(run);return jobs.length},cancel(){},load:async()=>{
+  const next=String(++seq),result=begin('s').accept({viewCursor:next,viewDelta:{baseCursor:cursor,set:sets,remove:[],receiptDelta}});cursor=next;return result
+ }})
+ live.setView('s',first)
+ const notices=Array(count).fill(0)
+ for(let turn=0;turn<count;turn++)live.subscribe('s',()=>notices[turn]++,[['$mvuReceiptTurn',String(turn)]])
+ let whole=0;live.subscribe('s',()=>whole++,[['mvuReceipts']]);notices.fill(0);whole=0
+ async function run(delta){receiptDelta=delta;if(!jobs.length)live.invalidate('s');jobs.shift()();await new Promise(resolve=>setImmediate(resolve))}
+ await run({set:[{turn:3,receipt:{status:'updated'}}],remove:[]})
+ assert.equal(notices.reduce((a,b)=>a+b),1);assert.equal(notices[3],1);assert.equal(whole,1)
+ await run({set:[],remove:[3]})
+ assert.equal(notices.reduce((a,b)=>a+b),2);assert.equal(notices[3],2)
+ assert.equal(h.createSessionViewReader.receiptOrderedIndex.get(live.getSnapshot('s').view.mvuReceipts,3),undefined)
+ // Whole-array replacement cannot assume unchanged turn identities.
+ sets=[[['mvuReceipts'],[]]];await run(undefined)
+ assert.equal(notices.reduce((a,b)=>a+b),count+2)
+ live.setView('s',{mvuReceipts:[{turn:3,receipt:{status:'error'}}]})
+ assert.equal(notices.reduce((a,b)=>a+b),2*count+2)
+})

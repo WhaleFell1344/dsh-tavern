@@ -66,7 +66,14 @@ function createLiveTavernViewModule(options) {
 			&& record.state.phase === state.phase && record.state.error === state.error) {
 			const delta = result.viewDelta;
 			const paths = delta.set.map(entry => entry[0]).concat(delta.remove);
-			if (delta.receiptDelta && (delta.receiptDelta.set.length || delta.receiptDelta.remove.length)) paths.push(["mvuReceipts"]);
+			// Virtual turn dependencies are separate from positional array paths.
+			// Legacy/whole-array edits cannot prove turn locality and invalidate all.
+			if (paths.some(path => path[0] === "mvuReceipts")) paths.push(["$mvuReceiptTurn"]);
+			if (delta.receiptDelta && (delta.receiptDelta.set.length || delta.receiptDelta.remove.length)) {
+				paths.push(["mvuReceipts"]);
+				for (const row of delta.receiptDelta.set) paths.push(["$mvuReceiptTurn", String(row.turn)]);
+				for (const turn of delta.receiptDelta.remove) paths.push(["$mvuReceiptTurn", String(turn)]);
+			}
 			listeners = affected(record.paths, paths);
 		} else if (options.deduplicateViews === true && record.state.view && state.view
 			&& record.state.phase === state.phase && record.state.error === state.error) {
@@ -78,6 +85,7 @@ function createLiveTavernViewModule(options) {
 			const paths = [];
 			for (const key of keys) if (Object.prototype.hasOwnProperty.call(before, key) !== Object.prototype.hasOwnProperty.call(after, key)
 				|| !Object.is(before[key], after[key])) paths.push([key]);
+			if (paths.some(path => path[0] === "mvuReceipts")) paths.push(["$mvuReceiptTurn"]);
 			listeners = affected(record.paths, paths);
 		}
 		record.state = state;
