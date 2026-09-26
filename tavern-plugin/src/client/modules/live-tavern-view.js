@@ -21,6 +21,10 @@ function createLiveTavernViewModule(options) {
 	}
 	function publish(record, state) {
 		if (records.get(record.id) !== record) return;
+		// A confirmed no-op should not wake every mounted history component.
+		// In this opt-in mode updatedAt records the last published state change.
+		if (options.deduplicateViews === true && record.state.phase === state.phase
+			&& record.state.view === state.view && record.state.error === state.error) return;
 		record.state = state;
 		record.listeners.forEach(function (listener) { listener(state); });
 	}

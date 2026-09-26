@@ -707,90 +707,96 @@ window.__ModuleLoader__.load({
 		        let view = result.view;
 		        if (result.viewDelta) {
 		          if (!base || result.viewDelta.baseCursor !== base.cursor) throw new Error("会话增量已过期，请重新读取");
-		          view = Object.assign({}, base.view);
-		          const copied = new Set();
-		          const messagePath = path => path[0] === "tavernHelper" && path[1] === "messages" && path.length === 3;
-		          const messageEdits = result.viewDelta.set.filter(([path]) => messagePath(path));
-		          const messageRemovals = result.viewDelta.remove.filter(messagePath);
-		          const incrementalMessages = Array.isArray(base.view?.tavernHelper?.messages)
-		            && !result.viewDelta.set.some(([path]) => path[0] === "tavernHelper" && path.length < 3)
-		            && !result.viewDelta.remove.some(path => path[0] === "tavernHelper" && path.length < 3)
-		            && messageRemovals.every(path => typeof path[2] === "number")
-		            && messageEdits.every(([path]) => path[2] === "length" || Number.isSafeInteger(path[2]));
+		          const delta = result.viewDelta;
+		          const unchanged = delta.set.length===0 && delta.remove.length===0
+		            && (!delta.receiptDelta || delta.receiptDelta.set.length===0 && delta.receiptDelta.remove.length===0);
+		          if (unchanged) view = base.view;
+		          else {
+		            view = Object.assign({}, base.view);
+		            const copied = new Set();
+		            const messagePath = path => path[0] === "tavernHelper" && path[1] === "messages" && path.length === 3;
+		            const messageEdits = result.viewDelta.set.filter(([path]) => messagePath(path));
+		            const messageRemovals = result.viewDelta.remove.filter(messagePath);
+		            const incrementalMessages = Array.isArray(base.view?.tavernHelper?.messages)
+		              && !result.viewDelta.set.some(([path]) => path[0] === "tavernHelper" && path.length < 3)
+		              && !result.viewDelta.remove.some(path => path[0] === "tavernHelper" && path.length < 3)
+		              && messageRemovals.every(path => typeof path[2] === "number")
+		              && messageEdits.every(([path]) => path[2] === "length" || Number.isSafeInteger(path[2]));
 
-		          const receiptPath = path => path[0] === "mvuReceipts" && path.length === 2;
-		          const receiptEdits = result.viewDelta.set.filter(([path]) => receiptPath(path));
-		          const receiptRemovals = result.viewDelta.remove.filter(receiptPath);
-		          const incrementalReceipts = !result.viewDelta.receiptDelta && !ordered?.info(base.view?.mvuReceipts) && Array.isArray(base.view?.mvuReceipts)
-		            && !result.viewDelta.set.some(([path]) => path[0] === "mvuReceipts" && path.length < 2)
-		            && !result.viewDelta.remove.some(path => path[0] === "mvuReceipts" && path.length < 2)
-		            && receiptRemovals.every(path => Number.isSafeInteger(path[1]))
-		            && receiptEdits.every(([path]) => path[1] === "length" || Number.isSafeInteger(path[1]));
+		            const receiptPath = path => path[0] === "mvuReceipts" && path.length === 2;
+		            const receiptEdits = result.viewDelta.set.filter(([path]) => receiptPath(path));
+		            const receiptRemovals = result.viewDelta.remove.filter(receiptPath);
+		            const incrementalReceipts = !result.viewDelta.receiptDelta && !ordered?.info(base.view?.mvuReceipts) && Array.isArray(base.view?.mvuReceipts)
+		              && !result.viewDelta.set.some(([path]) => path[0] === "mvuReceipts" && path.length < 2)
+		              && !result.viewDelta.remove.some(path => path[0] === "mvuReceipts" && path.length < 2)
+		              && receiptRemovals.every(path => Number.isSafeInteger(path[1]))
+		              && receiptEdits.every(([path]) => path[1] === "length" || Number.isSafeInteger(path[1]));
 
-		          const projectionPath = path => path[0] === "replyProjections" && path.length === 2;
-		          const projectionEdits = result.viewDelta.set.filter(([path]) => projectionPath(path));
-		          const projectionRemovals = result.viewDelta.remove.filter(projectionPath);
-		          const incrementalProjections = Array.isArray(base.view?.replyProjections)
-		            && !result.viewDelta.set.some(([path]) => path[0] === "replyProjections" && path.length < 2)
-		            && !result.viewDelta.remove.some(path => path[0] === "replyProjections" && path.length < 2)
-		            && projectionRemovals.every(path => Number.isSafeInteger(path[1]))
-		            && projectionEdits.every(([path]) => path[1] === "length" || Number.isSafeInteger(path[1]));
+		            const projectionPath = path => path[0] === "replyProjections" && path.length === 2;
+		            const projectionEdits = result.viewDelta.set.filter(([path]) => projectionPath(path));
+		            const projectionRemovals = result.viewDelta.remove.filter(projectionPath);
+		            const incrementalProjections = Array.isArray(base.view?.replyProjections)
+		              && !result.viewDelta.set.some(([path]) => path[0] === "replyProjections" && path.length < 2)
+		              && !result.viewDelta.remove.some(path => path[0] === "replyProjections" && path.length < 2)
+		              && projectionRemovals.every(path => Number.isSafeInteger(path[1]))
+		              && projectionEdits.every(([path]) => path[1] === "length" || Number.isSafeInteger(path[1]));
 
-		          function parent(path) {
-		            let target = view;
-		            for (let i = 0; i < path.length - 1; i++) {
-		              const key = path[i];
-		              const id = JSON.stringify(path.slice(0, i + 1));
-		              if (!copied.has(id)) {
-		                const old = target[key];
-		                target[key] = Array.isArray(old) ? old.slice() : (path[i + 1] === "length" || typeof path[i + 1] === "number" ? [] : Object.assign({}, old));
-		                copied.add(id);
+		            function parent(path) {
+		              let target = view;
+		              for (let i = 0; i < path.length - 1; i++) {
+		                const key = path[i];
+		                const id = JSON.stringify(path.slice(0, i + 1));
+		                if (!copied.has(id)) {
+		                  const old = target[key];
+		                  target[key] = Array.isArray(old) ? old.slice() : (path[i + 1] === "length" || typeof path[i + 1] === "number" ? [] : Object.assign({}, old));
+		                  copied.add(id);
+		                }
+		                target = target[key];
 		              }
-		              target = target[key];
+		              return target;
 		            }
-		            return target;
-		          }
-		          // Remove old descendants before replacing a parent with null or a new object.
-		          for (const path of result.viewDelta.remove.slice().sort((a, b) => b.length - a.length)) {
-		            if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path) || incrementalProjections && projectionPath(path)) continue;
-		            const target = parent(path), key = path[path.length - 1];
-		            if (!(Array.isArray(target) && key === "length")) delete target[key];
-		          }
-		          for (const [path, value] of result.viewDelta.set) {
-		            if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path) || incrementalProjections && projectionPath(path)) continue;
-		            parent(path)[path[path.length - 1]] = value;
-		          }
-		          if (result.viewDelta.receiptDelta) {
-		            if (!ordered?.info(base.view?.mvuReceipts)) throw new Error("回执增量缺少基线，请重新读取");
-		            const delta = result.viewDelta.receiptDelta;
-		            view.mvuReceipts = ordered.update(base.view.mvuReceipts,[...delta.remove.map(turn=>[turn,undefined]),...delta.set.map(row=>[row.turn,row])]);
-		          }
-		          if (incrementalReceipts) {
-		            const old = base.view.mvuReceipts;
-		            const length = receiptEdits.find(([path]) => path[1] === "length")?.[1] ?? old.length;
-		            const entries = receiptEdits.filter(([path]) => path[1] !== "length").map(([path,value]) => [path[1],value]);
-		            if (receiptRemovals.some(path => path[1] < length)) throw new Error("Invalid sparse receipt delta");
-		            view.mvuReceipts = index.update(old,entries,length);
-		            receiptLookup.remember(view.mvuReceipts,old,entries);
-		          }
-		          if (incrementalProjections) {
-		            const old = base.view.replyProjections;
-		            const length = projectionEdits.find(([path]) => path[1] === "length")?.[1] ?? old.length;
-		            const entries = projectionEdits.filter(([path]) => path[1] !== "length").map(([path,value]) => [path[1],value]);
-		            if (projectionRemovals.some(path => path[1] < length)) throw new Error("Invalid sparse projection delta");
-		            view.replyProjections = entries.length || length!==old.length ? index.update(old,entries,length) : old;
-		            projectionLookup.remember(view.replyProjections,old,entries);
-		          }
-		          if (incrementalMessages) {
-		            const old = base.view.tavernHelper.messages;
-		            const length = messageEdits.find(([path]) => path[2] === "length")?.[1] ?? old.length;
-		            const entries = messageEdits.filter(([path]) => path[2] !== "length").map(([path,value]) => [path[2],value]);
-		            // The protocol emits removals only for a truncated tail.
-		            if (messageRemovals.some(path => path[2] < length)) throw new Error("Invalid sparse message delta");
-		            view.tavernHelper = {...view.tavernHelper,messages:index.update(old,entries,length)};
+		            // Remove old descendants before replacing a parent with null or a new object.
+		            for (const path of result.viewDelta.remove.slice().sort((a, b) => b.length - a.length)) {
+		              if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path) || incrementalProjections && projectionPath(path)) continue;
+		              const target = parent(path), key = path[path.length - 1];
+		              if (!(Array.isArray(target) && key === "length")) delete target[key];
+		            }
+		            for (const [path, value] of result.viewDelta.set) {
+		              if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path) || incrementalProjections && projectionPath(path)) continue;
+		              parent(path)[path[path.length - 1]] = value;
+		            }
+		            if (result.viewDelta.receiptDelta) {
+		              if (!ordered?.info(base.view?.mvuReceipts)) throw new Error("回执增量缺少基线，请重新读取");
+		              const delta = result.viewDelta.receiptDelta;
+		              view.mvuReceipts = ordered.update(base.view.mvuReceipts,[...delta.remove.map(turn=>[turn,undefined]),...delta.set.map(row=>[row.turn,row])]);
+		            }
+		            if (incrementalReceipts) {
+		              const old = base.view.mvuReceipts;
+		              const length = receiptEdits.find(([path]) => path[1] === "length")?.[1] ?? old.length;
+		              const entries = receiptEdits.filter(([path]) => path[1] !== "length").map(([path,value]) => [path[1],value]);
+		              if (receiptRemovals.some(path => path[1] < length)) throw new Error("Invalid sparse receipt delta");
+		              view.mvuReceipts = index.update(old,entries,length);
+		              receiptLookup.remember(view.mvuReceipts,old,entries);
+		            }
+		            if (incrementalProjections) {
+		              const old = base.view.replyProjections;
+		              const length = projectionEdits.find(([path]) => path[1] === "length")?.[1] ?? old.length;
+		              const entries = projectionEdits.filter(([path]) => path[1] !== "length").map(([path,value]) => [path[1],value]);
+		              if (projectionRemovals.some(path => path[1] < length)) throw new Error("Invalid sparse projection delta");
+		              view.replyProjections = entries.length || length!==old.length ? index.update(old,entries,length) : old;
+		              projectionLookup.remember(view.replyProjections,old,entries);
+		            }
+		            if (incrementalMessages) {
+		              const old = base.view.tavernHelper.messages;
+		              const length = messageEdits.find(([path]) => path[2] === "length")?.[1] ?? old.length;
+		              const entries = messageEdits.filter(([path]) => path[2] !== "length").map(([path,value]) => [path[2],value]);
+		              // The protocol emits removals only for a truncated tail.
+		              if (messageRemovals.some(path => path[2] < length)) throw new Error("Invalid sparse message delta");
+		              view.tavernHelper = {...view.tavernHelper,messages:index.update(old,entries,length)};
+		            }
 		          }
 		        }
-		        if (Array.isArray(view?.tavernHelper?.messages)) {
+		        if (Array.isArray(view?.tavernHelper?.messages) && !index.info(view.tavernHelper.messages)) {
 		          view = {...view,tavernHelper:{...view.tavernHelper,messages:index.from(view.tavernHelper.messages)}};
 		        }
 		        if (Array.isArray(view?.mvuReceipts)) {
@@ -798,12 +804,12 @@ window.__ModuleLoader__.load({
 		            if (!ordered) throw new Error("当前客户端不支持回执索引");
 		            view = {...view,mvuReceipts:ordered.from(view.mvuReceipts.map(row=>[row.turn,row]))};
 		          } else if (!ordered?.info(view.mvuReceipts)) {
-		            view = {...view,mvuReceipts:index.from(view.mvuReceipts)};
+		            if (!index.info(view.mvuReceipts)) view = {...view,mvuReceipts:index.from(view.mvuReceipts)};
 		            receiptLookup.remember(view.mvuReceipts);
 		          }
 		        }
 		        if (Array.isArray(view?.replyProjections)) {
-		          view = {...view,replyProjections:index.from(view.replyProjections)};
+		          if (!index.info(view.replyProjections)) view = {...view,replyProjections:index.from(view.replyProjections)};
 		          projectionLookup.remember(view.replyProjections);
 		        }
 		        storyTurnLookup.remember(view?.regeneratedDshTurns);
@@ -1180,6 +1186,10 @@ window.__ModuleLoader__.load({
 			}
 			function publish(record, state) {
 				if (records.get(record.id) !== record) return;
+				// A confirmed no-op should not wake every mounted history component.
+				// In this opt-in mode updatedAt records the last published state change.
+				if (options.deduplicateViews === true && record.state.phase === state.phase
+					&& record.state.view === state.view && record.state.error === state.error) return;
 				record.state = state;
 				record.listeners.forEach(function (listener) { listener(state); });
 			}
@@ -1346,6 +1356,7 @@ window.__ModuleLoader__.load({
 		}
 
 		const liveTavernView = createLiveTavernViewModule({
+			deduplicateViews: true,
 			loadTimeoutMs: 10000,
 			cacheRetentionMs: 10 * 60 * 1000,
 			timeoutRetryDelayMs: 5000,

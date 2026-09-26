@@ -354,6 +354,7 @@ window.__ModuleLoader__.load({
 		}
 
 		const liveTavernView = createLiveTavernViewModule({
+			deduplicateViews: true,
 			loadTimeoutMs: 10000,
 			cacheRetentionMs: 10 * 60 * 1000,
 			timeoutRetryDelayMs: 5000,
