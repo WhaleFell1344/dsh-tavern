@@ -106,3 +106,25 @@ test('shared replacement routing preserves missing versus undefined and mutable 
   if(!deduplicateViews){const mutable={nested:{value:1}};live.setView('s',mutable);notices=0;mutable.nested.value=2;live.setView('s',mutable);assert.equal(notices,1)}
  }
 })
+
+for(const count of [20,400,10000])test(`assistant field subscriptions exclude input and debug updates across ${count} floors`,()=>{
+ const h=harness()
+ const main=fs.readFileSync(new URL('../tavern-plugin/src/client/main.js',import.meta.url),'utf8')
+ const paths=vm.runInContext(main.slice(main.indexOf('function tavernAssistantViewPaths()'),main.indexOf('function TavernInlineStatusRuntime('))+';tavernAssistantViewPaths()',h)
+ const live=h.createLiveTavernViewModule({deduplicateViews:true,pollWhileBusy:false,schedule(){},cancel(){},load:async()=>({})})
+ let view={mode:'story',replyProjections:[],tavernHelper:{variables:{hp:10}},inputSources:{}}
+ live.setView('s',view)
+ let notices=0,statusNotices=0
+ for(let i=0;i<count;i++)live.select('s',paths).subscribe(()=>notices++)
+ // Only the latest inline status runtime requires the complete view.
+ live.subscribe('s',()=>statusNotices++)
+ notices=statusNotices=0
+ view={...view,inputSources:{'1':'changed'},debugTurns:[{turn:1}],cardUpdate:{available:true}}
+ live.setView('s',view)
+ assert.equal(notices,0);assert.equal(statusNotices,1)
+ view={...view,tavernHelper:{variables:{hp:9}}};live.setView('s',view)
+ assert.equal(notices,count,'arbitrary script dependencies must remain live')
+ const assistant=main.slice(main.indexOf('function TavernAssistantNodeView('),main.indexOf('function TavernForkAssistantAction('))
+ assert.match(assistant,/useScopedLiveTavernView\(props.sessionId, revision, tavernAssistantViewPaths\(\)\)/)
+ assert.match(assistant,/React.createElement\(TavernInlineStatusRuntime,/)
+})

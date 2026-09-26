@@ -5947,13 +5947,23 @@ window.__ModuleLoader__.load({
 					error || state && state.error ? React.createElement("span", { role: "alert", className: "dsh-tavern-settings-error" }, error || state.error) : null
 				);
 			}
+			function tavernAssistantViewPaths() {
+				return ["mode", "regeneratedDshTurns", "replyProjections", "mvuReceipts", "tavernHelper",
+					"tavernRuntimePolicy", "settlementTurn", "activity", "releaseCapabilities", "statusBarPlacement"].map(field => [field]);
+			}
+			function TavernInlineStatusRuntime(props) {
+				const state = useLiveTavernView(props.sessionId, "inline-status");
+				return state.view ? React.createElement(TavernPersistentStatusRuntime, {
+					sessionId: props.sessionId, view: state.view, executeSlash: props.executeSlash
+				}) : null;
+			}
 			function TavernAssistantNodeView(props) {
 				const data = props.node.data;
 				const turnRef = props.node.location.kind === "turn" || props.node.location.kind === "step" ? props.node.location.turn : null;
 				const turn = turnRef ? Number(turnRef.turn) : 0;
 				const settled = data.status !== "running";
 				const revision = String(data.status || "") + ":" + String(data.finalNode && data.finalNode.seq || "");
-				const liveState = useLiveTavernView(props.sessionId, revision);
+				const liveState = useScopedLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths());
 				const storyTurn = tavernStoryTurnForDshTurn(liveState.view, turn);
 				const sessionTransitioning = React.useSyncExternalStore(tavernSessionTransition.subscribe, tavernSessionTransition.getSnapshot, tavernSessionTransition.getSnapshot);
 					const projection = settled ? tavernProjectionForTurn(liveState.view, storyTurn) : null;
@@ -5986,7 +5996,7 @@ window.__ModuleLoader__.load({
 				const sceneImagesEnabled = Boolean(liveState.view && liveState.view.releaseCapabilities && liveState.view.releaseCapabilities.sceneImages);
 				const illustration = sceneImagesEnabled && settled && storyTurn > 0 && isPlayMode(liveState.view && liveState.view.mode) && !sessionTransitioning ? React.createElement(SceneIllustration, { key: props.sessionId + ":" + storyTurn + ":" + JSON.stringify(projection), sessionId: props.sessionId, turn: storyTurn }) : null;
                 const inlineStatus = liveState.view?.statusBarPlacement === "body" && !sessionTransitioning && storyTurn > 0 && storyTurn === latestProjectionTurn && data.finalNode && tail?.closing?.finalNode?.seq === data.finalNode.seq
-                    ? React.createElement(TavernPersistentStatusRuntime, { sessionId: props.sessionId, view: liveState.view, executeSlash: props.executeSlash }) : null;
+                    ? React.createElement(TavernInlineStatusRuntime, { sessionId: props.sessionId, executeSlash: props.executeSlash }) : null;
 				return React.createElement("div", { className: "dsh-tavern-assistant", "data-streaming": data.status === "running" || undefined }, rendered, illustration, mvuReceiptNode, inlineStatus);
 			}
 			function TavernForkAssistantAction(props) {
