@@ -5431,6 +5431,11 @@ window.__ModuleLoader__.load({
 
 		function tavernProjectionForTurn(view, turn) {
 			if (!view || !isPlayMode(view.mode) || !Array.isArray(view.replyProjections)) return null;
+			const lookup = createSessionViewReader.projectionLookup;
+			if (lookup?.has(view.replyProjections)) {
+				const projection = lookup.row(view.replyProjections,turn);
+				return projection && (Number(projection.version)===1 || Number(projection.version)===2) ? projection : null;
+			}
 			for (let index = view.replyProjections.length - 1; index >= 0; index -= 1) {
 				const projection = view.replyProjections[index];
 				if (Number(projection && projection.turn) === Number(turn)) return Number(projection.version) === 1 || Number(projection.version) === 2 ? projection : null;
@@ -5438,8 +5443,17 @@ window.__ModuleLoader__.load({
 			return null;
 		}
 
+		function tavernLatestProjectionTurn(view) {
+			const rows = view?.replyProjections;
+			if (!Array.isArray(rows)) return 0;
+			const lookup = createSessionViewReader.projectionLookup;
+			return lookup?.has(rows) ? lookup.max(rows) : rows.reduce((latest,item)=>Math.max(latest,Number(item && item.turn)||0),0);
+		}
+
 		function tavernStoryTurnForDshTurn(view, turn) {
 			const mappings = view && view.regeneratedDshTurns && typeof view.regeneratedDshTurns === "object" ? view.regeneratedDshTurns : {};
+			const lookup = createSessionViewReader.storyTurnLookup;
+			if (lookup?.has(mappings)) return lookup.read(mappings,turn);
 			for (const storyTurn of Object.keys(mappings)) {
 				if (Number(mappings[storyTurn]) === Number(turn)) return Number(storyTurn);
 			}
@@ -5930,7 +5944,7 @@ window.__ModuleLoader__.load({
 				const sessionTransitioning = React.useSyncExternalStore(tavernSessionTransition.subscribe, tavernSessionTransition.getSnapshot, tavernSessionTransition.getSnapshot);
 					const projection = settled ? tavernProjectionForTurn(liveState.view, storyTurn) : null;
 					const mvuReceipt = settled ? tavernMvuReceiptForTurn(liveState.view, storyTurn) : null;
-					const latestProjectionTurn = liveState.view && Array.isArray(liveState.view.replyProjections) ? liveState.view.replyProjections.reduce(function (latest, item) { return Math.max(latest, Number(item && item.turn) || 0); }, 0) : 0;
+					const latestProjectionTurn = tavernLatestProjectionTurn(liveState.view);
 				const tail = props.useTurnData("turn-tail");
 				const owner = React.useMemo(function () {
 					if (!turnRef || turnRef.status !== "closed" || !data.finalNode || !tail || !tail.closing || tail.closing.finalNode.seq !== data.finalNode.seq) return undefined;

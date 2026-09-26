@@ -2,8 +2,10 @@
 function createSessionViewReader(maxSessions = 4) {
   const sessions = new Map();
   const index = createSessionViewReader.indexApi ||= createIndexedArrayApi();
-  const receiptLookup = createSessionViewReader.receiptLookup ||= createReceiptTurnLookup(index,createSessionViewReader.onReceiptLookupVisit);
+  const receiptLookup = createSessionViewReader.receiptLookup ||= createTurnLookup(index,createSessionViewReader.onReceiptLookupVisit);
   const ordered = typeof createOrderedNumericIndex === "function" ? (createSessionViewReader.receiptOrderedIndex ||= createOrderedNumericIndex()) : null;
+  const projectionLookup = createSessionViewReader.projectionLookup ||= createTurnLookup(index);
+  const storyTurnLookup = createSessionViewReader.storyTurnLookup ||= createStoryTurnLookup();
   let sequence = 0;
   return function begin(sessionId) {
     const base = sessions.get(sessionId);
@@ -35,6 +37,15 @@ function createSessionViewReader(maxSessions = 4) {
             && receiptRemovals.every(path => Number.isSafeInteger(path[1]))
             && receiptEdits.every(([path]) => path[1] === "length" || Number.isSafeInteger(path[1]));
 
+          const projectionPath = path => path[0] === "replyProjections" && path.length === 2;
+          const projectionEdits = result.viewDelta.set.filter(([path]) => projectionPath(path));
+          const projectionRemovals = result.viewDelta.remove.filter(projectionPath);
+          const incrementalProjections = Array.isArray(base.view?.replyProjections)
+            && !result.viewDelta.set.some(([path]) => path[0] === "replyProjections" && path.length < 2)
+            && !result.viewDelta.remove.some(path => path[0] === "replyProjections" && path.length < 2)
+            && projectionRemovals.every(path => Number.isSafeInteger(path[1]))
+            && projectionEdits.every(([path]) => path[1] === "length" || Number.isSafeInteger(path[1]));
+
           function parent(path) {
             let target = view;
             for (let i = 0; i < path.length - 1; i++) {
@@ -51,12 +62,12 @@ function createSessionViewReader(maxSessions = 4) {
           }
           // Remove old descendants before replacing a parent with null or a new object.
           for (const path of result.viewDelta.remove.slice().sort((a, b) => b.length - a.length)) {
-            if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path)) continue;
+            if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path) || incrementalProjections && projectionPath(path)) continue;
             const target = parent(path), key = path[path.length - 1];
             if (!(Array.isArray(target) && key === "length")) delete target[key];
           }
           for (const [path, value] of result.viewDelta.set) {
-            if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path)) continue;
+            if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path) || incrementalProjections && projectionPath(path)) continue;
             parent(path)[path[path.length - 1]] = value;
           }
           if (result.viewDelta.receiptDelta) {
@@ -71,6 +82,14 @@ function createSessionViewReader(maxSessions = 4) {
             if (receiptRemovals.some(path => path[1] < length)) throw new Error("Invalid sparse receipt delta");
             view.mvuReceipts = index.update(old,entries,length);
             receiptLookup.remember(view.mvuReceipts,old,entries);
+          }
+          if (incrementalProjections) {
+            const old = base.view.replyProjections;
+            const length = projectionEdits.find(([path]) => path[1] === "length")?.[1] ?? old.length;
+            const entries = projectionEdits.filter(([path]) => path[1] !== "length").map(([path,value]) => [path[1],value]);
+            if (projectionRemovals.some(path => path[1] < length)) throw new Error("Invalid sparse projection delta");
+            view.replyProjections = entries.length || length!==old.length ? index.update(old,entries,length) : old;
+            projectionLookup.remember(view.replyProjections,old,entries);
           }
           if (incrementalMessages) {
             const old = base.view.tavernHelper.messages;
@@ -93,6 +112,11 @@ function createSessionViewReader(maxSessions = 4) {
             receiptLookup.remember(view.mvuReceipts);
           }
         }
+        if (Array.isArray(view?.replyProjections)) {
+          view = {...view,replyProjections:index.from(view.replyProjections)};
+          projectionLookup.remember(view.replyProjections);
+        }
+        storyTurnLookup.remember(view?.regeneratedDshTurns);
         const latest = sessions.get(sessionId);
         if (!latest || latest.sequence < requestSequence) {
           sessions.delete(sessionId);
@@ -106,7 +130,7 @@ function createSessionViewReader(maxSessions = 4) {
 }
 
 // Weak array-version keys preserve concurrent/older views without retaining them.
-function createReceiptTurnLookup(index,onVisit = () => {}) {
+function createTurnLookup(index,onVisit = () => {}) {
   const versions = new WeakMap();
   // Number-to-string has bounded length for IEEE-754 turns, including infinities.
   // A character trie avoids history-sized Map copies while retaining old roots.
@@ -121,7 +145,13 @@ function createReceiptTurnLookup(index,onVisit = () => {}) {
     const next={...root}, character=offset===key.length ? "$" : key[offset];
     const child=offset===key.length ? value : put(root?.[character],key,value,offset+1);
     if (child===undefined) delete next[character]; else next[character]=child;
-    return Object.keys(next).length ? next : undefined;
+    let maximum=0,children=0;
+    for (const name of Object.keys(next)) if (name!=="_max") {
+      children++; maximum=Math.max(maximum,name==="$" ? Number(next[name].turn)||0 : next[name]._max||0);
+    }
+    if (!children) return undefined;
+    next._max=maximum;
+    return next;
   }
   function change(root,key,id,row) {
     if (key===null) return root;
@@ -136,7 +166,7 @@ function createReceiptTurnLookup(index,onVisit = () => {}) {
       next=old && old.id!==id
         ? {rows:index.update([],[[old.id,old.row],[id,row]],Math.max(old.id,id)+1)} : {id,row};
     } else if (old?.id!==id) next=old;
-    return put(root,key,next);
+    return put(root,key,next ? {...next,turn:Number(key)} : undefined);
   }
   function remember(rows,before,entries) {
     if (versions.has(rows)) return;
@@ -153,12 +183,29 @@ function createReceiptTurnLookup(index,onVisit = () => {}) {
     }
     versions.set(rows,root);
   }
-  function read(rows,turn) {
+  function row(rows,turn) {
     const key=turnKey(turn);
     if (key===null) return null;
     const bucket=get(versions.get(rows),key);
     const row=bucket?.rows ? bucket.rows[index.previous(bucket.rows,bucket.rows.length)] : bucket?.row;
-    return row?.receipt || null;
+    return row || null;
   }
-  return {remember,read,has:rows=>versions.has(rows)};
+  return {remember,row,read:(rows,turn)=>row(rows,turn)?.receipt || null,max:rows=>versions.get(rows)?._max || 0,has:rows=>versions.has(rows)};
+}
+
+function createStoryTurnLookup() {
+  const versions=new WeakMap();
+  return {
+    remember(source) {
+      if (!source || typeof source!=="object" || versions.has(source)) return;
+      const turns=new Map();
+      for (const story of Object.keys(source)) {
+        const turn=Number(source[story]);
+        if (!Number.isNaN(turn) && !turns.has(turn)) turns.set(turn,Number(story));
+      }
+      versions.set(source,turns);
+    },
+    has:source=>versions.has(source),
+    read(source,turn) { const key=Number(turn),turns=versions.get(source);return turns.has(key)?turns.get(key):key; }
+  };
 }

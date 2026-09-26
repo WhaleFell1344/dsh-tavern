@@ -692,8 +692,10 @@ window.__ModuleLoader__.load({
 		function createSessionViewReader(maxSessions = 4) {
 		  const sessions = new Map();
 		  const index = createSessionViewReader.indexApi ||= createIndexedArrayApi();
-		  const receiptLookup = createSessionViewReader.receiptLookup ||= createReceiptTurnLookup(index,createSessionViewReader.onReceiptLookupVisit);
+		  const receiptLookup = createSessionViewReader.receiptLookup ||= createTurnLookup(index,createSessionViewReader.onReceiptLookupVisit);
 		  const ordered = typeof createOrderedNumericIndex === "function" ? (createSessionViewReader.receiptOrderedIndex ||= createOrderedNumericIndex()) : null;
+		  const projectionLookup = createSessionViewReader.projectionLookup ||= createTurnLookup(index);
+		  const storyTurnLookup = createSessionViewReader.storyTurnLookup ||= createStoryTurnLookup();
 		  let sequence = 0;
 		  return function begin(sessionId) {
 		    const base = sessions.get(sessionId);
@@ -725,6 +727,15 @@ window.__ModuleLoader__.load({
 		            && receiptRemovals.every(path => Number.isSafeInteger(path[1]))
 		            && receiptEdits.every(([path]) => path[1] === "length" || Number.isSafeInteger(path[1]));
 
+		          const projectionPath = path => path[0] === "replyProjections" && path.length === 2;
+		          const projectionEdits = result.viewDelta.set.filter(([path]) => projectionPath(path));
+		          const projectionRemovals = result.viewDelta.remove.filter(projectionPath);
+		          const incrementalProjections = Array.isArray(base.view?.replyProjections)
+		            && !result.viewDelta.set.some(([path]) => path[0] === "replyProjections" && path.length < 2)
+		            && !result.viewDelta.remove.some(path => path[0] === "replyProjections" && path.length < 2)
+		            && projectionRemovals.every(path => Number.isSafeInteger(path[1]))
+		            && projectionEdits.every(([path]) => path[1] === "length" || Number.isSafeInteger(path[1]));
+
 		          function parent(path) {
 		            let target = view;
 		            for (let i = 0; i < path.length - 1; i++) {
@@ -741,12 +752,12 @@ window.__ModuleLoader__.load({
 		          }
 		          // Remove old descendants before replacing a parent with null or a new object.
 		          for (const path of result.viewDelta.remove.slice().sort((a, b) => b.length - a.length)) {
-		            if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path)) continue;
+		            if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path) || incrementalProjections && projectionPath(path)) continue;
 		            const target = parent(path), key = path[path.length - 1];
 		            if (!(Array.isArray(target) && key === "length")) delete target[key];
 		          }
 		          for (const [path, value] of result.viewDelta.set) {
-		            if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path)) continue;
+		            if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path) || incrementalProjections && projectionPath(path)) continue;
 		            parent(path)[path[path.length - 1]] = value;
 		          }
 		          if (result.viewDelta.receiptDelta) {
@@ -761,6 +772,14 @@ window.__ModuleLoader__.load({
 		            if (receiptRemovals.some(path => path[1] < length)) throw new Error("Invalid sparse receipt delta");
 		            view.mvuReceipts = index.update(old,entries,length);
 		            receiptLookup.remember(view.mvuReceipts,old,entries);
+		          }
+		          if (incrementalProjections) {
+		            const old = base.view.replyProjections;
+		            const length = projectionEdits.find(([path]) => path[1] === "length")?.[1] ?? old.length;
+		            const entries = projectionEdits.filter(([path]) => path[1] !== "length").map(([path,value]) => [path[1],value]);
+		            if (projectionRemovals.some(path => path[1] < length)) throw new Error("Invalid sparse projection delta");
+		            view.replyProjections = entries.length || length!==old.length ? index.update(old,entries,length) : old;
+		            projectionLookup.remember(view.replyProjections,old,entries);
 		          }
 		          if (incrementalMessages) {
 		            const old = base.view.tavernHelper.messages;
@@ -783,6 +802,11 @@ window.__ModuleLoader__.load({
 		            receiptLookup.remember(view.mvuReceipts);
 		          }
 		        }
+		        if (Array.isArray(view?.replyProjections)) {
+		          view = {...view,replyProjections:index.from(view.replyProjections)};
+		          projectionLookup.remember(view.replyProjections);
+		        }
+		        storyTurnLookup.remember(view?.regeneratedDshTurns);
 		        const latest = sessions.get(sessionId);
 		        if (!latest || latest.sequence < requestSequence) {
 		          sessions.delete(sessionId);
@@ -796,7 +820,7 @@ window.__ModuleLoader__.load({
 		}
 
 		// Weak array-version keys preserve concurrent/older views without retaining them.
-		function createReceiptTurnLookup(index,onVisit = () => {}) {
+		function createTurnLookup(index,onVisit = () => {}) {
 		  const versions = new WeakMap();
 		  // Number-to-string has bounded length for IEEE-754 turns, including infinities.
 		  // A character trie avoids history-sized Map copies while retaining old roots.
@@ -811,7 +835,13 @@ window.__ModuleLoader__.load({
 		    const next={...root}, character=offset===key.length ? "$" : key[offset];
 		    const child=offset===key.length ? value : put(root?.[character],key,value,offset+1);
 		    if (child===undefined) delete next[character]; else next[character]=child;
-		    return Object.keys(next).length ? next : undefined;
+		    let maximum=0,children=0;
+		    for (const name of Object.keys(next)) if (name!=="_max") {
+		      children++; maximum=Math.max(maximum,name==="$" ? Number(next[name].turn)||0 : next[name]._max||0);
+		    }
+		    if (!children) return undefined;
+		    next._max=maximum;
+		    return next;
 		  }
 		  function change(root,key,id,row) {
 		    if (key===null) return root;
@@ -826,7 +856,7 @@ window.__ModuleLoader__.load({
 		      next=old && old.id!==id
 		        ? {rows:index.update([],[[old.id,old.row],[id,row]],Math.max(old.id,id)+1)} : {id,row};
 		    } else if (old?.id!==id) next=old;
-		    return put(root,key,next);
+		    return put(root,key,next ? {...next,turn:Number(key)} : undefined);
 		  }
 		  function remember(rows,before,entries) {
 		    if (versions.has(rows)) return;
@@ -843,14 +873,31 @@ window.__ModuleLoader__.load({
 		    }
 		    versions.set(rows,root);
 		  }
-		  function read(rows,turn) {
+		  function row(rows,turn) {
 		    const key=turnKey(turn);
 		    if (key===null) return null;
 		    const bucket=get(versions.get(rows),key);
 		    const row=bucket?.rows ? bucket.rows[index.previous(bucket.rows,bucket.rows.length)] : bucket?.row;
-		    return row?.receipt || null;
+		    return row || null;
 		  }
-		  return {remember,read,has:rows=>versions.has(rows)};
+		  return {remember,row,read:(rows,turn)=>row(rows,turn)?.receipt || null,max:rows=>versions.get(rows)?._max || 0,has:rows=>versions.has(rows)};
+		}
+
+		function createStoryTurnLookup() {
+		  const versions=new WeakMap();
+		  return {
+		    remember(source) {
+		      if (!source || typeof source!=="object" || versions.has(source)) return;
+		      const turns=new Map();
+		      for (const story of Object.keys(source)) {
+		        const turn=Number(source[story]);
+		        if (!Number.isNaN(turn) && !turns.has(turn)) turns.set(turn,Number(story));
+		      }
+		      versions.set(source,turns);
+		    },
+		    has:source=>versions.has(source),
+		    read(source,turn) { const key=Number(turn),turns=versions.get(source);return turns.has(key)?turns.get(key):key; }
+		  };
 		}
 		const beginSessionViewRead = createSessionViewReader();
 
@@ -7895,6 +7942,11 @@ window.__ModuleLoader__.load({
 
 		function tavernProjectionForTurn(view, turn) {
 			if (!view || !isPlayMode(view.mode) || !Array.isArray(view.replyProjections)) return null;
+			const lookup = createSessionViewReader.projectionLookup;
+			if (lookup?.has(view.replyProjections)) {
+				const projection = lookup.row(view.replyProjections,turn);
+				return projection && (Number(projection.version)===1 || Number(projection.version)===2) ? projection : null;
+			}
 			for (let index = view.replyProjections.length - 1; index >= 0; index -= 1) {
 				const projection = view.replyProjections[index];
 				if (Number(projection && projection.turn) === Number(turn)) return Number(projection.version) === 1 || Number(projection.version) === 2 ? projection : null;
@@ -7902,8 +7954,17 @@ window.__ModuleLoader__.load({
 			return null;
 		}
 
+		function tavernLatestProjectionTurn(view) {
+			const rows = view?.replyProjections;
+			if (!Array.isArray(rows)) return 0;
+			const lookup = createSessionViewReader.projectionLookup;
+			return lookup?.has(rows) ? lookup.max(rows) : rows.reduce((latest,item)=>Math.max(latest,Number(item && item.turn)||0),0);
+		}
+
 		function tavernStoryTurnForDshTurn(view, turn) {
 			const mappings = view && view.regeneratedDshTurns && typeof view.regeneratedDshTurns === "object" ? view.regeneratedDshTurns : {};
+			const lookup = createSessionViewReader.storyTurnLookup;
+			if (lookup?.has(mappings)) return lookup.read(mappings,turn);
 			for (const storyTurn of Object.keys(mappings)) {
 				if (Number(mappings[storyTurn]) === Number(turn)) return Number(storyTurn);
 			}
@@ -8394,7 +8455,7 @@ window.__ModuleLoader__.load({
 				const sessionTransitioning = React.useSyncExternalStore(tavernSessionTransition.subscribe, tavernSessionTransition.getSnapshot, tavernSessionTransition.getSnapshot);
 					const projection = settled ? tavernProjectionForTurn(liveState.view, storyTurn) : null;
 					const mvuReceipt = settled ? tavernMvuReceiptForTurn(liveState.view, storyTurn) : null;
-					const latestProjectionTurn = liveState.view && Array.isArray(liveState.view.replyProjections) ? liveState.view.replyProjections.reduce(function (latest, item) { return Math.max(latest, Number(item && item.turn) || 0); }, 0) : 0;
+					const latestProjectionTurn = tavernLatestProjectionTurn(liveState.view);
 				const tail = props.useTurnData("turn-tail");
 				const owner = React.useMemo(function () {
 					if (!turnRef || turnRef.status !== "closed" || !data.finalNode || !tail || !tail.closing || tail.closing.finalNode.seq !== data.finalNode.seq) return undefined;
