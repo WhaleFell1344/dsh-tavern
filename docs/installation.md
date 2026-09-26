@@ -15,7 +15,6 @@
 
 本包要求 Android 11 及以上、ARM64。其他系统版本可参考下方 DSHA 方案。
 
-
 [返回项目首页](../README.md) · [在线使用文档](https://flizzywine.github.io/dsh-tavern/)
 
 ### Windows 一键安装版
@@ -44,15 +43,11 @@ dsh plugin --profile tavern add github:flizzywine/dsh-tavern
 dsh --profile tavern
 ```
 
-npm 安装渠道已停止维护。此前通过 npm 安装的用户，也使用上述 GitHub 命令更新，继续使用原 Profile 数据。
-
 第一条命令由 DSH 创建 Profile、安装完整运行包并启用酒馆；第二条启动网页。酒馆使用当前 DSH，不会另装或升级宿主。运行包包含 Web 配置、侧栏、人物卡功能、预设和 Skill，无需自行构建。启动时检查 DSH 适配版本。
 
 数据位于当前 `DSH_HOME` 下的 `profile-data/tavern/`；未设置 `DSH_HOME` 时通常为 `~/.dsh/profile-data/tavern/`。程序由 Profile 的包管理器维护。更新时先关闭酒馆，重新运行第一条安装命令，再启动。页面中的「查看更新命令」提供同一条命令，不使用原来的源码更新器。
 
 当前先支持普通 DSH CLI 的新安装。不要往专用安装器已经管理的 `tavern` Profile 直接叠装；原 CLI、Desktop、Android 安装继续使用各自原有方式。这条路线不会迁移旧 CLI 的独立数据，也不附带 Desktop 的 Pocket 手机访问配置或宿主字体文件修改。侧栏终端复用宿主提供的 `node-pty`；宿主缺少此依赖时，终端会显示修复提示，酒馆仍可使用。
-
-从本地源码验证相同安装包，可以运行 `npm pack --pack-destination /临时目录`，再用 `dsh plugin --profile tavern add /临时目录/dsh-profile-tavern-版本.tgz` 安装。测试时应设置一个空的临时 `DSH_HOME`，避免混入已有 Profile。
 
 ### 命令行及宿主内安装
 
