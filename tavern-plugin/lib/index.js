@@ -1479,7 +1479,7 @@ export async function apply(ctx) {
       ? await requestPerformance.stage('helperMessagesProjection', () => projectTavernHelperContext(chat, { skeletonUntil, indexed:true }))
       : null
     const rollbackEvidence = sessionDebugEvidence(chat.sessionId, true)
-    const rollbackFields = rollbackViewFields(chat, rollbackEvidence)
+    const rollbackFields = rollbackViewFields(chat, rollbackEvidence, options.inputChanges)
     return {
       chatId: chat.id,
       contextCompaction: chat.contextCompaction || null,
@@ -1624,12 +1624,12 @@ export async function apply(ctx) {
     return Object.assign({}, operation, { result: { candidates } })
   }
   const sessionStateView = createSessionStateView({
-    sharedReceipts: true,
+    sharedReceipts: true, sharedMappings: true,
     activity: chat => backgroundTasks.activity(chat),
     evidence: sessionId => sessionDebugEvidence(sessionId, true)
   })
   function mvuReceiptsOf(chat, changes) { return sessionStateView.receipts(chat, changes) }
-  function rollbackViewFields(chat, evidence) { return sessionStateView.rollback(chat, evidence) }
+  function rollbackViewFields(chat, evidence, changes) { return sessionStateView.rollback(chat, evidence, changes) }
   function volatileSessionViewFields(chat, activity, changes) { return sessionStateView.volatile(chat, activity, changes) }
 
   async function projectCachedSessionView(chat, previous, activity) {
@@ -1649,7 +1649,7 @@ export async function apply(ctx) {
     const card = await readChatCard(chat)
     const mode = chat.mode || 'story'
     const previousMessages = previous.tavernHelper.messages
-    const changes = {baseRevision:previous.tavernHelper.stateRevision,indices:[...dirtyMessageIndices],layoutChanged}
+    const changes = {baseRevision:previous.tavernHelper.stateRevision,indices:[...dirtyMessageIndices],layoutChanged,changedHeaderFields}
     const next = Object.assign({}, previous, volatileSessionViewFields(chat, activity, changes), {
       posture: chat.posture || '',
       guides: Array.isArray(chat.guides) ? chat.guides : []

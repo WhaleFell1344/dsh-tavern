@@ -99,3 +99,23 @@ test('scoped session state preserves full legacy foreground migration input',asy
  result.messages[0].variables[0].hp=1
  assert.equal((await store.read('c')).messages[0].variables[0].hp,10)
 })
+
+import {createSessionViewSync} from '../tavern-plugin/lib/domain/session-view-sync.js'
+for(const count of [20,400,10000])test(`unchanged regenerated mappings are not read or copied on a trusted revision at ${count}`,()=>{
+ const events=Object.freeze([]),session={header:{version:3},snapshotEvents:()=>events,surface:{nodes:[],replaceGeneration:0}}
+ const projector=createSessionStateView({activity:()=>({}),evidence:()=>({events,session}),sharedMappings:true})
+ const chat={id:'mapped',sessionId:'s',_storageRevision:1,messages:[],regeneratedDshTurns:Object.fromEntries(Array.from({length:count},(_,id)=>[id+1,id+100]))}
+ const initial=projector.volatile(chat,{})
+ const sync=createSessionViewSync(),first=sync('s',initial)
+ const nextChat={...chat,_storageRevision:2}
+ Object.defineProperty(nextChat,'regeneratedDshTurns',{get(){throw new Error('unchanged mapping was read')}})
+ const next=projector.volatile(nextChat,{}, {baseRevision:1,indices:[],layoutChanged:false,changedHeaderFields:['_storageRevision']})
+ assert.equal(next.regeneratedDshTurns,initial.regeneratedDshTurns)
+ assert.deepEqual(sync('s',next,first.viewCursor).viewDelta.set,[])
+ assert.throws(()=>{next.regeneratedDshTurns['1']=999},/immutable/i)
+ const changed=projector.volatile({...chat,_storageRevision:3,regeneratedDshTurns:{'1':999}}, {}, {baseRevision:2,indices:[],layoutChanged:false,changedHeaderFields:['regeneratedDshTurns']})
+ assert.equal(changed.regeneratedDshTurns['1'],999)
+ assert.equal(initial.regeneratedDshTurns['1'],100)
+ const unknown=projector.volatile({...chat,_storageRevision:4,regeneratedDshTurns:{'1':777}}, {}, {baseRevision:3,indices:[],layoutChanged:false})
+ assert.equal(unknown.regeneratedDshTurns['1'],777,'unknown header changes must rebuild')
+})
