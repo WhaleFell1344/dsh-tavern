@@ -72,6 +72,23 @@ function createOrderedNumericIndex({visit=()=>{},measure=()=>0}={}) {
     }
     return position+(node && node.key<key?1:0)
   }
+  // Keep a suffix by rank, sharing all fully retained subtrees.
+  function suffix(source,start){
+    if(!states.has(source))throw new Error('Unknown ordered index')
+    function trim(node,skip){
+      visit()
+      if(!node || skip>=node.count)return undefined
+      if(skip<=0)return node
+      const slots=[]
+      for(let id=0;id<16;id++){
+        const child=node.slots[id];if(!child)continue
+        slots[id]=trim(child,skip);skip=Math.max(0,skip-child.count)
+      }
+      return branch(node.depth,node.key,slots)
+    }
+    const root=trim(states.get(source),Math.max(0,Math.floor(start)))
+    return root===states.get(source)?source:view(root)
+  }
   function changed(before,after){
     if(!states.has(before)||!states.has(after))return null
     const result=[]
@@ -95,7 +112,7 @@ function createOrderedNumericIndex({visit=()=>{},measure=()=>0}={}) {
     }
     walk(states.get(before),states.get(after));return result
   }
-  return {from,update,get,rank,changed,info:source=>states.has(source)?{count:states.get(source)?.count||0,bytes:states.get(source)?.bytes||0,unsafe:states.get(source)?.unsafe||0}:null}
+  return {from,update,get,rank,suffix,changed,info:source=>states.has(source)?{count:states.get(source)?.count||0,bytes:states.get(source)?.bytes||0,unsafe:states.get(source)?.unsafe||0}:null}
 }
 
 export { createOrderedNumericIndex };
