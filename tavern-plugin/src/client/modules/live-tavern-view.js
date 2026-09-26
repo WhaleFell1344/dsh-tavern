@@ -68,6 +68,17 @@ function createLiveTavernViewModule(options) {
 			const paths = delta.set.map(entry => entry[0]).concat(delta.remove);
 			if (delta.receiptDelta && (delta.receiptDelta.set.length || delta.receiptDelta.remove.length)) paths.push(["mvuReceipts"]);
 			listeners = affected(record.paths, paths);
+		} else if (options.deduplicateViews === true && record.state.view && state.view
+			&& record.state.phase === state.phase && record.state.error === state.error) {
+			// The identity-based mode already requires immutable published views.
+			// Hydration and local replacements preserve unrelated field identities:
+			// route those updates without enumerating history or all subscribers.
+			const before = record.state.view, after = state.view;
+			const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+			const paths = [];
+			for (const key of keys) if (Object.prototype.hasOwnProperty.call(before, key) !== Object.prototype.hasOwnProperty.call(after, key)
+				|| !Object.is(before[key], after[key])) paths.push([key]);
+			listeners = affected(record.paths, paths);
 		}
 		record.state = state;
 		listeners.forEach(function (listener) { listener(state); });

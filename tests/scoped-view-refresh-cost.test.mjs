@@ -69,3 +69,40 @@ test('overlapping selections preserve immutable parents and root selection retur
  assert.equal(selection.getSnapshot().view.inputSources,inputSources)
  assert.equal(live.select('s',[[]]).getSnapshot(),live.getSnapshot('s'))
 })
+
+for(const count of [20,400,10000])test(`Helper hydration does not broadcast to ${count} unrelated history subscribers`,async()=>{
+ const h=harness(),jobs=[]
+ let view={inputSources:{},tavernHelper:{messagesPending:{from:0,to:1}}}
+ const live=h.createLiveTavernViewModule({deduplicateViews:true,pollWhileBusy:false,
+  schedule:run=>{jobs.push(run);return jobs.length},cancel(){},
+  load:async()=>({view}),
+  hydrateHelperMessages:async(_id,current)=>({...current,tavernHelper:{messages:[{text:'hydrated'}]}})
+ })
+ live.setView('s',view)
+ let notices=0,helperNotices=0,globalNotices=0
+ for(let i=0;i<count;i++)live.subscribe('s',()=>notices++,[['inputSources',String(i)]])
+ live.subscribe('s',()=>helperNotices++,[['tavernHelper']])
+ live.subscribe('s',()=>globalNotices++)
+ notices=helperNotices=globalNotices=0
+ jobs.shift()();await new Promise(resolve=>setImmediate(resolve))
+ assert.equal(notices,0);assert.equal(helperNotices,1);assert.equal(globalNotices,1)
+ assert.equal(live.getSnapshot('s').view.tavernHelper.messages[0].text,'hydrated')
+ // Replacement and removal of an observed parent must still reach every child.
+ view={...live.getSnapshot('s').view,inputSources:{'0':'new'}}
+ live.setView('s',view);assert.equal(notices,count)
+ const {inputSources,...removed}=view
+ live.setView('s',removed);assert.equal(notices,2*count)
+})
+
+test('shared replacement routing preserves missing versus undefined and mutable compatibility',()=>{
+ const h=harness()
+ for(const deduplicateViews of [true,false]){
+  const live=h.createLiveTavernViewModule({deduplicateViews,pollWhileBusy:false,schedule(){},cancel(){},load:async()=>({})})
+  live.setView('s',{})
+  let notices=0
+  live.subscribe('s',()=>notices++,[['optional']]);notices=0
+  live.setView('s',{optional:undefined});assert.equal(notices,1)
+  live.setView('s',{});assert.equal(notices,2)
+  if(!deduplicateViews){const mutable={nested:{value:1}};live.setView('s',mutable);notices=0;mutable.nested.value=2;live.setView('s',mutable);assert.equal(notices,1)}
+ }
+})
