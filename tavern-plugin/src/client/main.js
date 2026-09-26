@@ -171,6 +171,7 @@ window.__ModuleLoader__.load({
 			} catch (_) {}
 		}
 
+		// @include-domain indexed-array.js
 		// @include modules/session-view-sync.js
 		const beginSessionViewRead = createSessionViewReader();
 
@@ -2085,7 +2086,6 @@ window.__ModuleLoader__.load({
 		}
 
 		// @include local-variables.js
-		// @include-domain indexed-array.js
         // @include variable-receipts.js
         applyTavernVariableReceipt.indexApi = createIndexedArrayApi({valid: row => Boolean(row && !row.stub), eligible: row => Boolean(row?.variables?.stat_data !== undefined && row?.variables?.schema !== undefined)});
 
@@ -3965,6 +3965,22 @@ window.__ModuleLoader__.load({
 				}
 				return scripts;
 			}
+            function refreshContext(record, context) {
+                const api = applyTavernVariableReceipt.indexApi, before = record.context;
+                const changed = before && before.chatId === context.chatId
+                    && before.lifecycleRevision === context.lifecycleRevision
+                    && before.messages.length === context.messages.length
+                    ? api.changed(before.messages,context.messages) : null;
+                record.context = context;
+                if (changed === null) { post(record,{type:"dsh-tavern-helper-context",context}); return; }
+                const header = {...context}; delete header.messages;
+                if (header.turnMessageIds === before.turnMessageIds) delete header.turnMessageIds;
+                post(record,{type:"dsh-tavern-helper-context",contextDelta:{
+                    version:2,kind:"committed",chatId:context.chatId,lifecycleRevision:context.lifecycleRevision,
+                    baseRevision:before.stateRevision,stateRevision:context.stateRevision,header,
+                    messages:changed.map(id=>context.messages[id])
+                }});
+            }
 			function sync(sessionId, view) {
 				const nextSessionId = String(sessionId || "");
 				if (activeSessionId && activeSessionId !== nextSessionId) clear();
@@ -3974,13 +3990,32 @@ window.__ModuleLoader__.load({
 				const trustedCardMode = Boolean(view && view.tavernRuntimePolicy && view.tavernRuntimePolicy.trustedCardMode);
 				readinessKey = scripts.length === 0 ? "" : nextSessionId + "\n" + scripts.map(function (script) { return script.id + "\n" + script.content; }).join("\n---\n") + "\ntrusted=" + String(trustedCardMode) + "\nviewer=" + String(viewer);
 				if (scripts.length === 0) { clear(); activeSessionId = nextSessionId; return; }
-				const context = helperContext(view, scripts);
+                let record = records.get("shared");
+                const source = view?.tavernHelper;
+                const sourceIndex = createSessionViewReader.indexApi;
+                const sourceChanges = record && source && record.sourceHelper
+                    && view.chatId === record.context.chatId
+                    && String(view.playerName || "你") === record.committedContext?.playerName
+                    && String(view.card?.name || "角色") === record.committedContext?.characterName
+                    && Array.isArray(source.messages) && Array.isArray(record.sourceHelper.messages)
+                    && record.sourceHelper.lifecycleRevision === source.lifecycleRevision
+                    && record.sourceHelper.messages.length === source.messages.length
+                    ? sourceIndex.changed(record.sourceHelper.messages,source.messages) : null;
+                let context;
+                if (sourceChanges !== null && record.committedContext) {
+                    const helper = {...source,messages:sourceChanges.map(id=>source.messages[id])};
+                    const sameTurns = source.turnMessageIds === record.sourceHelper.turnMessageIds;
+                    if (sameTurns) delete helper.turnMessageIds;
+                    const partial = helperContext({...view,tavernHelper:helper},scripts);
+                    context = {...partial,messages:applyTavernVariableReceipt.indexApi.update(record.committedContext.messages,
+                        sourceChanges.map((id,at)=>[id,partial.messages[at]]))};
+                    if (sameTurns) context.turnMessageIds = record.committedContext.turnMessageIds;
+                } else context = helperContext(view,scripts);
 				const nextSnapshot = snapshot(context);
 				const officialOwner = Boolean(view && view.tavernMvuRuntime && view.tavernMvuRuntime.owner === "official");
 				// Viewers mirror committed data without replaying settlement callbacks.
 				const queuedEvents = officialOwner || viewer ? [] : eventsBetween(previous, nextSnapshot);
 				const fingerprint = scripts.map(function (script) { return script.id + "\n" + script.content; }).join("\n---\n") + "\ntrusted=" + String(trustedCardMode) + "\nviewer=" + String(viewer);
-				let record = records.get("shared");
 				if (record && record.fingerprint !== fingerprint) { removeRecord("shared"); record = null; }
 				if (!record) record = createRecord(nextSessionId, scripts, context, trustedCardMode, viewer);
 				else {
@@ -3990,13 +4025,14 @@ window.__ModuleLoader__.load({
                         record.deferredContext = context;
                     } else {
                         record.deferredContext = null;
-                        record.context = context;
-                        post(record, { type: "dsh-tavern-helper-context", context: context });
+                        refreshContext(record,context);
                     }
 					queuedEvents.forEach(function (event) {
 						if (record.subscriptionsReady && record.subscriptions.has(String(event.name))) post(record, { type: "dsh-tavern-helper-event", name: event.name, args: event.args });
 					});
 				}
+                record.sourceHelper = source;
+                record.committedContext = context;
 				previous = nextSnapshot;
 				maybeAnnounceReady();
 				syncMvuDataReadiness(record);
@@ -4109,9 +4145,9 @@ window.__ModuleLoader__.load({
 						hostWindow.clearTimeout(pending.timer);
                         post(record, { type: "dsh-tavern-helper-event-ack", eventId: eventId });
                         if (record.deferredContext) {
-                            record.context = record.deferredContext;
+                            const committed = record.deferredContext;
                             record.deferredContext = null;
-                            post(record,{type:"dsh-tavern-helper-context",context:record.context});
+                            refreshContext(record,committed);
                         }
 						const completeData = pending.completeData || data;
 						if (completeData.error) {
@@ -11183,6 +11219,7 @@ window.__ModuleLoader__.load({
 		exports.createCardLibraryRefreshModule = createCardLibraryRefreshModule;
 		exports.tavernDataChangeAffects = tavernDataChangeAffects;
 		exports.createLiveTavernViewModule = createLiveTavernViewModule;
+        exports.createSessionViewReader = createSessionViewReader;
 		exports.applyBodyRegenerationResult = applyBodyRegenerationResult;
 		exports.createTavernCoordinationEventModule = createTavernCoordinationEventModule;
 		exports.describeTavernActivity = describeTavernActivity;

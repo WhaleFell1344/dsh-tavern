@@ -102,11 +102,27 @@ function createIndexedArrayApi(options = {}) {
         }
         return search(state.root, 6, 0, Math.min(exclusive, state.length) - 1);
     }
+    function changed(before, after) {
+        const left = states.get(before), right = states.get(after);
+        if (!left || !right) return null;
+        const result = [];
+        function walk(a, b, depth, prefix) {
+            visit();
+            if (a === b) return;
+            if (depth < 0) { if (prefix < right.length && a?.value !== b?.value) result.push(prefix); return; }
+            for (let digit = 0; digit < 32; digit++) {
+                const x = a?.slots[digit], y = b?.slots[digit];
+                if (x !== y) walk(x, y, depth - 1, prefix + digit * width(depth));
+            }
+        }
+        walk(left.root, right.root, 6, 0);
+        return result;
+    }
     function info(source) {
         const state = states.get(source);
         return state && { length: state.length, complete: (state.root?.validCount || 0) === state.length, eligible: state.root?.eligible || 0,
             count: state.root?.count || 0, bytes: state.root?.bytes || 0 };
     }
-    return { from, update, previous, info };
+    return { from, update, previous, info, changed };
 }
 export { createIndexedArrayApi };

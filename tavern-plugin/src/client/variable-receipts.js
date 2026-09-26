@@ -8,6 +8,9 @@ function applyTavernVariableReceipt(previous, delta) {
             if (previous.transaction?.eventId !== delta.eventId) return previous;
             if (delta.sequence <= previous.transaction.sequence) return previous;
             if (delta.baseSequence !== previous.transaction.sequence || delta.sequence !== delta.baseSequence + 1) return null;
+        } else if (delta.kind === 'committed') {
+            if (delta.stateRevision < previous.stateRevision) return previous;
+            if (delta.baseRevision !== previous.stateRevision || previous.messagesPending) return null;
         } else if (delta.kind === 'dispatch') {
             if (previous.transaction || delta.baseRevision !== previous.stateRevision || previous.messagesPending) return null;
         } else return null;
@@ -15,6 +18,7 @@ function applyTavernVariableReceipt(previous, delta) {
             stateRevision: delta.stateRevision,
             transaction: { eventId: delta.eventId, sequence: delta.kind === 'dispatch' ? 0 : delta.sequence }
         });
+        if (delta.kind === 'committed') delete context.transaction;
         const api = applyTavernVariableReceipt.indexApi;
         const length = delta.kind === 'dispatch' ? delta.messageCount : (previous.messages || []).length;
         if (!Number.isInteger(length) || length < 0 || length > 0xffffffff) return null;

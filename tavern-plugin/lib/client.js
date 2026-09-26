@@ -462,9 +462,137 @@ window.__ModuleLoader__.load({
 			} catch (_) {}
 		}
 
+		// Shared by the host and generated iframe. Fixed seven-level radix index over
+		// JavaScript's 32-bit array indices: no linked overlays and no history-sized copy.
+		function createIndexedArrayApi(options = {}) {
+		    const states = new WeakMap();
+		    const valid = options.valid || (value => value !== undefined);
+		    const eligible = options.eligible || valid;
+		    const measure = options.measure || (() => 0);
+		    const visit = options.visit || (() => {});
+		    const width = depth => 2 ** (depth * 5);
+		    function aggregate(slots) {
+		        let count = 0, validCount = 0, eligible = 0, bytes = 320;
+		        for (const child of slots) if (child) { count += child.count; validCount += child.validCount; eligible += child.eligible; bytes += child.bytes; }
+		        return { slots, count, validCount, eligible, bytes };
+		    }
+		    function put(node, depth, id, leaf, mutable) {
+		        visit();
+		        const slots = node ? (mutable ? node.slots : node.slots.slice()) : [];
+		        const digit = Math.floor(id / width(depth)) % 32;
+		        slots[digit] = depth === 0 ? leaf : put(slots[digit], depth - 1, id, leaf, mutable);
+		        return aggregate(slots);
+		    }
+		    function lookup(node, id) {
+		        for (let depth = 6; depth >= 0; depth--) {
+		            visit();
+		            node = node?.slots[Math.floor(id / width(depth)) % 32];
+		        }
+		        return node;
+		    }
+		    function trim(node, depth, limit) {
+		        if (!node || limit <= 0) return undefined;
+		        const span = width(depth);
+		        if (limit >= span * 32) return node;
+		        const slots = node.slots.slice(0, Math.ceil(limit / span));
+		        if (depth > 0 && limit % span) slots[slots.length - 1] = trim(slots[slots.length - 1], depth - 1, limit % span);
+		        return aggregate(slots);
+		    }
+		    function checkLength(length) {
+		        if (!Number.isInteger(length) || length < 0 || length > 0xffffffff) throw new Error('Invalid indexed array length');
+		    }
+		    function view(root, length) {
+		        function index(key) { return typeof key === 'string' && /^(0|[1-9]\d*)$/.test(key) && Number(key) < length; }
+		        const array = new Proxy([], {
+		            get(target, key, receiver) {
+		                if (key === 'length') return length;
+		                return index(key) ? lookup(root, Number(key))?.value : Reflect.get(target, key, receiver);
+		            },
+		            has(target, key) { return index(key) ? Boolean(lookup(root, Number(key))) : Reflect.has(target, key); },
+		            ownKeys() {
+		                const keys = [];
+		                for (let id = 0; id < length; id++) if (lookup(root, id)) keys.push(String(id));
+		                return [...keys, 'length'];
+		            },
+		            getOwnPropertyDescriptor(target, key) {
+		                if (index(key)) {
+		                    const leaf = lookup(root, Number(key));
+		                    return leaf ? { value: leaf.value, enumerable: true, writable: false, configurable: true } : undefined;
+		                }
+		                const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+		                return key === 'length' ? { ...descriptor, value: length } : descriptor;
+		            },
+		            set() { throw new Error('Indexed array is immutable'); },
+		            defineProperty() { throw new Error('Indexed array is immutable'); },
+		            deleteProperty() { throw new Error('Indexed array is immutable'); }
+		        });
+		        states.set(array, { root, length });
+		        return array;
+		    }
+		    function leaf(value) { return { value, count: 1, validCount: valid(value) ? 1 : 0, eligible: eligible(value) ? 1 : 0, bytes: 48 + measure(value) }; }
+		    function from(source) {
+		        if (states.has(source)) return source;
+		        checkLength(source.length);
+		        let root;
+		        for (let id = 0; id < source.length; id++) if (id in source) root = put(root, 6, id, leaf(source[id]), true);
+		        return view(root, source.length);
+		    }
+		    function update(source, entries, length = source.length) {
+		        checkLength(length);
+		        const state = states.get(source) || states.get(from(source));
+		        let root = length < state.length ? trim(state.root, 6, length) : state.root;
+		        for (const [id, value] of entries) {
+		            if (!Number.isInteger(id) || id < 0 || id >= length) throw new Error('Invalid indexed array position');
+		            root = put(root, 6, id, leaf(value), false);
+		        }
+		        return view(root, length);
+		    }
+		    function previous(source, exclusive) {
+		        const state = states.get(source);
+		        if (!state) throw new Error('Unindexed array');
+		        function search(node, depth, prefix, end) {
+		            visit();
+		            if (!node?.eligible) return -1;
+		            const span = width(depth), top = Math.min(31, Math.floor((end - prefix) / span));
+		            for (let digit = top; digit >= 0; digit--) {
+		                const child = node.slots[digit];
+		                if (!child?.eligible) continue;
+		                const start = prefix + digit * span;
+		                if (depth === 0) return start;
+		                const result = search(child, depth - 1, start, Math.min(end, start + span - 1));
+		                if (result >= 0) return result;
+		            }
+		            return -1;
+		        }
+		        return search(state.root, 6, 0, Math.min(exclusive, state.length) - 1);
+		    }
+		    function changed(before, after) {
+		        const left = states.get(before), right = states.get(after);
+		        if (!left || !right) return null;
+		        const result = [];
+		        function walk(a, b, depth, prefix) {
+		            visit();
+		            if (a === b) return;
+		            if (depth < 0) { if (prefix < right.length && a?.value !== b?.value) result.push(prefix); return; }
+		            for (let digit = 0; digit < 32; digit++) {
+		                const x = a?.slots[digit], y = b?.slots[digit];
+		                if (x !== y) walk(x, y, depth - 1, prefix + digit * width(depth));
+		            }
+		        }
+		        walk(left.root, right.root, 6, 0);
+		        return result;
+		    }
+		    function info(source) {
+		        const state = states.get(source);
+		        return state && { length: state.length, complete: (state.root?.validCount || 0) === state.length, eligible: state.root?.eligible || 0,
+		            count: state.root?.count || 0, bytes: state.root?.bytes || 0 };
+		    }
+		    return { from, update, previous, info, changed };
+		}
 		// Cached session views are immutable, like the React views returned by getSession.
 		function createSessionViewReader(maxSessions = 4) {
 		  const sessions = new Map();
+		  const index = createSessionViewReader.indexApi ||= createIndexedArrayApi();
 		  let sequence = 0;
 		  return function begin(sessionId) {
 		    const base = sessions.get(sessionId);
@@ -477,6 +605,15 @@ window.__ModuleLoader__.load({
 		          if (!base || result.viewDelta.baseCursor !== base.cursor) throw new Error("会话增量已过期，请重新读取");
 		          view = Object.assign({}, base.view);
 		          const copied = new Set();
+		          const messagePath = path => path[0] === "tavernHelper" && path[1] === "messages" && path.length === 3;
+		          const messageEdits = result.viewDelta.set.filter(([path]) => messagePath(path));
+		          const messageRemovals = result.viewDelta.remove.filter(messagePath);
+		          const incrementalMessages = Array.isArray(base.view?.tavernHelper?.messages)
+		            && !result.viewDelta.set.some(([path]) => path[0] === "tavernHelper" && path.length < 3)
+		            && !result.viewDelta.remove.some(path => path[0] === "tavernHelper" && path.length < 3)
+		            && messageRemovals.every(path => typeof path[2] === "number")
+		            && messageEdits.every(([path]) => path[2] === "length" || Number.isSafeInteger(path[2]));
+
 		          function parent(path) {
 		            let target = view;
 		            for (let i = 0; i < path.length - 1; i++) {
@@ -493,10 +630,25 @@ window.__ModuleLoader__.load({
 		          }
 		          // Remove old descendants before replacing a parent with null or a new object.
 		          for (const path of result.viewDelta.remove.slice().sort((a, b) => b.length - a.length)) {
+		            if (incrementalMessages && messagePath(path)) continue;
 		            const target = parent(path), key = path[path.length - 1];
 		            if (!(Array.isArray(target) && key === "length")) delete target[key];
 		          }
-		          for (const [path, value] of result.viewDelta.set) parent(path)[path[path.length - 1]] = value;
+		          for (const [path, value] of result.viewDelta.set) {
+		            if (incrementalMessages && messagePath(path)) continue;
+		            parent(path)[path[path.length - 1]] = value;
+		          }
+		          if (incrementalMessages) {
+		            const old = base.view.tavernHelper.messages;
+		            const length = messageEdits.find(([path]) => path[2] === "length")?.[1] ?? old.length;
+		            const entries = messageEdits.filter(([path]) => path[2] !== "length").map(([path,value]) => [path[2],value]);
+		            // The protocol emits removals only for a truncated tail.
+		            if (messageRemovals.some(path => path[2] < length)) throw new Error("Invalid sparse message delta");
+		            view.tavernHelper = {...view.tavernHelper,messages:index.update(old,entries,length)};
+		          }
+		        }
+		        if (Array.isArray(view?.tavernHelper?.messages)) {
+		          view = {...view,tavernHelper:{...view.tavernHelper,messages:index.from(view.tavernHelper.messages)}};
 		        }
 		        const latest = sessions.get(sessionId);
 		        if (!latest || latest.sequence < requestSequence) {
@@ -3776,117 +3928,6 @@ window.__ModuleLoader__.load({
 		    }
 		  };
 		}
-		// Shared by the host and generated iframe. Fixed seven-level radix index over
-		// JavaScript's 32-bit array indices: no linked overlays and no history-sized copy.
-		function createIndexedArrayApi(options = {}) {
-		    const states = new WeakMap();
-		    const valid = options.valid || (value => value !== undefined);
-		    const eligible = options.eligible || valid;
-		    const measure = options.measure || (() => 0);
-		    const visit = options.visit || (() => {});
-		    const width = depth => 2 ** (depth * 5);
-		    function aggregate(slots) {
-		        let count = 0, validCount = 0, eligible = 0, bytes = 320;
-		        for (const child of slots) if (child) { count += child.count; validCount += child.validCount; eligible += child.eligible; bytes += child.bytes; }
-		        return { slots, count, validCount, eligible, bytes };
-		    }
-		    function put(node, depth, id, leaf, mutable) {
-		        visit();
-		        const slots = node ? (mutable ? node.slots : node.slots.slice()) : [];
-		        const digit = Math.floor(id / width(depth)) % 32;
-		        slots[digit] = depth === 0 ? leaf : put(slots[digit], depth - 1, id, leaf, mutable);
-		        return aggregate(slots);
-		    }
-		    function lookup(node, id) {
-		        for (let depth = 6; depth >= 0; depth--) {
-		            visit();
-		            node = node?.slots[Math.floor(id / width(depth)) % 32];
-		        }
-		        return node;
-		    }
-		    function trim(node, depth, limit) {
-		        if (!node || limit <= 0) return undefined;
-		        const span = width(depth);
-		        if (limit >= span * 32) return node;
-		        const slots = node.slots.slice(0, Math.ceil(limit / span));
-		        if (depth > 0 && limit % span) slots[slots.length - 1] = trim(slots[slots.length - 1], depth - 1, limit % span);
-		        return aggregate(slots);
-		    }
-		    function checkLength(length) {
-		        if (!Number.isInteger(length) || length < 0 || length > 0xffffffff) throw new Error('Invalid indexed array length');
-		    }
-		    function view(root, length) {
-		        function index(key) { return typeof key === 'string' && /^(0|[1-9]\d*)$/.test(key) && Number(key) < length; }
-		        const array = new Proxy([], {
-		            get(target, key, receiver) {
-		                if (key === 'length') return length;
-		                return index(key) ? lookup(root, Number(key))?.value : Reflect.get(target, key, receiver);
-		            },
-		            has(target, key) { return index(key) ? Boolean(lookup(root, Number(key))) : Reflect.has(target, key); },
-		            ownKeys() {
-		                const keys = [];
-		                for (let id = 0; id < length; id++) if (lookup(root, id)) keys.push(String(id));
-		                return [...keys, 'length'];
-		            },
-		            getOwnPropertyDescriptor(target, key) {
-		                if (index(key)) {
-		                    const leaf = lookup(root, Number(key));
-		                    return leaf ? { value: leaf.value, enumerable: true, writable: false, configurable: true } : undefined;
-		                }
-		                const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
-		                return key === 'length' ? { ...descriptor, value: length } : descriptor;
-		            },
-		            set() { throw new Error('Indexed array is immutable'); },
-		            defineProperty() { throw new Error('Indexed array is immutable'); },
-		            deleteProperty() { throw new Error('Indexed array is immutable'); }
-		        });
-		        states.set(array, { root, length });
-		        return array;
-		    }
-		    function leaf(value) { return { value, count: 1, validCount: valid(value) ? 1 : 0, eligible: eligible(value) ? 1 : 0, bytes: 48 + measure(value) }; }
-		    function from(source) {
-		        if (states.has(source)) return source;
-		        checkLength(source.length);
-		        let root;
-		        for (let id = 0; id < source.length; id++) if (id in source) root = put(root, 6, id, leaf(source[id]), true);
-		        return view(root, source.length);
-		    }
-		    function update(source, entries, length = source.length) {
-		        checkLength(length);
-		        const state = states.get(source) || states.get(from(source));
-		        let root = length < state.length ? trim(state.root, 6, length) : state.root;
-		        for (const [id, value] of entries) {
-		            if (!Number.isInteger(id) || id < 0 || id >= length) throw new Error('Invalid indexed array position');
-		            root = put(root, 6, id, leaf(value), false);
-		        }
-		        return view(root, length);
-		    }
-		    function previous(source, exclusive) {
-		        const state = states.get(source);
-		        if (!state) throw new Error('Unindexed array');
-		        function search(node, depth, prefix, end) {
-		            visit();
-		            if (!node?.eligible) return -1;
-		            const span = width(depth), top = Math.min(31, Math.floor((end - prefix) / span));
-		            for (let digit = top; digit >= 0; digit--) {
-		                const child = node.slots[digit];
-		                if (!child?.eligible) continue;
-		                const start = prefix + digit * span;
-		                if (depth === 0) return start;
-		                const result = search(child, depth - 1, start, Math.min(end, start + span - 1));
-		                if (result >= 0) return result;
-		            }
-		            return -1;
-		        }
-		        return search(state.root, 6, 0, Math.min(exclusive, state.length) - 1);
-		    }
-		    function info(source) {
-		        const state = states.get(source);
-		        return state && { length: state.length, complete: (state.root?.validCount || 0) === state.length, eligible: state.root?.eligible || 0,
-		            count: state.root?.count || 0, bytes: state.root?.bytes || 0 };
-		    }
-		    return { from, update, previous, info };
-		}
         // null requests a read-only snapshot; an obsolete receipt cannot roll state back.
         // Untouched history remains shared. This function also runs inside script iframes.
         function applyTavernVariableReceipt(previous, delta) {
@@ -3897,6 +3938,9 @@ window.__ModuleLoader__.load({
                     if (previous.transaction?.eventId !== delta.eventId) return previous;
                     if (delta.sequence <= previous.transaction.sequence) return previous;
                     if (delta.baseSequence !== previous.transaction.sequence || delta.sequence !== delta.baseSequence + 1) return null;
+                } else if (delta.kind === 'committed') {
+                    if (delta.stateRevision < previous.stateRevision) return previous;
+                    if (delta.baseRevision !== previous.stateRevision || previous.messagesPending) return null;
                 } else if (delta.kind === 'dispatch') {
                     if (previous.transaction || delta.baseRevision !== previous.stateRevision || previous.messagesPending) return null;
                 } else return null;
@@ -3904,6 +3948,7 @@ window.__ModuleLoader__.load({
                     stateRevision: delta.stateRevision,
                     transaction: { eventId: delta.eventId, sequence: delta.kind === 'dispatch' ? 0 : delta.sequence }
                 });
+                if (delta.kind === 'committed') delete context.transaction;
                 const api = applyTavernVariableReceipt.indexApi;
                 const length = delta.kind === 'dispatch' ? delta.messageCount : (previous.messages || []).length;
                 if (!Number.isInteger(length) || length < 0 || length > 0xffffffff) return null;
@@ -5821,6 +5866,22 @@ window.__ModuleLoader__.load({
 				}
 				return scripts;
 			}
+            function refreshContext(record, context) {
+                const api = applyTavernVariableReceipt.indexApi, before = record.context;
+                const changed = before && before.chatId === context.chatId
+                    && before.lifecycleRevision === context.lifecycleRevision
+                    && before.messages.length === context.messages.length
+                    ? api.changed(before.messages,context.messages) : null;
+                record.context = context;
+                if (changed === null) { post(record,{type:"dsh-tavern-helper-context",context}); return; }
+                const header = {...context}; delete header.messages;
+                if (header.turnMessageIds === before.turnMessageIds) delete header.turnMessageIds;
+                post(record,{type:"dsh-tavern-helper-context",contextDelta:{
+                    version:2,kind:"committed",chatId:context.chatId,lifecycleRevision:context.lifecycleRevision,
+                    baseRevision:before.stateRevision,stateRevision:context.stateRevision,header,
+                    messages:changed.map(id=>context.messages[id])
+                }});
+            }
 			function sync(sessionId, view) {
 				const nextSessionId = String(sessionId || "");
 				if (activeSessionId && activeSessionId !== nextSessionId) clear();
@@ -5830,13 +5891,32 @@ window.__ModuleLoader__.load({
 				const trustedCardMode = Boolean(view && view.tavernRuntimePolicy && view.tavernRuntimePolicy.trustedCardMode);
 				readinessKey = scripts.length === 0 ? "" : nextSessionId + "\n" + scripts.map(function (script) { return script.id + "\n" + script.content; }).join("\n---\n") + "\ntrusted=" + String(trustedCardMode) + "\nviewer=" + String(viewer);
 				if (scripts.length === 0) { clear(); activeSessionId = nextSessionId; return; }
-				const context = helperContext(view, scripts);
+                let record = records.get("shared");
+                const source = view?.tavernHelper;
+                const sourceIndex = createSessionViewReader.indexApi;
+                const sourceChanges = record && source && record.sourceHelper
+                    && view.chatId === record.context.chatId
+                    && String(view.playerName || "你") === record.committedContext?.playerName
+                    && String(view.card?.name || "角色") === record.committedContext?.characterName
+                    && Array.isArray(source.messages) && Array.isArray(record.sourceHelper.messages)
+                    && record.sourceHelper.lifecycleRevision === source.lifecycleRevision
+                    && record.sourceHelper.messages.length === source.messages.length
+                    ? sourceIndex.changed(record.sourceHelper.messages,source.messages) : null;
+                let context;
+                if (sourceChanges !== null && record.committedContext) {
+                    const helper = {...source,messages:sourceChanges.map(id=>source.messages[id])};
+                    const sameTurns = source.turnMessageIds === record.sourceHelper.turnMessageIds;
+                    if (sameTurns) delete helper.turnMessageIds;
+                    const partial = helperContext({...view,tavernHelper:helper},scripts);
+                    context = {...partial,messages:applyTavernVariableReceipt.indexApi.update(record.committedContext.messages,
+                        sourceChanges.map((id,at)=>[id,partial.messages[at]]))};
+                    if (sameTurns) context.turnMessageIds = record.committedContext.turnMessageIds;
+                } else context = helperContext(view,scripts);
 				const nextSnapshot = snapshot(context);
 				const officialOwner = Boolean(view && view.tavernMvuRuntime && view.tavernMvuRuntime.owner === "official");
 				// Viewers mirror committed data without replaying settlement callbacks.
 				const queuedEvents = officialOwner || viewer ? [] : eventsBetween(previous, nextSnapshot);
 				const fingerprint = scripts.map(function (script) { return script.id + "\n" + script.content; }).join("\n---\n") + "\ntrusted=" + String(trustedCardMode) + "\nviewer=" + String(viewer);
-				let record = records.get("shared");
 				if (record && record.fingerprint !== fingerprint) { removeRecord("shared"); record = null; }
 				if (!record) record = createRecord(nextSessionId, scripts, context, trustedCardMode, viewer);
 				else {
@@ -5846,13 +5926,14 @@ window.__ModuleLoader__.load({
                         record.deferredContext = context;
                     } else {
                         record.deferredContext = null;
-                        record.context = context;
-                        post(record, { type: "dsh-tavern-helper-context", context: context });
+                        refreshContext(record,context);
                     }
 					queuedEvents.forEach(function (event) {
 						if (record.subscriptionsReady && record.subscriptions.has(String(event.name))) post(record, { type: "dsh-tavern-helper-event", name: event.name, args: event.args });
 					});
 				}
+                record.sourceHelper = source;
+                record.committedContext = context;
 				previous = nextSnapshot;
 				maybeAnnounceReady();
 				syncMvuDataReadiness(record);
@@ -5965,9 +6046,9 @@ window.__ModuleLoader__.load({
 						hostWindow.clearTimeout(pending.timer);
                         post(record, { type: "dsh-tavern-helper-event-ack", eventId: eventId });
                         if (record.deferredContext) {
-                            record.context = record.deferredContext;
+                            const committed = record.deferredContext;
                             record.deferredContext = null;
-                            post(record,{type:"dsh-tavern-helper-context",context:record.context});
+                            refreshContext(record,committed);
                         }
 						const completeData = pending.completeData || data;
 						if (completeData.error) {
@@ -14064,6 +14145,7 @@ window.__ModuleLoader__.load({
 		exports.createCardLibraryRefreshModule = createCardLibraryRefreshModule;
 		exports.tavernDataChangeAffects = tavernDataChangeAffects;
 		exports.createLiveTavernViewModule = createLiveTavernViewModule;
+        exports.createSessionViewReader = createSessionViewReader;
 		exports.applyBodyRegenerationResult = applyBodyRegenerationResult;
 		exports.createTavernCoordinationEventModule = createTavernCoordinationEventModule;
 		exports.describeTavernActivity = describeTavernActivity;

@@ -9,6 +9,10 @@ for (const length of [20,400,10000]) test(`indexed floor update has bounded work
  const before=api.from(rows);visits=0
  const after=api.update(before,[[length-1,{id:length-1,value:9}]],length)
  assert.ok(visits<=64,`visited ${visits} nodes`)
+ visits=0
+ assert.deepEqual(api.changed(before,after),[length-1])
+ assert.ok(visits<=16,`difference visited ${visits} nodes`)
+ assert.equal(api.changed(rows,after),null,'unindexed baselines require explicit full synchronization')
  assert.equal(before[length-1].value,10);assert.equal(after[length-1].value,9)
  assert.equal(before[0],after[0]);assert.equal(api.info(after).complete,true)
  assert.deepEqual(JSON.parse(JSON.stringify(after)),rows.map((r,i)=>i===length-1?{id:i,value:9}:r))
