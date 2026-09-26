@@ -5950,14 +5950,20 @@ window.__ModuleLoader__.load({
 			}
 			function tavernAssistantViewPaths(turn, eager = true) {
 				return ["mode", eager ? "tavernHelper" : "$helperAvailable",
-					"tavernRuntimePolicy", "settlementTurn", "activity", "releaseCapabilities", "statusBarPlacement"].map(field => [field]).concat([["$projectionTurn", String(turn)], ["$projectionLatestTurn", String(turn)]]);
+					"tavernRuntimePolicy", "releaseCapabilities", "statusBarPlacement"].map(field => [field]).concat([["$projectionTurn", String(turn)], ["$projectionLatestTurn", String(turn)]]);
+			}
+			function tavernReceiptViewPaths(turn, receipt, latest) {
+				const paths = [["$mvuReceiptTurn", String(turn)], ["$settlementOwner", String(turn)]];
+				if (latest || receipt?.status === "pending") paths.push(["$receiptBusy"]);
+				return paths;
 			}
 			function TavernTurnMvuReceipt(props) {
-				const subscribe = React.useCallback(notify => liveTavernView.subscribe(props.sessionId, notify,
-					[["$mvuReceiptTurn", String(props.turn)]]), [props.sessionId, props.turn]);
-				const snapshot = React.useCallback(() => tavernMvuReceiptForTurn(liveTavernView.getSnapshot(props.sessionId).view, props.turn), [props.sessionId, props.turn]);
-				const receipt = React.useSyncExternalStore(subscribe, snapshot, snapshot);
-				return receipt ? React.createElement(TavernMvuReceipt, { ...props, receipt }) : null;
+				const current = liveTavernView.getSnapshot(props.sessionId).view;
+				const state = useLiveTavernView(props.sessionId, "receipt", tavernReceiptViewPaths(props.turn,
+					tavernMvuReceiptForTurn(current, props.turn), props.turn === current?.settlementTurn));
+				const receipt = tavernMvuReceiptForTurn(state.view, props.turn);
+				return receipt ? React.createElement(TavernMvuReceipt, { ...props, receipt,
+					latest: props.turn === state.view?.settlementTurn, busy: Boolean(state.view?.activity?.busy) }) : null;
 			}
 			function TavernInlineStatusRuntime(props) {
 				const state = useLiveTavernView(props.sessionId, "inline-status");
@@ -6002,7 +6008,7 @@ window.__ModuleLoader__.load({
 					t: props.t
 				});
 				if (!(data.status === "running" || data.status === "interrupted" || rendered.length > 0)) return null;
-				const mvuReceiptNode = settled ? React.createElement(TavernTurnMvuReceipt, { sessionId: props.sessionId, turn: storyTurn, latest: storyTurn === liveState.view?.settlementTurn, busy: Boolean(liveState.view?.activity?.busy) }) : null;
+				const mvuReceiptNode = settled ? React.createElement(TavernTurnMvuReceipt, { sessionId: props.sessionId, turn: storyTurn }) : null;
 				const sceneImagesEnabled = Boolean(liveState.view && liveState.view.releaseCapabilities && liveState.view.releaseCapabilities.sceneImages);
 				const illustration = sceneImagesEnabled && settled && storyTurn > 0 && isPlayMode(liveState.view && liveState.view.mode) && !sessionTransitioning ? React.createElement(SceneIllustration, { key: props.sessionId + ":" + storyTurn + ":" + JSON.stringify(projection), sessionId: props.sessionId, turn: storyTurn }) : null;
                 const inlineStatus = liveState.view?.statusBarPlacement === "body" && !sessionTransitioning && storyTurn > 0 && storyTurn === latestProjectionTurn && data.finalNode && tail?.closing?.finalNode?.seq === data.finalNode.seq

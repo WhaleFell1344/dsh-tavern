@@ -55,6 +55,12 @@ function createLiveTavernViewModule(options) {
 		});
 		return listeners;
 	}
+	function addReceiptStatePaths(paths, before, after) {
+		if (Boolean(before?.activity?.busy) !== Boolean(after?.activity?.busy)) paths.push(["$receiptBusy"]);
+		if (!Object.is(before?.settlementTurn, after?.settlementTurn)) {
+			paths.push(["$settlementOwner", String(before?.settlementTurn)], ["$settlementOwner", String(after?.settlementTurn)]);
+		}
+	}
 	function publish(record, state, result) {
 		if (records.get(record.id) !== record) return;
 		// A confirmed no-op should not wake every mounted history component.
@@ -88,6 +94,7 @@ function createLiveTavernViewModule(options) {
 				for (const turn of delta.receiptDelta.remove) paths.push(["$mvuReceiptTurn", String(turn)]);
 			}
 			if (Boolean(record.state.view?.tavernHelper) !== Boolean(state.view?.tavernHelper)) paths.push(["$helperAvailable"]);
+			addReceiptStatePaths(paths, record.state.view, state.view);
 			listeners = affected(record.paths, paths);
 		} else if (options.deduplicateViews === true && record.state.view && state.view
 			&& record.state.phase === state.phase && record.state.error === state.error) {
@@ -103,6 +110,7 @@ function createLiveTavernViewModule(options) {
 			if (paths.some(path => path[0] === "replyProjections")) paths.push(["$projectionTurn"], ["$projectionLatestTurn"]);
 			if (paths.some(path => path[0] === "mvuReceipts")) paths.push(["$mvuReceiptTurn"]);
 			if (Boolean(record.state.view?.tavernHelper) !== Boolean(state.view?.tavernHelper)) paths.push(["$helperAvailable"]);
+			addReceiptStatePaths(paths, record.state.view, state.view);
 			listeners = affected(record.paths, paths);
 		}
 		record.state = state;

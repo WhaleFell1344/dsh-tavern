@@ -233,3 +233,42 @@ test('deferred retained frames read Helper context at activation',()=>{
  h.TavernRetainedMessageFrame({sessionId:'s',turn:1,partIndex:0,content:'<p>hello</p>',helperContext:stale,helperContextReader:()=>current})
  assert.equal(mounted.helperContext,current)
 })
+
+for(const count of [20,400,10000])test(`busy and settlement ownership avoid ${count} historical body updates`,()=>{
+ const h=harness(),main=fs.readFileSync(new URL('../tavern-plugin/src/client/main.js',import.meta.url),'utf8')
+ const paths=vm.runInContext(main.slice(main.indexOf('function tavernReceiptViewPaths('),main.indexOf('function TavernTurnMvuReceipt('))+';tavernReceiptViewPaths',h)
+ const bodyPaths=vm.runInContext(main.slice(main.indexOf('function tavernAssistantViewPaths('),main.indexOf('function tavernReceiptViewPaths('))+';tavernAssistantViewPaths',h)
+ const live=h.createLiveTavernViewModule({deduplicateViews:true,pollWhileBusy:false,schedule(){},cancel(){},load:async()=>({})})
+ let view={activity:{busy:false},settlementTurn:count}
+ live.setView('s',view)
+ const receipts=new Set();let bodies=0
+ for(let turn=1;turn<=count;turn++){
+  live.subscribe('s',()=>receipts.add(turn),paths(turn,{status:turn===2?'pending':'updated'},turn===count))
+  live.subscribe('s',()=>bodies++,bodyPaths(turn,false))
+ }
+ receipts.clear();bodies=0
+ view={...view,activity:{busy:true}};live.setView('s',view)
+ assert.deepEqual([...receipts].sort((a,b)=>a-b),[2,count]);assert.equal(bodies,0)
+ receipts.clear()
+ view={...view,activity:{busy:true,phase:'different'}};live.setView('s',view)
+ assert.equal(receipts.size,0);assert.equal(bodies,0)
+ view={...view,settlementTurn:count-1};live.setView('s',view)
+ assert.deepEqual([...receipts].sort((a,b)=>a-b),[count-1,count]);assert.equal(bodies,0)
+})
+
+test('receipt component renews busy dependencies when ownership and pending status change',()=>{
+ const main=fs.readFileSync(new URL('../tavern-plugin/src/client/main.js',import.meta.url),'utf8')
+ let view={settlementTurn:3,activity:{busy:true}},receipt={status:'updated'},observed
+ const h=vm.createContext({liveTavernView:{getSnapshot:()=>({view})},tavernMvuReceiptForTurn:()=>receipt,
+  useLiveTavernView:(_session,_revision,paths)=>{observed=paths;return {view}},
+  React:{createElement:(_tag,props)=>props},TavernMvuReceipt:()=>{}})
+ vm.runInContext(main.slice(main.indexOf('function tavernReceiptViewPaths('),main.indexOf('function TavernInlineStatusRuntime(')),h)
+ let output=h.TavernTurnMvuReceipt({sessionId:'s',turn:3})
+ assert.equal(output.latest,true);assert.equal(output.busy,true);assert.ok(observed.some(path=>path[0]==='$receiptBusy'))
+ view={settlementTurn:4,activity:{busy:false}}
+ output=h.TavernTurnMvuReceipt({sessionId:'s',turn:3})
+ assert.equal(output.latest,false);assert.equal(output.busy,false);assert.ok(!observed.some(path=>path[0]==='$receiptBusy'))
+ receipt={status:'pending'};h.TavernTurnMvuReceipt({sessionId:'s',turn:3})
+ assert.ok(observed.some(path=>path[0]==='$receiptBusy'))
+ receipt=null;assert.equal(h.TavernTurnMvuReceipt({sessionId:'s',turn:3}),null)
+})
