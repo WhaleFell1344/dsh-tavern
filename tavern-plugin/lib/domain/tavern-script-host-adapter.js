@@ -1,3 +1,4 @@
+import { createScopedMessages } from './scoped-messages.js'
 import { createMvuWorkingCopy, projectMvuReceipt } from './mvu-working-copy.js'
 import { randomUUID } from 'node:crypto'
 import { diffJson } from './json-mutation.js'
@@ -191,9 +192,37 @@ export function createTavernScriptHostAdapter(options = {}) {
     return serializeWorldbook('variables:' + sessionId, () => updateVariablesNow(sessionId, option, variables, expectedLifecycleRevision, eventId, contextBaseline))
   }
 
-  async function updateVariablesNow(sessionId, option, variables, expectedLifecycleRevision, eventId, contextBaseline) {
-    const chat = await mutationChat(sessionId, eventId)
+  async function variableMutationSlice(sessionId, option, expectedLifecycleRevision, eventId, baseline) {
+    assertTransactionEvent(settlementTransactions.get(str(sessionId)), eventId)
+    if (!baseline || !options.patchChat || !options.resolveChatSlice || !options.readChatRevision || settlementTransactions.has(str(sessionId))
+      || !['message','chat','script'].includes(option?.type)) return null
+    const fields = ['id','sessionId','_storageRevision','tavernHelperLifecycleRevision','mode','cardPath','mvu',
+      ...(option.type === 'chat' ? ['variables'] : option.type === 'script' ? ['tavernHelperScriptVariables'] : [])]
+    let selected = await options.resolveChatSlice(str(sessionId), [], fields)
+    const matches = value => value?.denseMessages && value.chat.id === baseline.chatId
+      && value.chat._storageRevision === baseline.stateRevision
+      && (value.chat.tavernHelperLifecycleRevision || 0) === baseline.lifecycleRevision
+      && mutationIsCurrent(value.chat, expectedLifecycleRevision) && value.chat.mvu?.enabled === true
+    if (!matches(selected)) return null
+    let messageId
+    if (option.type === 'message') {
+      const raw = option.message_id === undefined || option.message_id === null || option.message_id === 'latest' ? -1 : Number(option.message_id)
+      messageId = raw < 0 ? selected.messageCount + raw : raw
+      if (!Number.isInteger(messageId) || messageId < 0 || messageId >= selected.messageCount) return null
+      const count = selected.messageCount
+      selected = await options.resolveChatSlice(str(sessionId), [messageId], fields)
+      if (!matches(selected) || selected.messageCount !== count || !selected.chat.messages?.[0]) return null
+    }
+    if (settlementTransactions.has(str(sessionId))) return null
+    selected.chat.messages = createScopedMessages(selected.messageCount, messageId === undefined ? [] : [[messageId,selected.chat.messages[0]]])
+    return { chat:selected.chat, messageId }
+  }
+
+  async function updateVariablesNow(sessionId, option, variables, expectedLifecycleRevision, eventId, contextBaseline, allowSlice = true, fallbackChat) {
+    const scoped = allowSlice ? await variableMutationSlice(sessionId, option, expectedLifecycleRevision, eventId, contextBaseline) : null
+    const chat = scoped?.chat || fallbackChat || await mutationChat(sessionId, eventId)
     await assertScriptEnabled(chat)
+    if (scoped && settlementTransactions.has(str(sessionId))) return updateVariablesNow(sessionId, option, variables, expectedLifecycleRevision, eventId, contextBaseline, false)
     if (!mutationIsCurrent(chat, expectedLifecycleRevision)) return staleMutation(chat)
     if (option && option.type === 'global') {
       if (!options.globalVariables || typeof options.globalVariables.save !== 'function') throw new Error('全局变量存储未连接')
@@ -218,14 +247,14 @@ export function createTavernScriptHostAdapter(options = {}) {
     const before = canPatch ? {
       variables: chat.variables,
       scripts: chat.tavernHelperScriptVariables && { ...chat.tavernHelperScriptVariables },
-      messages: option?.type === 'message' ? (chat.messages || []).map(message =>
+      messages: scoped ? (scoped.messageId === undefined ? {} : { [scoped.messageId]: Array.isArray(chat.messages[scoped.messageId].variables) ? chat.messages[scoped.messageId].variables.slice() : chat.messages[scoped.messageId].variables }) : option?.type === 'message' ? (chat.messages || []).map(message =>
         Array.isArray(message?.variables) ? message.variables.slice() : message?.variables) : []
     } : null
     const baseRevision = chat._storageRevision
     const compact = canPatch && contextBaseline?.chatId === chat.id
       && contextBaseline.stateRevision === baseRevision
       && contextBaseline.lifecycleRevision === (chat.tavernHelperLifecycleRevision || 0)
-      && (chat.messages || []).every(message => message && typeof message === 'object')
+      && (scoped || (chat.messages || []).every(message => message && typeof message === 'object'))
     let patched = false
     const transaction = settlementTransactions.get(str(sessionId))
     if (transaction && (!option?.type || option.type === 'message')) transaction.work.touch(option?.message_id)
@@ -256,6 +285,12 @@ export function createTavernScriptHostAdapter(options = {}) {
         }
       }
       // A competing revision needs the existing three-way merge/conflict checks.
+      if (!saved && scoped) {
+        assertTransactionEvent(settlementTransactions.get(str(sessionId)), eventId)
+        const baseline = await options.readChatRevision(chat.id, baseRevision)
+        if (!baseline) { const error = new Error('变量写入基线已失效');error.code = 'DSH_TAVERN_CHAT_CONFLICT';throw error }
+        return updateVariablesNow(sessionId, option, variables, expectedLifecycleRevision, eventId, contextBaseline, false, baseline)
+      }
       if (!saved) await options.writeChat(chat, { source: 'tavern-helper.variables' })
     }
     catch (error) {
