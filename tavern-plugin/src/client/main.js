@@ -5447,6 +5447,8 @@ window.__ModuleLoader__.load({
 
 		function tavernMvuReceiptForTurn(view, turn) {
 			const receipts = view && Array.isArray(view.mvuReceipts) ? view.mvuReceipts : [];
+			const lookup = createSessionViewReader.receiptLookup;
+			if (lookup?.has(receipts)) return lookup.read(receipts, turn);
 			for (let index = receipts.length - 1; index >= 0; index -= 1) {
 				if (Number(receipts[index] && receipts[index].turn) === Number(turn)) return receipts[index].receipt || null;
 			}

@@ -593,6 +593,7 @@ window.__ModuleLoader__.load({
 		function createSessionViewReader(maxSessions = 4) {
 		  const sessions = new Map();
 		  const index = createSessionViewReader.indexApi ||= createIndexedArrayApi();
+		  const receiptLookup = createSessionViewReader.receiptLookup ||= createReceiptTurnLookup(index);
 		  let sequence = 0;
 		  return function begin(sessionId) {
 		    const base = sessions.get(sessionId);
@@ -653,6 +654,7 @@ window.__ModuleLoader__.load({
 		            const entries = receiptEdits.filter(([path]) => path[1] !== "length").map(([path,value]) => [path[1],value]);
 		            if (receiptRemovals.some(path => path[1] < length)) throw new Error("Invalid sparse receipt delta");
 		            view.mvuReceipts = index.update(old,entries,length);
+		            receiptLookup.remember(view.mvuReceipts,old,entries);
 		          }
 		          if (incrementalMessages) {
 		            const old = base.view.tavernHelper.messages;
@@ -666,7 +668,10 @@ window.__ModuleLoader__.load({
 		        if (Array.isArray(view?.tavernHelper?.messages)) {
 		          view = {...view,tavernHelper:{...view.tavernHelper,messages:index.from(view.tavernHelper.messages)}};
 		        }
-		        if (Array.isArray(view?.mvuReceipts)) view = {...view,mvuReceipts:index.from(view.mvuReceipts)};
+		        if (Array.isArray(view?.mvuReceipts)) {
+		          view = {...view,mvuReceipts:index.from(view.mvuReceipts)};
+		          receiptLookup.remember(view.mvuReceipts);
+		        }
 		        const latest = sessions.get(sessionId);
 		        if (!latest || latest.sequence < requestSequence) {
 		          sessions.delete(sessionId);
@@ -677,6 +682,37 @@ window.__ModuleLoader__.load({
 		      }
 		    };
 		  };
+		}
+
+		// Weak array-version keys preserve concurrent/older views without retaining them.
+		function createReceiptTurnLookup(index) {
+		  const versions = new WeakMap();
+		  const valid = turn => Number.isSafeInteger(turn) && turn >= 0 && turn < 0xffffffff;
+		  function remember(rows,before,entries) {
+		    if (versions.has(rows)) return;
+		    const previous = before && versions.get(before);
+		    if (previous && rows.length === before.length && entries.every(([id,row]) => Number(row?.turn) === Number(before[id]?.turn))) {
+		      versions.set(rows,index.update(previous,entries.map(([,row]) => [Number(row.turn),row.receipt || null])));
+		      return;
+		    }
+		    const seen = new Set(), updates = [];
+		    let length = 0;
+		    for (const row of rows) {
+		      const turn = Number(row?.turn);
+		      // Duplicate or unusual legacy turns retain the exact reverse-scan rule.
+		      if (!valid(turn) || seen.has(turn)) { versions.set(rows,null); return; }
+		      seen.add(turn); length = Math.max(length,turn+1);
+		      updates.push([turn,row.receipt || null]);
+		    }
+		    versions.set(rows,index.update([],updates,length));
+		  }
+		  function read(rows,turn) {
+		    const source = versions.get(rows), key = Number(turn);
+		    if (source) return valid(key) ? source[key] || null : null;
+		    for (let id=rows.length-1;id>=0;id--) if (Number(rows[id] && rows[id].turn) === key) return rows[id].receipt || null;
+		    return null;
+		  }
+		  return {remember,read,has:rows=>versions.has(rows)};
 		}
 		const beginSessionViewRead = createSessionViewReader();
 
@@ -7738,6 +7774,8 @@ window.__ModuleLoader__.load({
 
 		function tavernMvuReceiptForTurn(view, turn) {
 			const receipts = view && Array.isArray(view.mvuReceipts) ? view.mvuReceipts : [];
+			const lookup = createSessionViewReader.receiptLookup;
+			if (lookup?.has(receipts)) return lookup.read(receipts, turn);
 			for (let index = receipts.length - 1; index >= 0; index -= 1) {
 				if (Number(receipts[index] && receipts[index].turn) === Number(turn)) return receipts[index].receipt || null;
 			}
