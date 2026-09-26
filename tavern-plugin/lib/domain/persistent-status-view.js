@@ -9,12 +9,12 @@ function contentOf(part) {
 
 /** Only an explicit display declaration creates a persistent panel. MVU reads
  * are diagnostic evidence, never authority to move an interactive document. */
-function projectStatusView(messages, projections, options, compile) {
+function projectStatusView(messages, projections, options, compile, summary) {
   const sourceMessages = Array.isArray(messages) ? messages : []
   const sourceProjections = Array.isArray(projections) ? projections : []
   let inferredTurn = 1
-  let latestTurn = 1
-  for (const message of sourceMessages) {
+  let latestTurn = summary?.latestTurn ?? 1
+  if (!summary) for (const message of sourceMessages) {
     if (message?.role === 'user') inferredTurn++
     if (message?.role === 'assistant') latestTurn = Math.max(latestTurn, Number(message.turn) || inferredTurn)
   }
@@ -123,7 +123,7 @@ export function createPersistentStatusProjector({ maxCacheBytes = 4 * 1024 * 102
     }
     return value
   }
-  const project = (messages, projections, options = {}) => projectStatusView(messages, projections, options, compile)
+  const project = (messages, projections, options = {}, summary) => projectStatusView(messages, projections, options, compile, summary)
   project.cacheStats = () => ({ entries: cache.size, estimatedBytes: bytes, hits, misses })
   return project
 }

@@ -5,12 +5,13 @@ function createIndexedArrayApi(options = {}) {
     const valid = options.valid || (value => value !== undefined);
     const eligible = options.eligible || valid;
     const measure = options.measure || (() => 0);
+    const maximum = options.maximum || (() => -Infinity);
     const visit = options.visit || (() => {});
     const width = depth => 2 ** (depth * 5);
     function aggregate(slots) {
-        let count = 0, validCount = 0, eligible = 0, bytes = 320;
-        for (const child of slots) if (child) { count += child.count; validCount += child.validCount; eligible += child.eligible; bytes += child.bytes; }
-        return { slots, count, validCount, eligible, bytes };
+        let count = 0, validCount = 0, eligible = 0, bytes = 320, max = -Infinity;
+        for (const child of slots) if (child) { count += child.count; validCount += child.validCount; eligible += child.eligible; bytes += child.bytes; max = Math.max(max, child.max); }
+        return { slots, count, validCount, eligible, bytes, max };
     }
     function put(node, depth, id, leaf, mutable) {
         visit();
@@ -65,7 +66,7 @@ function createIndexedArrayApi(options = {}) {
         states.set(array, { root, length });
         return array;
     }
-    function leaf(value) { return { value, count: 1, validCount: valid(value) ? 1 : 0, eligible: eligible(value) ? 1 : 0, bytes: 48 + measure(value) }; }
+    function leaf(value) { return { value, count: 1, validCount: valid(value) ? 1 : 0, eligible: eligible(value) ? 1 : 0, bytes: 48 + measure(value), max: maximum(value) }; }
     function from(source) {
         if (states.has(source)) return source;
         checkLength(source.length);
@@ -123,6 +124,6 @@ function createIndexedArrayApi(options = {}) {
         return state && { length: state.length, complete: (state.root?.validCount || 0) === state.length, eligible: state.root?.eligible || 0,
             count: state.root?.count || 0, bytes: state.root?.bytes || 0 };
     }
-    return { from, update, previous, info, changed };
+    return { from, update, previous, info, changed, maximum: source => states.get(source)?.root?.max ?? -Infinity };
 }
 export { createIndexedArrayApi };

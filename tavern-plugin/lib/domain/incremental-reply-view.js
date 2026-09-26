@@ -17,6 +17,7 @@ export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 
   const sourceIndex = createIndexedArrayApi({measure:value=>48+String(value).length*2})
   const rowIndex = createIndexedArrayApi({eligible:value=>Boolean(value),measure:value=>JSON.stringify(value).length*2,visit:onIndexVisit})
   const metadataIndex = createIndexedArrayApi({visit:onIndexVisit})
+  const targetIndex = createIndexedArrayApi({maximum:value=>value ?? -Infinity,visit:onIndexVisit})
   const projectionIndex = createImmutableOrderedJsonIndex({measure:value=>JSON.stringify(value).length*2,visit:onIndexVisit})
   function sourceKey(message) {
     if (!message) return JSON.stringify(message)
@@ -69,12 +70,13 @@ export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 
     }
     const rowEdits = new Map(), roleEdits = new Map(), beforeEdits = new Map()
     const at = (edits,values,id) => edits.has(id) ? edits.get(id) : values[id]
-    const projectionEdits = []
+    const projectionEdits = [], targetEdits = []
     const projectMessages = projectReplyHistory.prepare(options)
     for (const index of indices) {
       const message = messages[index]
       beforeEdits.set(index, index === 0 ? 1 : at(beforeEdits,before,index-1) + (at(roleEdits,roles,index-1) === 'user' ? 1 : 0))
       roleEdits.set(index,message?.role)
+      targetEdits.push([index,message?.role === 'assistant' ? Number(message.turn) || beforeEdits.get(index) : undefined])
       if (message?.role !== 'assistant') { rowEdits.set(index,null); projectionEdits.push([index,undefined]); continue }
       const turn = Math.max(0, Number(message.turn) || (message.greeting === true ? 1 : beforeEdits.get(index)))
       if (turn === 0) { rowEdits.set(index,null); projectionEdits.push([index,undefined]); continue }
@@ -88,21 +90,22 @@ export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 
     roles = metadataIndex.update(roles,[...roleEdits],messages.length)
     before = metadataIndex.update(before,[...beforeEdits],messages.length)
     const projections = compatible ? projectionIndex.update(previous.projections,projectionEdits) : projectionIndex.from(projectionEdits)
+    const targets = targetIndex.update(compatible ? previous.targets : [],targetEdits,messages.length)
     const hasStatusRules = (statusOptions.regexScripts || []).some(rule => rule && rule.disabled !== true && rule.enabled !== false && statusViewDeclaration(rule))
-    const status = hasStatusRules ? projectPersistentStatusView(messages, projections, statusOptions) : {projections,statusView:null,statusViews:[]}
+    const status = hasStatusRules ? projectPersistentStatusView(messages, projections, statusOptions, {latestTurn:Math.max(1,targetIndex.maximum(targets))}) : {projections,statusView:null,statusViews:[]}
     const latest = rowIndex.previous(rows,rows.length)
     const result = freezeJson({ ...status, presentation: null, latestSourceBacked: rows[latest]?.latestSourceBacked || false })
     const sources = compatible
       ? sourceIndex.update(previous.sources,indices.map(id=>[id,sourceKey(messages[id])]),messages.length)
       : sourceIndex.from(messages.map(sourceKey))
     const resultSize = hasStatusRules ? JSON.stringify(result).length*2 : projectionIndex.info(projections).bytes + 256
-    const size = rowIndex.info(rows).bytes + metadataIndex.info(roles).bytes + metadataIndex.info(before).bytes + resultSize + 512 + sourceIndex.info(sources).bytes
+    const size = targetIndex.info(targets).bytes + rowIndex.info(rows).bytes + metadataIndex.info(roles).bytes + metadataIndex.info(before).bytes + resultSize + 512 + sourceIndex.info(sources).bytes
     if (Number.isSafeInteger(revision) && size <= maxBytes && maxEntries > 0 && !(cache.get(chat.id)?.revision > revision)) {
       if (cache.has(chat.id)) { bytes -= cache.get(chat.id).size; cache.delete(chat.id) }
       while (cache.size && (bytes + size > maxBytes || cache.size >= maxEntries)) {
         const oldest = cache.keys().next().value; bytes -= cache.get(oldest).size; cache.delete(oldest)
       }
-      cache.set(chat.id, {revision, signature, rows, roles, before, result, size, sources, projections}); bytes += size
+      cache.set(chat.id, {revision, signature, rows, roles, before, result, size, sources, projections, targets}); bytes += size
     }
     return output(result,shared)
   }
