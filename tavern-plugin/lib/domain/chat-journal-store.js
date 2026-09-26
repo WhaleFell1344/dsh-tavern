@@ -1,4 +1,5 @@
 import { createSessionMessageIndex } from './session-message-index.js'
+import { copyLazyHistoryHeader } from './lazy-history-read.js'
 import { Worker } from 'node:worker_threads'
 import { createScopedMessages } from './scoped-messages.js'
 import { createIndexedArrayApi } from './indexed-array.js'
@@ -610,7 +611,7 @@ export function createChatJournalStore(options = {}) {
       }
       return detached.get(index)
     })
-    const chat = copyJsonTree({...state.chat,messages:[]})
+    const chat = copyLazyHistoryHeader({...state.chat,messages:[]})
     chat.messages = messages
     return { ...changed, layoutChanged:knownChanges(chatId,state).filter(frame=>frame.revision>revision).some(frame=>frame.layoutChanged !== false), chat }
   }

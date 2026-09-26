@@ -1,5 +1,6 @@
 import { createMvuReceiptIndex } from './mvu-receipt-index.js'
 import { copyJsonTree } from './copy-json-tree.js'
+import { copyLazyHistoryHeader } from './lazy-history-read.js'
 import { rollbackAvailability, hasRollbackMessages, failedTurnReplayAvailability, foregroundSuppressedTurns, supersededRegenerationErrorTurns } from './rollback-surface.js'
 import { isRescuedHistoryMessage } from './chat-history-rescue.js'
 import { canUndoRollback } from './surface-restoration.js'
@@ -42,7 +43,7 @@ export function projectChatSessionState(chat, options = {}) {
       turn: saved.turn, foreground: { afterCount: saved.foreground?.afterCount }
     }
   }
-  if (options.messages) return {...copyJsonTree(selected),messages:options.messages}
+  if (options.messages) return {...copyLazyHistoryHeader(selected),messages:options.messages}
   selected.messages = (Array.isArray(chat.messages) ? chat.messages : []).map(projectSessionMessage)
   return copyJsonTree(selected)
 }

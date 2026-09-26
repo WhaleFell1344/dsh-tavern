@@ -654,13 +654,18 @@ export function createStoryTimeline(options = {}) {
     // Ordinary inspection only normalizes detached timeline metadata.
     const legacyBody = Object.values(object(source?.timeline?.operations)).some(operation =>
       operation && operation.kind === 'body' && operation.status === 'foreground-completed')
+    // Inspection needs only the count. Old checkpoint.before values can hold
+    // whole histories; normalization must not serialize those unused payloads.
+    const checkpoints = source?.timeline?.checkpoints
+    const checkpointCount = Number(source?.timeline?.schemaVersion) === 1 && Array.isArray(checkpoints) ? checkpoints.length : 0
     const chat = ensure(legacyBody ? source : {
-      timeline: source?.timeline, candidateAgent: source?.candidateAgent
+      timeline: source?.timeline ? {...source.timeline,checkpoints:[]} : source?.timeline,
+      candidateAgent: source?.candidateAgent
     })
     return clone({
       branchId: chat.timeline.branchId,
       revision: chat.timeline.revision,
-      checkpointCount: chat.timeline.checkpoints.length,
+      checkpointCount: legacyBody ? chat.timeline.checkpoints.length : checkpointCount,
       participants: chat.timeline.participants,
       operations: chat.timeline.operations
     })
