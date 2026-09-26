@@ -552,22 +552,24 @@ export function createChatJournalStore(options = {}) {
     const indices = new Set()
     let tail = Infinity
     let layoutChanged = false
+    let headerFields = new Set()
     for (const change of changes) {
-      if (!change.path.length) { tail = 0; layoutChanged = true; break }
-      if (change.path[0] !== 'messages') continue
+      if (!change.path.length) { tail = 0; layoutChanged = true; headerFields = null; break }
+      if (change.path[0] !== 'messages') { headerFields.add(String(change.path[0])); continue }
       if (change.path.length <= 2 || ['turn','role','greeting','tavernRole','importSource'].includes(change.path[2])) layoutChanged = true
       if (change.path.length > 1 && Number.isSafeInteger(change.path[1])) indices.add(change.path[1])
       else tail = Math.min(tail, change.op === 'splice' ? change.index : 0)
     }
-    const frames = previous.concat({baseRevision: revision - 1, revision, indices: [...indices], tail, layoutChanged})
+    const frames = previous.concat({baseRevision: revision - 1, revision, indices: [...indices], tail, layoutChanged, headerFields:headerFields && headerFields.size<=4096 ? [...headerFields] : null})
     if (frames.length <= 32) return frames
     const [first, second, ...rest] = frames
     const mergedTail = Math.min(first.tail, second.tail)
+    const mergedHeaderFields = first.headerFields && second.headerFields ? [...new Set([...first.headerFields,...second.headerFields])] : null
     const mergedIndices = [...new Set([...first.indices, ...second.indices])].filter(index => index < mergedTail)
     // Keep a conservative older summary plus exact recent frames. Bound the
     // summary too; eviction loses coverage and safely restores the full fallback.
     if (mergedIndices.length > 4096) return frames.slice(-32)
-    return [{baseRevision:first.baseRevision,revision:second.revision,indices:mergedIndices,tail:mergedTail,layoutChanged:first.layoutChanged || second.layoutChanged},...rest]
+    return [{baseRevision:first.baseRevision,revision:second.revision,indices:mergedIndices,tail:mergedTail,layoutChanged:first.layoutChanged || second.layoutChanged,headerFields:mergedHeaderFields && mergedHeaderFields.length<=4096 ? mergedHeaderFields : null},...rest]
   }
   function changedIndices(chatId, state, revision) {
     if (!state || !Number.isSafeInteger(revision) || revision < 0 || revision > state.revision) return undefined
@@ -613,7 +615,9 @@ export function createChatJournalStore(options = {}) {
     })
     const chat = copyLazyHistoryHeader({...state.chat,messages:[]})
     chat.messages = messages
-    return { ...changed, layoutChanged:knownChanges(chatId,state).filter(frame=>frame.revision>revision).some(frame=>frame.layoutChanged !== false), chat }
+    const headerFrames=knownChanges(chatId,state).filter(frame=>frame.revision>revision)
+    const changedHeaderFields=headerFrames.every(frame=>Array.isArray(frame.headerFields)) ? [...new Set(headerFrames.flatMap(frame=>frame.headerFields))] : null
+    return { ...changed, changedHeaderFields, layoutChanged:knownChanges(chatId,state).filter(frame=>frame.revision>revision).some(frame=>frame.layoutChanged !== false), chat }
   }
 
   /** Exact-version internal commit; stale callers must use their existing merge path. */

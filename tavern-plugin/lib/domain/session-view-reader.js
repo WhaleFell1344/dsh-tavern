@@ -48,7 +48,7 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
         if (delta?.baseRevision === cached.revision && delta.chat?.id === state.id
           && delta.revision === next.revision && identity(delta.chat).revision === next.revision
           && matches(cached, {...identity(delta.chat), resourceVersion: resources}) && canProjectDirty(cached.view, delta.chat, dirty)) {
-          return { chat: delta.chat, cached, dirty, layoutChanged:delta.layoutChanged, resourceVersion: resources }
+          return { chat: delta.chat, cached, dirty, layoutChanged:delta.layoutChanged, changedHeaderFields:delta.changedHeaderFields, resourceVersion: resources }
         }
       }
       const chat = await trace.stage('readFullChat', () => readChat(sessionId))
@@ -65,7 +65,7 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
     } else {
       const dirty = selected.dirty ?? (matches(cached, next) && cached.revision < next.revision ? await changes(chat, cached.revision) : null)
       if (matches(cached, next) && canProjectDirty(cached?.view, chat, dirty)) {
-        view = await trace.stage('projectViewDirty', () => project.dirty(chat, cached.view, dirty, currentActivity, {layoutChanged:selected.layoutChanged}))
+        view = await trace.stage('projectViewDirty', () => project.dirty(chat, cached.view, dirty, currentActivity, {layoutChanged:selected.layoutChanged,changedHeaderFields:selected.changedHeaderFields}))
         rebuild = 'dirty'
       } else {
         view = await project.full(chat, options)
