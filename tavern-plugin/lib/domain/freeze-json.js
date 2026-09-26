@@ -34,15 +34,18 @@ export function createImmutableOrderedJsonIndex(options) {
     const changes=index.changed(before,after)
     if(!changes)return null
     const dirty=new Set()
-    let shifted=after.length
-    for(const row of changes){
-      if(row.before===undefined || row.after===undefined){
-        shifted=Math.min(shifted,index.rank(before,row.key),index.rank(after,row.key))
-      }else dirty.add(index.rank(after,row.key))
+    let offset=0,previousEnd=0
+    // Between changed keys every retained row has the same rank offset. Once
+    // insertion and removal counts balance, the unchanged suffix needs no work.
+    for(const row of changes.sort((a,b)=>a.key<b.key?-1:a.key>b.key?1:0)){
+      const position=index.rank(after,row.key)
+      if(offset!==0)for(let i=previousEnd;i<position;i++)dirty.add(i)
+      if(row.after!==undefined)dirty.add(position)
+      if(row.before===undefined)offset++
+      if(row.after===undefined)offset--
+      previousEnd=position+(row.after===undefined?0:1)
     }
-    // Positional consumers must see shifted rows, but a tail append/truncation
-    // leaves the shared prefix untouched. Never scan that prefix for hashes.
-    for(let position=shifted;position<after.length;position++)dirty.add(position)
+    if(offset!==0)for(let i=previousEnd;i<after.length;i++)dirty.add(i)
     return [...dirty]
   }}
   const brand=value=>{immutable.add(value);indexedOwners.set(value,owner);return value}

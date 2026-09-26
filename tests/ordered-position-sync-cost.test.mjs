@@ -31,3 +31,35 @@ test('membership edits include shifted positions even when the total length is u
   assert.deepEqual(reconstructed,Array.from(next))
  }
 })
+
+for(const count of [20,400,10000])test(`balanced middle replacement does not inspect the ${count}-row suffix`,()=>{
+ let visits=0
+ const index=createImmutableOrderedJsonIndex({visit:()=>visits++})
+ const rows=index.from(Array.from({length:count},(_,i)=>[i*2,{turn:i+1,text:'body'+i}]))
+ const sync=createSessionViewSync(),first=sync('s',{replyProjections:rows})
+ const position=Math.floor(count/2)
+ const next=index.update(rows,[[position*2,undefined],[position*2+1,{turn:position+1,text:'replacement'}]])
+ visits=0
+ assert.deepEqual(immutableArrayChanges(rows,next),[position])
+ const delta=sync('s',{replyProjections:next},first.viewCursor).viewDelta
+ assert.ok(visits<500,`replacement visits: ${visits}`)
+ assert.deepEqual(delta.set.map(([path])=>path),[['replyProjections',position]])
+ assert.deepEqual(delta.remove,[])
+})
+
+test('position changes exactly cover deterministic mixed membership edits',()=>{
+ const index=createImmutableOrderedJsonIndex()
+ let seed=12345
+ function random(max){seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed%max}
+ for(let run=0;run<200;run++){
+  const source=new Map(Array.from({length:30},(_,i)=>[i*2,{id:i}]))
+  const before=index.from([...source]),edits=[]
+  for(let i=0;i<8;i++){
+   const key=random(65),value=random(3)===0?undefined:{run,i}
+   edits.push([key,value]);if(value===undefined)source.delete(key);else source.set(key,value)
+  }
+  const after=index.update(before,edits)
+  const expected=Array.from({length:after.length},(_,i)=>i).filter(i=>before[i]!==after[i])
+  assert.deepEqual(immutableArrayChanges(before,after).sort((a,b)=>a-b),expected)
+ }
+})
