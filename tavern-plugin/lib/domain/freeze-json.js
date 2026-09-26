@@ -90,8 +90,9 @@ export function createImmutableTurnFields({visit=()=>{}}={}) {
     if(state?.index!==index || !sets.every(([key])=>valid(String(key))) || !removes.every(key=>valid(String(key)))){
       const result={...source};for(const key of removes)delete result[key];for(const [key,value] of sets)result[key]=value;return from(result)
     }
-    const entries=removes.map(key=>[Number(key),undefined])
-    for(const [key,value] of sets){const old=index.get(state.rows,Number(key));if(!old || old.value!==value)entries.push([Number(key),{key:String(key),value:freezeJson(value)}])}
+    const removed=new Set(removes.map(String)),lastSets=new Map(sets.map(([key,value])=>[String(key),value]))
+    const entries=[...removed].map(key=>[Number(key),undefined])
+    for(const [key,value] of lastSets){const old=index.get(state.rows,Number(key));if(removed.has(key) || !old || old.value!==value)entries.push([Number(key),{key,value:freezeJson(value)}])}
     const rows=index.update(state.rows,entries);return rows===state.rows?source:wrap(rows)
   }
   return {from,update,bytes:value=>{const state=turnFieldStates.get(value);return state?.index===index?index.info(state.rows).bytes:JSON.stringify(value).length*2}}

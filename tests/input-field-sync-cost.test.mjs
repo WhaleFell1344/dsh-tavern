@@ -31,3 +31,11 @@ test('mutable inputs are reread; replacements, removals and new parents keep del
  assert.ok(fifth.viewDelta.remove.some(path=>path.length===1&&path[0]==='inputSources'))
  assert.ok(fifth.viewDelta.remove.some(path=>path[1]==='2'))
 })
+
+test('persistent field batches apply the last set after removals',async()=>{
+ const {createImmutableTurnFields}=await import('../tavern-plugin/lib/domain/freeze-json.js')
+ const fields=createImmutableTurnFields(),old=fields.from({'2':'original'})
+ assert.equal(fields.update(old,[['2','temporary'],['2','original']])['2'],'original')
+ assert.equal(fields.update(old,[['2','original']],['2'])['2'],'original')
+ assert.equal(old['2'],'original')
+})

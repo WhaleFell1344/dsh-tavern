@@ -16,6 +16,9 @@ test('view delta retains exact header field names through compacted change histo
  const delta=await store.readViewDelta('c',base)
  assert.deepEqual(new Set(delta.changedHeaderFields),new Set(['posture','runtimeInputs','_storageRevision']))
  assert.deepEqual(delta.indices,[])
+ assert.deepEqual(delta.runtimeInputChanges,[{key:'2',present:true,value:{source:'38'}}])
+ delta.runtimeInputChanges[0].value.source='mutated'
+ assert.equal((await store.read('c')).runtimeInputs['2'].source,'38')
  const before=chat._storageRevision
  chat=await store.patch('c',before,[{op:'set',path:['messages',0,'text'],value:'new'},{op:'set',path:['_storageRevision'],value:before+1}])
  const messageOnly=await store.readViewDelta('c',before)
@@ -26,4 +29,5 @@ test('view delta retains exact header field names through compacted change histo
  const complete=await store.read('c')
  await store.patch('c',prior,[{op:'set',path:[],value:{...complete,_storageRevision:prior+1,posture:'root replacement'}}])
  assert.equal((await store.readViewDelta('c',prior)).changedHeaderFields,null,'root replacement has no safe narrow header declaration')
+ assert.equal((await store.readViewDelta('c',prior)).runtimeInputChanges,null)
 })

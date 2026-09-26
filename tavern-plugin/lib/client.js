@@ -583,6 +583,20 @@ window.__ModuleLoader__.load({
 		        walk(left.root, right.root, 6, 0);
 		        return result;
 		    }
+		    function select(source, position) {
+		        const state=states.get(source);
+		        if(!state || !Number.isInteger(position) || position<0 || position>=(state.root?.eligible || 0))return -1;
+		        let node=state.root,id=0;
+		        for(let depth=6;depth>=0;depth--){
+		            visit();
+		            for(let digit=0;digit<32;digit++){
+		                const child=node.slots[digit],count=child?.eligible || 0;
+		                if(position<count){node=child;id+=digit*width(depth);break;}
+		                position-=count;
+		            }
+		        }
+		        return id;
+		    }
 		    function rank(source, exclusive) {
 		        const state=states.get(source);
 		        if(!state)throw new Error('Unindexed array');
@@ -601,7 +615,7 @@ window.__ModuleLoader__.load({
 		        return state && { length: state.length, complete: (state.root?.validCount || 0) === state.length, eligible: state.root?.eligible || 0,
 		            count: state.root?.count || 0, bytes: state.root?.bytes || 0 };
 		    }
-		    return { from, update, previous, rank, info, changed, maximum: source => states.get(source)?.root?.max ?? -Infinity };
+		    return { from, update, previous, rank, select, info, changed, maximum: source => states.get(source)?.root?.max ?? -Infinity };
 		}
 		// Persistent compressed radix tree over IEEE-754 numeric keys. At most sixteen
 		// nibble levels; insertion/removal never shifts a sorted array's suffix.

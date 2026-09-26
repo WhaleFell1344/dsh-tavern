@@ -1645,7 +1645,7 @@ export async function apply(ctx) {
     }
     return reused
   }
-  async function projectDirtySessionView(chat, previous, dirtyMessageIndices, activity, {layoutChanged,changedHeaderFields} = {}) {
+  async function projectDirtySessionView(chat, previous, dirtyMessageIndices, activity, {layoutChanged,changedHeaderFields,runtimeInputChanges} = {}) {
     const card = await readChatCard(chat)
     const mode = chat.mode || 'story'
     const previousMessages = previous.tavernHelper.messages
@@ -1654,7 +1654,7 @@ export async function apply(ctx) {
       posture: chat.posture || '',
       guides: Array.isArray(chat.guides) ? chat.guides : []
     })
-    Object.assign(next,inputFieldsProjection.project(chat,{baseRevision:changes.baseRevision,indices:dirtyMessageIndices,changedHeaderFields}))
+    Object.assign(next,inputFieldsProjection.project(chat,{baseRevision:changes.baseRevision,indices:dirtyMessageIndices,changedHeaderFields,runtimeInputChanges}))
     const helperCore = await requestPerformance.stage('helperMessagesProjection', () => projectTavernHelperContext(chat, {
       previousMessages, previousContext:previous.tavernHelper, indexed:true, layoutChanged,
       dirtyIndices: dirtyMessageIndices

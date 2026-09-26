@@ -4,10 +4,10 @@ import {createImmutableTurnFields} from './freeze-json.js'
 export function createInputFieldsProjection({maxEntries=8,maxBytes=8*1024*1024,onIndexVisit=()=>{}}={}){
   const cache=new Map(),roles=createIndexedArrayApi({eligible:role=>role==='user',visit:onIndexVisit}),fields=createImmutableTurnFields({visit:onIndexVisit})
   function displayOf(message){const value=message.tavernPluginData?.template_display;return value && value.source===(message.sourceText??message.text) && value.swipe===(message.swipeId||0)?{value:value.html}:null}
-  function project(chat,{baseRevision,indices,changedHeaderFields}={}){
+  function project(chat,{baseRevision,indices,changedHeaderFields,runtimeInputChanges}={}){
     const previous=cache.get(chat.id),messages=Array.isArray(chat.messages)?chat.messages:[]
     const dirty=indices && [...indices]
-    let reuse=previous && previous.revision===baseRevision && Array.isArray(changedHeaderFields) && !changedHeaderFields.includes('runtimeInputs')
+    let reuse=previous && previous.revision===baseRevision && Array.isArray(changedHeaderFields) && (!changedHeaderFields.includes('runtimeInputs') || Array.isArray(runtimeInputChanges))
       && dirty && dirty.every(id=>Number.isSafeInteger(id)&&id>=0&&id<messages.length&&(id>=previous.roles.length || previous.roles[id]===messages[id]?.role))
     let sources,displays,roleRows,runtimeSources
     if(reuse){
@@ -17,6 +17,14 @@ export function createInputFieldsProjection({maxEntries=8,maxBytes=8*1024*1024,o
       roleRows=appended.length || messages.length<previous.roles.length?roles.update(previous.roles,appended,messages.length):previous.roles
       runtimeSources=previous.runtimeSources
       const sourceSets=[],sourceRemoves=[],displaySets=[],displayRemoves=[]
+      if(changedHeaderFields.includes('runtimeInputs')){
+        for(const entry of runtimeInputChanges){
+          const key=String(entry.key)
+          if(entry.present)sourceSets.push([key,String((entry.value && entry.value.source)??'')]);else sourceRemoves.push(key)
+          if(/^(0|[1-9]\d*)$/.test(key) && Number(key)>=2){const id=roles.select(roleRows,Number(key)-2);if(id>=0)positions.add(id)}
+        }
+        runtimeSources=fields.update(runtimeSources,sourceSets,sourceRemoves)
+      }
       for(let turn=roles.info(roleRows).eligible+2;turn<=roles.info(previous.roles).eligible+1;turn++){
         const key=String(turn);displayRemoves.push(key)
         if(Object.hasOwn(runtimeSources,key))sourceSets.push([key,runtimeSources[key]])
