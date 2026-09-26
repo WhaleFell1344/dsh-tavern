@@ -4,6 +4,7 @@ function createSessionViewReader(maxSessions = 4) {
   const index = createSessionViewReader.indexApi ||= createIndexedArrayApi();
   const receiptLookup = createSessionViewReader.receiptLookup ||= createTurnLookup(index,createSessionViewReader.onReceiptLookupVisit);
   const ordered = typeof createOrderedNumericIndex === "function" ? (createSessionViewReader.receiptOrderedIndex ||= createOrderedNumericIndex()) : null;
+  const turnFields = ordered ? (createSessionViewReader.turnFields ||= createTurnFieldIndex()) : null;
   const projectionLookup = createSessionViewReader.projectionLookup ||= createTurnLookup(index);
   const storyTurnLookup = createSessionViewReader.storyTurnLookup ||= createStoryTurnLookup();
   let sequence = 0;
@@ -51,6 +52,16 @@ function createSessionViewReader(maxSessions = 4) {
               && projectionRemovals.every(path => Number.isSafeInteger(path[1]))
               && projectionEdits.every(([path]) => path[1] === "length" || Number.isSafeInteger(path[1]));
 
+            const fieldUpdates = new Map();
+            for (const field of ["inputSources", "inputTemplateDisplays"]) {
+              const source = base.view?.[field];
+              const sets = delta.set.filter(([path]) => path[0] === field);
+              const removes = delta.remove.filter(path => path[0] === field);
+              if (turnFields?.has(source) && sets.every(([path]) => path.length === 2 && turnFields.validKey(path[1]))
+                && removes.every(path => path.length === 2 && turnFields.validKey(path[1]))) {
+                fieldUpdates.set(field, turnFields.update(source, sets.map(([path,value]) => [path[1],value]), removes.map(path => path[1])));
+              }
+            }
             function parent(path) {
               let target = view;
               for (let i = 0; i < path.length - 1; i++) {
@@ -67,14 +78,17 @@ function createSessionViewReader(maxSessions = 4) {
             }
             // Remove old descendants before replacing a parent with null or a new object.
             for (const path of result.viewDelta.remove.slice().sort((a, b) => b.length - a.length)) {
+              if (fieldUpdates.has(path[0])) continue;
               if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path) || incrementalProjections && projectionPath(path)) continue;
               const target = parent(path), key = path[path.length - 1];
               if (!(Array.isArray(target) && key === "length")) delete target[key];
             }
             for (const [path, value] of result.viewDelta.set) {
+              if (fieldUpdates.has(path[0])) continue;
               if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path) || incrementalProjections && projectionPath(path)) continue;
               parent(path)[path[path.length - 1]] = value;
             }
+            for (const [field, value] of fieldUpdates) view[field] = value;
             if (result.viewDelta.receiptDelta) {
               if (!ordered?.info(base.view?.mvuReceipts)) throw new Error("回执增量缺少基线，请重新读取");
               const delta = result.viewDelta.receiptDelta;
@@ -121,6 +135,10 @@ function createSessionViewReader(maxSessions = 4) {
         if (Array.isArray(view?.replyProjections)) {
           if (!index.info(view.replyProjections)) view = {...view,replyProjections:index.from(view.replyProjections)};
           projectionLookup.remember(view.replyProjections);
+        }
+        if (turnFields) for (const field of ["inputSources", "inputTemplateDisplays"]) {
+          const value = turnFields.from(view?.[field]);
+          if (value !== view?.[field]) view = {...view, [field]: value};
         }
         storyTurnLookup.remember(view?.regeneratedDshTurns);
         const latest = sessions.get(sessionId);
@@ -214,4 +232,42 @@ function createStoryTurnLookup() {
     has:source=>versions.has(source),
     read(source,turn) { const key=Number(turn),turns=versions.get(source);return turns.has(key)?turns.get(key):key; }
   };
+}
+
+// Canonical array-index keys retain ordinary object enumeration order. Legacy
+// non-turn keys use the original object path instead of changing its semantics.
+function createTurnFieldIndex() {
+  const index = createOrderedNumericIndex({visit: () => createSessionViewReader.onTurnFieldVisit?.()});
+  const states = new WeakMap();
+  const validKey = key => /^(0|[1-9]\d*)$/.test(String(key)) && Number(key) < 0xffffffff;
+  function wrap(rows) {
+    const target = {};
+    const lookup = key => validKey(key) ? index.get(rows, Number(key)) : undefined;
+    const value = new Proxy(target, {
+      get: (object,key,receiver) => { const row = lookup(key); return row ? row.value : Reflect.get(object,key,receiver); },
+      has: (object,key) => Boolean(lookup(key)) || Reflect.has(object,key),
+      ownKeys: () => rows.map(row => row.key),
+      getOwnPropertyDescriptor: (object,key) => {
+        const row = lookup(key);
+        return row ? {value:row.value,enumerable:true,configurable:true,writable:false} : Reflect.getOwnPropertyDescriptor(object,key);
+      },
+      set() { throw new Error("Turn fields are immutable"); },
+      defineProperty() { throw new Error("Turn fields are immutable"); },
+      deleteProperty() { throw new Error("Turn fields are immutable"); }
+    });
+    states.set(value,rows);return value;
+  }
+  function from(source) {
+    if (!source || typeof source !== "object" || Array.isArray(source) || states.has(source)) return source;
+    const keys = Reflect.ownKeys(source);
+    if (!keys.every(key => typeof key === "string" && validKey(key))) return source;
+    return wrap(index.from(keys.map(key => [Number(key),{key,value:source[key]}])));
+  }
+  function update(source,sets,removes) {
+    if (!sets.length && !removes.length) return source;
+    const entries = removes.map(key => [Number(key),undefined]);
+    for (const [key,value] of sets) entries.push([Number(key),{key:String(key),value}]);
+    return wrap(index.update(states.get(source),entries));
+  }
+  return {from,update,validKey,has:source => states.has(source)};
 }
