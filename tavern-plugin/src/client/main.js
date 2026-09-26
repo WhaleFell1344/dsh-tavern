@@ -504,8 +504,9 @@ window.__ModuleLoader__.load({
 
         // @include modules/history-viewport.js
 
-		function useLiveTavernView(sessionId, revision) {
-			const subscribe = React.useCallback(function (notify) { return liveTavernView.subscribe(sessionId, notify); }, [sessionId]);
+		function useLiveTavernView(sessionId, revision, paths) {
+            const dependencyKey = JSON.stringify(paths);
+			const subscribe = React.useCallback(function (notify) { return liveTavernView.subscribe(sessionId, notify, paths); }, [sessionId, dependencyKey]);
 			const snapshot = React.useCallback(function () { return liveTavernView.getSnapshot(sessionId); }, [sessionId]);
 			const state = React.useSyncExternalStore(subscribe, snapshot, snapshot);
 			const previous = React.useRef({ sessionId: sessionId, revision: revision });
@@ -5947,9 +5948,9 @@ window.__ModuleLoader__.load({
 					error || state && state.error ? React.createElement("span", { role: "alert", className: "dsh-tavern-settings-error" }, error || state.error) : null
 				);
 			}
-			function tavernAssistantViewPaths() {
-				return ["mode", "regeneratedDshTurns", "replyProjections", "tavernHelper",
-					"tavernRuntimePolicy", "settlementTurn", "activity", "releaseCapabilities", "statusBarPlacement"].map(field => [field]);
+			function tavernAssistantViewPaths(turn) {
+				return ["mode", "regeneratedDshTurns", "tavernHelper",
+					"tavernRuntimePolicy", "settlementTurn", "activity", "releaseCapabilities", "statusBarPlacement"].map(field => [field]).concat([["$projectionTurn", String(turn)], ["$projectionLatestTurn", String(turn)]]);
 			}
 			function TavernTurnMvuReceipt(props) {
 				const subscribe = React.useCallback(notify => liveTavernView.subscribe(props.sessionId, notify,
@@ -5970,8 +5971,9 @@ window.__ModuleLoader__.load({
 				const turn = turnRef ? Number(turnRef.turn) : 0;
 				const settled = data.status !== "running";
 				const revision = String(data.status || "") + ":" + String(data.finalNode && data.finalNode.seq || "");
-				const liveState = useScopedLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths());
-				const storyTurn = tavernStoryTurnForDshTurn(liveState.view, turn);
+				const mapping = useScopedLiveTavernView(props.sessionId, revision, [["regeneratedDshTurns"]]);
+				const storyTurn = tavernStoryTurnForDshTurn(mapping.view, turn);
+				const liveState = useLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths(storyTurn));
 				const sessionTransitioning = React.useSyncExternalStore(tavernSessionTransition.subscribe, tavernSessionTransition.getSnapshot, tavernSessionTransition.getSnapshot);
 					const projection = settled ? tavernProjectionForTurn(liveState.view, storyTurn) : null;
 					const latestProjectionTurn = tavernLatestProjectionTurn(liveState.view);

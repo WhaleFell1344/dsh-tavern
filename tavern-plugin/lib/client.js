@@ -750,7 +750,7 @@ window.__ModuleLoader__.load({
 		      cursor: base && base.cursor,
 		      receiptSync: ordered ? 1 : undefined,
 		      accept(result) {
-		        let view = result.view;
+		        let view = result.view, projectionChanges = null;
 		        if (result.viewDelta) {
 		          if (!base || result.viewDelta.baseCursor !== base.cursor) throw new Error("会话增量已过期，请重新读取");
 		          const delta = result.viewDelta;
@@ -844,6 +844,11 @@ window.__ModuleLoader__.load({
 		              if (projectionRemovals.some(path => path[1] < length)) throw new Error("Invalid sparse projection delta");
 		              view.replyProjections = entries.length || length!==old.length ? index.update(old,entries,length) : old;
 		              projectionLookup.remember(view.replyProjections,old,entries);
+		              const turns = new Set();
+		              for (const [id, row] of entries) { turns.add(Number(old[id]?.turn)); turns.add(Number(row?.turn)); }
+		              for (let id = length; id < old.length; id++) turns.add(Number(old[id]?.turn));
+		              projectionChanges = { turns: [...turns].filter(turn => !Number.isNaN(turn)),
+		                beforeLatest: projectionLookup.max(old), afterLatest: projectionLookup.max(view.replyProjections) };
 		            }
 		            if (incrementalMessages) {
 		              const old = base.view.tavernHelper.messages;
@@ -882,7 +887,7 @@ window.__ModuleLoader__.load({
 		          sessions.set(sessionId, { view, cursor: result.viewCursor, sequence: requestSequence });
 		          while (sessions.size > maxSessions) sessions.delete(sessions.keys().next().value);
 		        }
-		        return Object.assign({}, result, { view, viewBase: result.viewDelta ? base.view : undefined });
+		        return Object.assign({}, result, { view, viewBase: result.viewDelta ? base.view : undefined, projectionChanges });
 		      }
 		    };
 		  };
@@ -1332,6 +1337,15 @@ window.__ModuleLoader__.load({
 					&& record.state.phase === state.phase && record.state.error === state.error) {
 					const delta = result.viewDelta;
 					const paths = delta.set.map(entry => entry[0]).concat(delta.remove);
+					if (paths.some(path => path[0] === "replyProjections")) {
+						const change = result.projectionChanges;
+						if (change) {
+							for (const turn of change.turns) paths.push(["$projectionTurn", String(turn)]);
+							if (change.beforeLatest !== change.afterLatest) {
+								paths.push(["$projectionLatestTurn", String(change.beforeLatest)], ["$projectionLatestTurn", String(change.afterLatest)]);
+							}
+						} else paths.push(["$projectionTurn"], ["$projectionLatestTurn"]);
+					}
 					// Virtual turn dependencies are separate from positional array paths.
 					// Legacy/whole-array edits cannot prove turn locality and invalidate all.
 					if (paths.some(path => path[0] === "mvuReceipts")) paths.push(["$mvuReceiptTurn"]);
@@ -1351,6 +1365,7 @@ window.__ModuleLoader__.load({
 					const paths = [];
 					for (const key of keys) if (Object.prototype.hasOwnProperty.call(before, key) !== Object.prototype.hasOwnProperty.call(after, key)
 						|| !Object.is(before[key], after[key])) paths.push([key]);
+					if (paths.some(path => path[0] === "replyProjections")) paths.push(["$projectionTurn"], ["$projectionLatestTurn"]);
 					if (paths.some(path => path[0] === "mvuReceipts")) paths.push(["$mvuReceiptTurn"]);
 					listeners = affected(record.paths, paths);
 				}
@@ -1851,8 +1866,9 @@ window.__ModuleLoader__.load({
                 ) : null);
         }
 
-		function useLiveTavernView(sessionId, revision) {
-			const subscribe = React.useCallback(function (notify) { return liveTavernView.subscribe(sessionId, notify); }, [sessionId]);
+		function useLiveTavernView(sessionId, revision, paths) {
+            const dependencyKey = JSON.stringify(paths);
+			const subscribe = React.useCallback(function (notify) { return liveTavernView.subscribe(sessionId, notify, paths); }, [sessionId, dependencyKey]);
 			const snapshot = React.useCallback(function () { return liveTavernView.getSnapshot(sessionId); }, [sessionId]);
 			const state = React.useSyncExternalStore(subscribe, snapshot, snapshot);
 			const previous = React.useRef({ sessionId: sessionId, revision: revision });
@@ -8701,9 +8717,9 @@ window.__ModuleLoader__.load({
 					error || state && state.error ? React.createElement("span", { role: "alert", className: "dsh-tavern-settings-error" }, error || state.error) : null
 				);
 			}
-			function tavernAssistantViewPaths() {
-				return ["mode", "regeneratedDshTurns", "replyProjections", "tavernHelper",
-					"tavernRuntimePolicy", "settlementTurn", "activity", "releaseCapabilities", "statusBarPlacement"].map(field => [field]);
+			function tavernAssistantViewPaths(turn) {
+				return ["mode", "regeneratedDshTurns", "tavernHelper",
+					"tavernRuntimePolicy", "settlementTurn", "activity", "releaseCapabilities", "statusBarPlacement"].map(field => [field]).concat([["$projectionTurn", String(turn)], ["$projectionLatestTurn", String(turn)]]);
 			}
 			function TavernTurnMvuReceipt(props) {
 				const subscribe = React.useCallback(notify => liveTavernView.subscribe(props.sessionId, notify,
@@ -8724,8 +8740,9 @@ window.__ModuleLoader__.load({
 				const turn = turnRef ? Number(turnRef.turn) : 0;
 				const settled = data.status !== "running";
 				const revision = String(data.status || "") + ":" + String(data.finalNode && data.finalNode.seq || "");
-				const liveState = useScopedLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths());
-				const storyTurn = tavernStoryTurnForDshTurn(liveState.view, turn);
+				const mapping = useScopedLiveTavernView(props.sessionId, revision, [["regeneratedDshTurns"]]);
+				const storyTurn = tavernStoryTurnForDshTurn(mapping.view, turn);
+				const liveState = useLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths(storyTurn));
 				const sessionTransitioning = React.useSyncExternalStore(tavernSessionTransition.subscribe, tavernSessionTransition.getSnapshot, tavernSessionTransition.getSnapshot);
 					const projection = settled ? tavernProjectionForTurn(liveState.view, storyTurn) : null;
 					const latestProjectionTurn = tavernLatestProjectionTurn(liveState.view);

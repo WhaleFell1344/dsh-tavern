@@ -15,7 +15,7 @@ function createSessionViewReader(maxSessions = 4) {
       cursor: base && base.cursor,
       receiptSync: ordered ? 1 : undefined,
       accept(result) {
-        let view = result.view;
+        let view = result.view, projectionChanges = null;
         if (result.viewDelta) {
           if (!base || result.viewDelta.baseCursor !== base.cursor) throw new Error("会话增量已过期，请重新读取");
           const delta = result.viewDelta;
@@ -109,6 +109,11 @@ function createSessionViewReader(maxSessions = 4) {
               if (projectionRemovals.some(path => path[1] < length)) throw new Error("Invalid sparse projection delta");
               view.replyProjections = entries.length || length!==old.length ? index.update(old,entries,length) : old;
               projectionLookup.remember(view.replyProjections,old,entries);
+              const turns = new Set();
+              for (const [id, row] of entries) { turns.add(Number(old[id]?.turn)); turns.add(Number(row?.turn)); }
+              for (let id = length; id < old.length; id++) turns.add(Number(old[id]?.turn));
+              projectionChanges = { turns: [...turns].filter(turn => !Number.isNaN(turn)),
+                beforeLatest: projectionLookup.max(old), afterLatest: projectionLookup.max(view.replyProjections) };
             }
             if (incrementalMessages) {
               const old = base.view.tavernHelper.messages;
@@ -147,7 +152,7 @@ function createSessionViewReader(maxSessions = 4) {
           sessions.set(sessionId, { view, cursor: result.viewCursor, sequence: requestSequence });
           while (sessions.size > maxSessions) sessions.delete(sessions.keys().next().value);
         }
-        return Object.assign({}, result, { view, viewBase: result.viewDelta ? base.view : undefined });
+        return Object.assign({}, result, { view, viewBase: result.viewDelta ? base.view : undefined, projectionChanges });
       }
     };
   };

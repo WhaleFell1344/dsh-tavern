@@ -110,7 +110,7 @@ test('shared replacement routing preserves missing versus undefined and mutable 
 for(const count of [20,400,10000])test(`assistant field subscriptions exclude input and debug updates across ${count} floors`,()=>{
  const h=harness()
  const main=fs.readFileSync(new URL('../tavern-plugin/src/client/main.js',import.meta.url),'utf8')
- const paths=vm.runInContext(main.slice(main.indexOf('function tavernAssistantViewPaths()'),main.indexOf('function TavernInlineStatusRuntime('))+';tavernAssistantViewPaths()',h)
+ const paths=vm.runInContext(main.slice(main.indexOf('function tavernAssistantViewPaths('),main.indexOf('function TavernInlineStatusRuntime('))+';tavernAssistantViewPaths()',h)
  const live=h.createLiveTavernViewModule({deduplicateViews:true,pollWhileBusy:false,schedule(){},cancel(){},load:async()=>({})})
  let view={mode:'story',replyProjections:[],tavernHelper:{variables:{hp:10}},inputSources:{}}
  live.setView('s',view)
@@ -125,7 +125,7 @@ for(const count of [20,400,10000])test(`assistant field subscriptions exclude in
  view={...view,tavernHelper:{variables:{hp:9}}};live.setView('s',view)
  assert.equal(notices,count,'arbitrary script dependencies must remain live')
  const assistant=main.slice(main.indexOf('function TavernAssistantNodeView('),main.indexOf('function TavernForkAssistantAction('))
- assert.match(assistant,/useScopedLiveTavernView\(props.sessionId, revision, tavernAssistantViewPaths\(\)\)/)
+ assert.match(assistant,/useLiveTavernView\(props.sessionId, revision, tavernAssistantViewPaths\(storyTurn\)\)/)
  assert.match(assistant,/React.createElement\(TavernInlineStatusRuntime,/)
 })
 
@@ -151,4 +151,29 @@ for(const count of [20,400,10000])test(`keyed receipt delta wakes only its turn 
  assert.equal(notices.reduce((a,b)=>a+b),count+2)
  live.setView('s',{mvuReceipts:[{turn:3,receipt:{status:'error'}}]})
  assert.equal(notices.reduce((a,b)=>a+b),2*count+2)
+})
+
+for(const count of [20,400,10000])test(`projection edits and newest ownership route by story turn across ${count} floors`,async()=>{
+ const h=harness(),begin=h.createSessionViewReader(),jobs=[]
+ let cursor='base',seq=0,sets=[],remove=[]
+ const first=begin('s').accept({viewCursor:cursor,view:{replyProjections:Array.from({length:count},(_,turn)=>({turn:turn+1,version:2,parts:[]}))}}).view
+ const live=h.createLiveTavernViewModule({deduplicateViews:true,pollWhileBusy:false,schedule:run=>{jobs.push(run);return jobs.length},cancel(){},load:async()=>{
+  const next=String(++seq),result=begin('s').accept({viewCursor:next,viewDelta:{baseCursor:cursor,set:sets,remove}});cursor=next;return result
+ }})
+ live.setView('s',first)
+ const notices=new Map()
+ for(let turn=1;turn<=count+1;turn++)live.subscribe('s',()=>notices.set(turn,(notices.get(turn)||0)+1),[['$projectionTurn',String(turn)],['$projectionLatestTurn',String(turn)]])
+ notices.clear()
+ async function run(edits,removed=[]){sets=edits;remove=removed;if(!jobs.length)live.invalidate('s');jobs.shift()();await new Promise(resolve=>setImmediate(resolve))}
+ await run([[['replyProjections',2],{turn:3,version:2,parts:[{text:'edited'}]}]])
+ assert.deepEqual([...notices.keys()],[3]);notices.clear()
+ await run([[['replyProjections',count],{turn:count+1,version:2,parts:[]}],[['replyProjections','length'],count+1]])
+ assert.deepEqual([...notices.keys()].sort((a,b)=>a-b),[count,count+1]);notices.clear()
+ await run([[['replyProjections','length'],count]],[['replyProjections',count]])
+ assert.deepEqual([...notices.keys()].sort((a,b)=>a-b),[count,count+1]);notices.clear()
+ // Reassigning an existing row must invalidate both old and new turn identities.
+ await run([[['replyProjections',2],{turn:4,version:2,parts:[]}]])
+ assert.deepEqual([...notices.keys()].sort((a,b)=>a-b),[3,4]);notices.clear()
+ await run([[['replyProjections'],[]]])
+ assert.equal(notices.size,count+1)
 })

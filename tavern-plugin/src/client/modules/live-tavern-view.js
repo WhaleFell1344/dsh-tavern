@@ -66,6 +66,15 @@ function createLiveTavernViewModule(options) {
 			&& record.state.phase === state.phase && record.state.error === state.error) {
 			const delta = result.viewDelta;
 			const paths = delta.set.map(entry => entry[0]).concat(delta.remove);
+			if (paths.some(path => path[0] === "replyProjections")) {
+				const change = result.projectionChanges;
+				if (change) {
+					for (const turn of change.turns) paths.push(["$projectionTurn", String(turn)]);
+					if (change.beforeLatest !== change.afterLatest) {
+						paths.push(["$projectionLatestTurn", String(change.beforeLatest)], ["$projectionLatestTurn", String(change.afterLatest)]);
+					}
+				} else paths.push(["$projectionTurn"], ["$projectionLatestTurn"]);
+			}
 			// Virtual turn dependencies are separate from positional array paths.
 			// Legacy/whole-array edits cannot prove turn locality and invalidate all.
 			if (paths.some(path => path[0] === "mvuReceipts")) paths.push(["$mvuReceiptTurn"]);
@@ -85,6 +94,7 @@ function createLiveTavernViewModule(options) {
 			const paths = [];
 			for (const key of keys) if (Object.prototype.hasOwnProperty.call(before, key) !== Object.prototype.hasOwnProperty.call(after, key)
 				|| !Object.is(before[key], after[key])) paths.push([key]);
+			if (paths.some(path => path[0] === "replyProjections")) paths.push(["$projectionTurn"], ["$projectionLatestTurn"]);
 			if (paths.some(path => path[0] === "mvuReceipts")) paths.push(["$mvuReceiptTurn"]);
 			listeners = affected(record.paths, paths);
 		}
