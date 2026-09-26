@@ -125,7 +125,7 @@ for(const count of [20,400,10000])test(`assistant field subscriptions exclude in
  view={...view,tavernHelper:{variables:{hp:9}}};live.setView('s',view)
  assert.equal(notices,count,'arbitrary script dependencies must remain live')
  const assistant=main.slice(main.indexOf('function TavernAssistantNodeView('),main.indexOf('function TavernForkAssistantAction('))
- assert.match(assistant,/useLiveTavernView\(props.sessionId, revision, tavernAssistantViewPaths\(storyTurn\)\)/)
+ assert.match(assistant,/useLiveTavernView\(props.sessionId, revision, tavernAssistantViewPaths\(storyTurn,/)
  assert.match(assistant,/React.createElement\(TavernInlineStatusRuntime,/)
 })
 
@@ -205,4 +205,31 @@ for(const count of [20,400,10000])test(`regeneration mapping updates only old an
  await run([[['regeneratedDshTurns'],{'legacy':101,'2':101}]])
  assert.equal(notices.size,count)
  assert.equal(lookup.read(live.getSnapshot('s').view.regeneratedDshTurns,101),2,'noncanonical keys retain ordinary object order')
+})
+
+for(const count of [20,400,10000])test(`Helper value updates only wake the eager floor among ${count} assistant floors`,()=>{
+ const h=harness(),main=fs.readFileSync(new URL('../tavern-plugin/src/client/main.js',import.meta.url),'utf8')
+ const paths=vm.runInContext(main.slice(main.indexOf('function tavernAssistantViewPaths('),main.indexOf('function TavernTurnMvuReceipt('))+';tavernAssistantViewPaths',h)
+ const live=h.createLiveTavernViewModule({deduplicateViews:true,pollWhileBusy:false,schedule(){},cancel(){},load:async()=>({})})
+ let view={tavernHelper:{version:1},replyProjections:[]}
+ live.setView('s',view)
+ let notices=0
+ for(let turn=1;turn<=count;turn++)live.subscribe('s',()=>notices++,paths(turn,turn===count))
+ notices=0
+ view={...view,tavernHelper:{version:2}};live.setView('s',view)
+ assert.equal(notices,1)
+ view={...view,tavernHelper:null};live.setView('s',view)
+ assert.equal(notices,count+1,'Helper availability changes affect frame document identity')
+ view={...view,tavernHelper:{version:3}};live.setView('s',view)
+ assert.equal(notices,2*count+1)
+})
+
+test('deferred retained frames read Helper context at activation',()=>{
+ let mounted
+ const current={version:2},stale={version:1}
+ const React={useRef:()=>({current:null}),useState:()=>[true,()=>{}],useSyncExternalStore:()=>[],useEffect(){},useLayoutEffect:run=>run(),createElement:()=>null}
+ const h=vm.createContext({React,tavernPanelRegistry:{},tavernRetainedFrames:{key:()=> 'frame',mount:props=>{mounted=props;return {update(){},detach(){}}}}})
+ vm.runInContext(fs.readFileSync(new URL('../tavern-plugin/src/client/modules/retained-message-frames.js',import.meta.url),'utf8'),h)
+ h.TavernRetainedMessageFrame({sessionId:'s',turn:1,partIndex:0,content:'<p>hello</p>',helperContext:stale,helperContextReader:()=>current})
+ assert.equal(mounted.helperContext,current)
 })

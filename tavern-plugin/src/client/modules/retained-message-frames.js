@@ -141,7 +141,11 @@ function TavernRetainedMessageFrame(props) {
     }, [activated, props.eager]);
     React.useLayoutEffect(function () {
         if (!activated) return;
-        const mounted = tavernRetainedFrames.mount(frameProps, home.current);
+        // Deferred historical frames take their frozen baseline when activated.
+        // Their parent need not receive every intervening Helper update.
+        const initialProps = props.helperContextReader
+            ? Object.assign({}, frameProps, { helperContext: props.helperContextReader() }) : frameProps;
+        const mounted = tavernRetainedFrames.mount(initialProps, home.current);
         lease.current = mounted;
         return function () { lease.current = null; mounted.detach(); };
     }, [activated, key]);

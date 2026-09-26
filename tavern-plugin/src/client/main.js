@@ -5598,7 +5598,7 @@ window.__ModuleLoader__.load({
 			return parts.map(function (part, index) {
 				if (part.kind === "markdown") return h(TavernColoredMarkdown, { key: index, text: String(part.text || ""), streaming: options.streaming, labels: { code: options.codeLabels, footnotes: "脚注" }, codeLabels: options.codeLabels, fileMentions: options.mentions });
 				const content = String(part.content !== undefined ? part.content : part.html || "");
-				return h(TavernMessageFrame, { key: index, content: content, sessionId: options.sessionId, turn: options.turn, partIndex: index, frameOwner: options.frameOwner, helperContext: options.helperContext, openingPreview: options.openingPreview, onSelectOpening: options.onSelectOpening, onSubmitOpening: options.onSubmitOpening, trustedCardMode: options.trustedCardMode, eager: options.eagerFrame, executeSlash: options.executeSlash });
+				return h(TavernMessageFrame, { key: index, content: content, sessionId: options.sessionId, turn: options.turn, partIndex: index, frameOwner: options.frameOwner, helperContext: options.helperContext, helperContextReader: options.helperContextReader, openingPreview: options.openingPreview, onSelectOpening: options.onSelectOpening, onSubmitOpening: options.onSubmitOpening, trustedCardMode: options.trustedCardMode, eager: options.eagerFrame, executeSlash: options.executeSlash });
 			});
 		}
 
@@ -5622,7 +5622,7 @@ window.__ModuleLoader__.load({
 				if (block.kind === "text") {
 					if (input.projection && projected) continue;
 					const projection = input.projection;
-					if (projection) rendered.push(h(React.Fragment, { key: index }, renderTavernProjection(projection, { streaming: input.streaming, codeLabels: codeLabels, mentions: input.mentions, sessionId: input.sessionId, turn: input.turn, helperContext: input.helperContext, trustedCardMode: input.trustedCardMode, eagerFrame: input.eagerFrame, frameOwner: input.frameOwner, executeSlash: input.executeSlash })));
+					if (projection) rendered.push(h(React.Fragment, { key: index }, renderTavernProjection(projection, { streaming: input.streaming, codeLabels: codeLabels, mentions: input.mentions, sessionId: input.sessionId, turn: input.turn, helperContext: input.helperContext, helperContextReader: input.helperContextReader, trustedCardMode: input.trustedCardMode, eagerFrame: input.eagerFrame, frameOwner: input.frameOwner, executeSlash: input.executeSlash })));
 					else rendered.push(h(TavernColoredMarkdown, { key: index, text: String(block.text || ""), streaming: input.streaming, labels: { code: codeLabels, footnotes: "脚注" }, codeLabels: codeLabels, fileMentions: input.mentions }));
 					projected = true;
 					continue;
@@ -5641,7 +5641,7 @@ window.__ModuleLoader__.load({
 				if (block.kind !== "tool-call") rendered.push(h(DshUi.JsonBlock, { key: index, label: translate("message.unknownBlock"), payload: block.block || block, truncatedLabel: function (total) { return translate("json.truncated", { total: total }); } }));
 			}
 			if (input.projection && !projected) {
-				rendered.push(h(React.Fragment, { key: "projection" }, renderTavernProjection(input.projection, { streaming: false, codeLabels: codeLabels, mentions: input.mentions, sessionId: input.sessionId, turn: input.turn, helperContext: input.helperContext, trustedCardMode: input.trustedCardMode, eagerFrame: input.eagerFrame, frameOwner: input.frameOwner, executeSlash: input.executeSlash })));
+				rendered.push(h(React.Fragment, { key: "projection" }, renderTavernProjection(input.projection, { streaming: false, codeLabels: codeLabels, mentions: input.mentions, sessionId: input.sessionId, turn: input.turn, helperContext: input.helperContext, helperContextReader: input.helperContextReader, trustedCardMode: input.trustedCardMode, eagerFrame: input.eagerFrame, frameOwner: input.frameOwner, executeSlash: input.executeSlash })));
 			}
 			if (input.interrupted) rendered.push(h("span", { key: "stopped", className: "dsh-tavern-assistant-stopped" }, translate("message.stopped")));
 			return rendered;
@@ -5948,8 +5948,8 @@ window.__ModuleLoader__.load({
 					error || state && state.error ? React.createElement("span", { role: "alert", className: "dsh-tavern-settings-error" }, error || state.error) : null
 				);
 			}
-			function tavernAssistantViewPaths(turn) {
-				return ["mode", "tavernHelper",
+			function tavernAssistantViewPaths(turn, eager = true) {
+				return ["mode", eager ? "tavernHelper" : "$helperAvailable",
 					"tavernRuntimePolicy", "settlementTurn", "activity", "releaseCapabilities", "statusBarPlacement"].map(field => [field]).concat([["$projectionTurn", String(turn)], ["$projectionLatestTurn", String(turn)]]);
 			}
 			function TavernTurnMvuReceipt(props) {
@@ -5973,7 +5973,8 @@ window.__ModuleLoader__.load({
 				const revision = String(data.status || "") + ":" + String(data.finalNode && data.finalNode.seq || "");
 				const mapping = useLiveTavernView(props.sessionId, revision, [["$storyHostTurn", String(turn)]]);
 				const storyTurn = tavernStoryTurnForDshTurn(mapping.view, turn);
-				const liveState = useLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths(storyTurn));
+				const currentView = liveTavernView.getSnapshot(props.sessionId).view;
+                const liveState = useLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths(storyTurn, storyTurn > 0 && storyTurn === tavernLatestProjectionTurn(currentView)));
 				const sessionTransitioning = React.useSyncExternalStore(tavernSessionTransition.subscribe, tavernSessionTransition.getSnapshot, tavernSessionTransition.getSnapshot);
 					const projection = settled ? tavernProjectionForTurn(liveState.view, storyTurn) : null;
 					const latestProjectionTurn = tavernLatestProjectionTurn(liveState.view);
@@ -5989,6 +5990,7 @@ window.__ModuleLoader__.load({
 					interrupted: data.status === "interrupted",
 					projection: projection,
 					helperContext: liveState.view && liveState.view.tavernHelper,
+                    helperContextReader: () => liveTavernView.getSnapshot(props.sessionId).view?.tavernHelper,
 					trustedCardMode: Boolean(liveState.view && liveState.view.tavernRuntimePolicy && liveState.view.tavernRuntimePolicy.trustedCardMode),
 					frameOwner: props.frameOwner,
                     eagerFrame: storyTurn > 0 && storyTurn === latestProjectionTurn,
