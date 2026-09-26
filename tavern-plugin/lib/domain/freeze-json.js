@@ -30,7 +30,7 @@ export function immutableArrayChanges(before,after) {
 
 export function createImmutableOrderedJsonIndex(options) {
   const index=createOrderedNumericIndex(options)
-  const owner={changed(before,after){
+  const owner={ordered:index,changed(before,after){
     if(index.info(before)?.count!==index.info(after)?.count)return null
     const changes=index.changed(before,after)
     if(!changes || changes.some(row=>row.before===undefined || row.after===undefined))return null
@@ -41,4 +41,13 @@ export function createImmutableOrderedJsonIndex(options) {
     from(entries){return brand(index.from(entries.map(([key,value])=>[key,freezeJson(value)])))},
     update(source,entries){return brand(index.update(source,entries.map(([key,value])=>[key,freezeJson(value)])))}
   }
+}
+
+export function isImmutableOrderedArray(value) {
+  const info=indexedOwners.get(value)?.ordered?.info(value)
+  return Boolean(info && info.unsafe===0)
+}
+export function immutableOrderedChanges(before,after) {
+  const owner=indexedOwners.get(after)
+  return owner?.ordered && owner===indexedOwners.get(before) ? owner.ordered.changed(before,after) : null
 }

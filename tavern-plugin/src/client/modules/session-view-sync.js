@@ -3,12 +3,14 @@ function createSessionViewReader(maxSessions = 4) {
   const sessions = new Map();
   const index = createSessionViewReader.indexApi ||= createIndexedArrayApi();
   const receiptLookup = createSessionViewReader.receiptLookup ||= createReceiptTurnLookup(index,createSessionViewReader.onReceiptLookupVisit);
+  const ordered = typeof createOrderedNumericIndex === "function" ? (createSessionViewReader.receiptOrderedIndex ||= createOrderedNumericIndex()) : null;
   let sequence = 0;
   return function begin(sessionId) {
     const base = sessions.get(sessionId);
     const requestSequence = ++sequence;
     return {
       cursor: base && base.cursor,
+      receiptSync: ordered ? 1 : undefined,
       accept(result) {
         let view = result.view;
         if (result.viewDelta) {
@@ -27,7 +29,7 @@ function createSessionViewReader(maxSessions = 4) {
           const receiptPath = path => path[0] === "mvuReceipts" && path.length === 2;
           const receiptEdits = result.viewDelta.set.filter(([path]) => receiptPath(path));
           const receiptRemovals = result.viewDelta.remove.filter(receiptPath);
-          const incrementalReceipts = Array.isArray(base.view?.mvuReceipts)
+          const incrementalReceipts = !result.viewDelta.receiptDelta && !ordered?.info(base.view?.mvuReceipts) && Array.isArray(base.view?.mvuReceipts)
             && !result.viewDelta.set.some(([path]) => path[0] === "mvuReceipts" && path.length < 2)
             && !result.viewDelta.remove.some(path => path[0] === "mvuReceipts" && path.length < 2)
             && receiptRemovals.every(path => Number.isSafeInteger(path[1]))
@@ -57,6 +59,11 @@ function createSessionViewReader(maxSessions = 4) {
             if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path)) continue;
             parent(path)[path[path.length - 1]] = value;
           }
+          if (result.viewDelta.receiptDelta) {
+            if (!ordered?.info(base.view?.mvuReceipts)) throw new Error("回执增量缺少基线，请重新读取");
+            const delta = result.viewDelta.receiptDelta;
+            view.mvuReceipts = ordered.update(base.view.mvuReceipts,[...delta.remove.map(turn=>[turn,undefined]),...delta.set.map(row=>[row.turn,row])]);
+          }
           if (incrementalReceipts) {
             const old = base.view.mvuReceipts;
             const length = receiptEdits.find(([path]) => path[1] === "length")?.[1] ?? old.length;
@@ -78,8 +85,13 @@ function createSessionViewReader(maxSessions = 4) {
           view = {...view,tavernHelper:{...view.tavernHelper,messages:index.from(view.tavernHelper.messages)}};
         }
         if (Array.isArray(view?.mvuReceipts)) {
-          view = {...view,mvuReceipts:index.from(view.mvuReceipts)};
-          receiptLookup.remember(view.mvuReceipts);
+          if (result.receiptSync===1) {
+            if (!ordered) throw new Error("当前客户端不支持回执索引");
+            view = {...view,mvuReceipts:ordered.from(view.mvuReceipts.map(row=>[row.turn,row]))};
+          } else if (!ordered?.info(view.mvuReceipts)) {
+            view = {...view,mvuReceipts:index.from(view.mvuReceipts)};
+            receiptLookup.remember(view.mvuReceipts);
+          }
         }
         const latest = sessions.get(sessionId);
         if (!latest || latest.sequence < requestSequence) {

@@ -1,6 +1,6 @@
 // Persistent compressed radix tree over IEEE-754 numeric keys. At most sixteen
 // nibble levels; insertion/removal never shifts a sorted array's suffix.
-export function createOrderedNumericIndex({visit=()=>{},measure=()=>0}={}) {
+function createOrderedNumericIndex({visit=()=>{},measure=()=>0}={}) {
   const states=new WeakMap(),buffer=new DataView(new ArrayBuffer(8))
   function digits(key) {
     if(typeof key!=='number' || Number.isNaN(key))throw new Error('Invalid ordered numeric key')
@@ -11,11 +11,11 @@ export function createOrderedNumericIndex({visit=()=>{},measure=()=>0}={}) {
     for(const word of [high,low])for(let shift=28;shift>=0;shift-=4)result.push((word>>>shift)&15)
     return result
   }
-  const leaf=(key,value)=>({key,value,count:1,bytes:48+measure(value)})
+  const leaf=(key,value)=>({key:key===0?0:key,value,count:1,bytes:48+measure(value),unsafe:Number.isFinite(key)?0:1})
   function branch(depth,key,slots){
-    let count=0,bytes=160,children=0,last
-    for(const item of slots)if(item){count+=item.count;bytes+=item.bytes;children++;last=item}
-    return children===0?undefined:children===1?last:{depth,key,slots,count,bytes}
+    let count=0,bytes=160,unsafe=0,children=0,last
+    for(const item of slots)if(item){count+=item.count;bytes+=item.bytes;unsafe+=item.unsafe;children++;last=item}
+    return children===0?undefined:children===1?last:{depth,key,slots,count,bytes,unsafe}
   }
   function put(node,path,key,value,mutable=false) {
     visit()
@@ -75,17 +75,27 @@ export function createOrderedNumericIndex({visit=()=>{},measure=()=>0}={}) {
   function changed(before,after){
     if(!states.has(before)||!states.has(after))return null
     const result=[]
-    function collect(node,rows){if(!node)return;if(node.slots){for(const child of node.slots)collect(child,rows)}else rows.set(node.key,node.value)}
+    function emit(node,removed){
+      if(!node)return
+      visit()
+      if(node.slots){for(const child of node.slots)emit(child,removed)}
+      else result.push({key:node.key,before:removed?node.value:undefined,after:removed?undefined:node.value})
+    }
     function walk(left,right){
       visit();if(left===right)return
-      if(left?.slots && right?.slots && left.depth===right.depth && digits(left.key).slice(0,left.depth).join()===digits(right.key).slice(0,right.depth).join()){
-        for(let id=0;id<16;id++)if(left.slots[id]!==right.slots[id])walk(left.slots[id],right.slots[id]);return
-      }
-      if(left && right && !left.slots && !right.slots && left.key===right.key){result.push({key:right.key,before:left.value,after:right.value});return}
-      const a=new Map(),b=new Map();collect(left,a);collect(right,b)
-      for(const key of new Set([...a.keys(),...b.keys()]))if(a.get(key)!==b.get(key))result.push({key,before:a.get(key),after:b.get(key)})
+      if(!left || !right){emit(left||right,Boolean(left));return}
+      const a=digits(left.key),b=digits(right.key),ld=left.slots?left.depth:16,rd=right.slots?right.depth:16
+      for(let i=0;i<Math.min(ld,rd);i++)if(a[i]!==b[i]){emit(left,true);emit(right,false);return}
+      if(ld===16 && rd===16){result.push({key:right.key,before:left.value,after:right.value});return}
+      if(ld===rd){for(let id=0;id<16;id++)if(left.slots[id]!==right.slots[id])walk(left.slots[id],right.slots[id]);return}
+      // Compression can promote a shared child to root. Align by prefix before
+      // descending, so removing a sibling never enumerates that shared subtree.
+      if(ld<rd){for(let id=0;id<16;id++)if(left.slots[id] || id===b[ld])walk(left.slots[id],id===b[ld]?right:undefined)}
+      else {for(let id=0;id<16;id++)if(right.slots[id] || id===a[rd])walk(id===a[rd]?left:undefined,right.slots[id])}
     }
     walk(states.get(before),states.get(after));return result
   }
-  return {from,update,get,rank,changed,info:source=>states.has(source)?{count:states.get(source)?.count||0,bytes:states.get(source)?.bytes||0}:null}
+  return {from,update,get,rank,changed,info:source=>states.has(source)?{count:states.get(source)?.count||0,bytes:states.get(source)?.bytes||0,unsafe:states.get(source)?.unsafe||0}:null}
 }
+
+export { createOrderedNumericIndex };

@@ -93,7 +93,7 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
     if (args.viewSync !== 1) return { view: result.view }
     const dirtyMessageIndices = result.chat && previous?.sessionId === String(sessionId)
       && Number.isSafeInteger(previous.revision) ? await changes(result.chat, previous.revision) : null
-    return synchronize(String(sessionId), result.view, args.viewCursor, { revision: result.revision, dirtyMessageIndices })
+    return synchronize(String(sessionId), result.view, args.viewCursor, { revision: result.revision, dirtyMessageIndices, receiptSync:args.receiptSync })
   }
   return Object.freeze({ read, response })
 }

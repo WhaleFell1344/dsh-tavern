@@ -32,3 +32,18 @@ test('compressed numeric index preserves order, rank, deletion, diff and old roo
  assert.throws(()=>{source[0]={}},/immutable/)
  assert.throws(()=>index.from([[NaN,{}]]),/Invalid/)
 })
+
+test('compressed-tree differences align promoted roots and batches without visiting shared history',()=>{
+ let visits=0
+ const index=createOrderedNumericIndex({visit:()=>visits++})
+ const rows=Array.from({length:10000},(_,id)=>[id+1,{id}])
+ const before=index.from(rows)
+ const after=index.update(before,[[1,undefined],[10001,{id:10000}],[5000,{id:'changed'}]])
+ visits=0
+ const changes=index.changed(before,after)
+ assert.ok(visits<128,`${visits} diff visits`)
+ assert.deepEqual(changes.map(row=>row.key).sort((a,b)=>a-b),[1,5000,10001])
+ assert.equal(changes.find(row=>row.key===1).after,undefined)
+ assert.equal(changes.find(row=>row.key===10001).before,undefined)
+ assert.equal(before[0].id,0)
+})

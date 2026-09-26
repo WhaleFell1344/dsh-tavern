@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createIndexedArrayApi } from './indexed-array.js'
-import { isImmutableJson, immutableArrayChanges } from './freeze-json.js'
+import { isImmutableJson, immutableArrayChanges, isImmutableOrderedArray, immutableOrderedChanges } from './freeze-json.js'
 
 // Reader cursors retain fingerprints only; never retain another full chat snapshot.
 export function createSessionViewSync({ maxReaders = 32 } = {}) {
@@ -13,7 +13,7 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
     if (isImmutableJson(value)) immutableHashes.set(value,hash)
     return hash
   }
-  function parts(view) {
+  function parts(view, keyedReceipts) {
     const result = new Map()
     function add(path, value) {
       if (value === undefined) return
@@ -21,6 +21,7 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
       result.set(key, { path, value, hash: hashValue(value) })
     }
     for (const [key, value] of Object.entries(view || {})) {
+      if(keyedReceipts && key==='mvuReceipts')continue
       if (['replyProjections','mvuReceipts'].includes(key) && Array.isArray(value)) {
         add([key, 'length'], value.length)
         // Row hashes are retained separately, like Helper messages.
@@ -41,16 +42,19 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
     if (view === null) return { view: null, viewCursor: null }
     const previous = readers.get(cursor)
     const dirtyMessageIndices = options.dirtyMessageIndices instanceof Set ? options.dirtyMessageIndices : null
-    const base = previous?.sessionId === sessionId ? previous : null
-    const current = parts(view)
+    let base = previous?.sessionId === sessionId ? previous : null
+    const keyedReceipts=options.receiptSync===1 && isImmutableOrderedArray(view?.mvuReceipts)
+    const keyedChanges=keyedReceipts && base?.receiptSync ? immutableOrderedChanges(base.receiptSource?.deref(),view.mvuReceipts) : null
+    if(Boolean(base?.receiptSync)!==keyedReceipts || keyedReceipts && base && !keyedChanges)base=null
+    const current = parts(view,keyedReceipts)
     const messages = view?.tavernHelper?.messages, replies = view?.replyProjections
     const receipts=view?.mvuReceipts
-    const receiptChanges=immutableArrayChanges(base?.receiptSource?.deref(),receipts)
+    const receiptChanges=keyedReceipts ? null : immutableArrayChanges(base?.receiptSource?.deref(),receipts)
     const sameReplies = isImmutableJson(replies) && base?.replySource?.deref() === replies
     const arrays = [
       {path:['tavernHelper','messages'],value:messages,previous:base?.messageHashes,dirty:dirtyMessageIndices},
       {path:['replyProjections'],value:replies,previous:base?.replyHashes,dirty:sameReplies ? new Set() : null},
-      {path:['mvuReceipts'],value:receipts,previous:base?.receiptHashes,dirty:receiptChanges ? new Set(receiptChanges) : null}
+      ...keyedReceipts ? [] : [{path:['mvuReceipts'],value:receipts,previous:base?.receiptHashes,dirty:receiptChanges ? new Set(receiptChanges) : null}]
     ]
     const messageSet = [], messageRemove = []
     for (const field of arrays) {
@@ -80,13 +84,14 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
       hashes,
       messageHashes: arrays[0].next,
       replyHashes: arrays[1].next,
-      receiptHashes: arrays[2].next,
+      receiptHashes: arrays[2]?.next,
+      receiptSync: keyedReceipts,
       receiptSource: isImmutableJson(receipts) ? new WeakRef(receipts) : undefined,
       replySource: isImmutableJson(replies) ? new WeakRef(replies) : undefined,
       revision: Number.isSafeInteger(options.revision) ? options.revision : previous?.revision
     })
     while (readers.size > maxReaders) readers.delete(readers.keys().next().value)
-    if (!previous || previous.sessionId !== sessionId) return { view, viewCursor: nextCursor }
+    if (!base) return { view, viewCursor: nextCursor, ...(keyedReceipts ? {receiptSync:1} : {}) }
     const set = [], remove = messageRemove
     for (const [key, item] of current) {
       if (previous.hashes.get(key) === item.hash) continue
@@ -94,7 +99,7 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
     }
     for (const key of previous.hashes.keys()) if (!current.has(key)) remove.push(JSON.parse(key))
     for (const entry of messageSet) set.push(entry)
-    return { viewCursor: nextCursor, viewDelta: { baseCursor: cursor, set, remove } }
+    return { viewCursor: nextCursor, viewDelta: { baseCursor: cursor, set, remove, ...(keyedReceipts ? {receiptDelta:{set:keyedChanges.filter(row=>row.after!==undefined).map(row=>row.after),remove:keyedChanges.filter(row=>row.after===undefined).map(row=>row.key)}} : {}) } }
   }
   synchronize.peek = function peek(cursor) {
     return readers.get(cursor) || null

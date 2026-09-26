@@ -172,6 +172,7 @@ window.__ModuleLoader__.load({
 		}
 
 		// @include-domain indexed-array.js
+		// @include-domain ordered-numeric-index.js
 		// @include modules/session-view-sync.js
 		const beginSessionViewRead = createSessionViewReader();
 
@@ -191,7 +192,7 @@ window.__ModuleLoader__.load({
 			if (trace) payload._traceId = trace.id;
 			if (sessionId) payload.sessionId = sessionId;
 			const viewRead = method === "getSession" ? beginSessionViewRead(payload.sessionId) : null;
-			if (viewRead) { payload.viewSync = 1; payload.viewCursor = viewRead.cursor; }
+			if (viewRead) { payload.viewSync = 1; payload.viewCursor = viewRead.cursor; if (viewRead.receiptSync) payload.receiptSync = 1; }
 			const requestBody = JSON.stringify(payload);
 			if (trace) {
 				try { trace.requestBytes = typeof TextEncoder === "function" ? new TextEncoder().encode(requestBody).length : requestBody.length; }
@@ -5447,6 +5448,8 @@ window.__ModuleLoader__.load({
 
 		function tavernMvuReceiptForTurn(view, turn) {
 			const receipts = view && Array.isArray(view.mvuReceipts) ? view.mvuReceipts : [];
+			const ordered = createSessionViewReader.receiptOrderedIndex;
+			if (ordered?.info(receipts)) return Number.isNaN(Number(turn)) ? null : ordered.get(receipts,Number(turn))?.receipt || null;
 			const lookup = createSessionViewReader.receiptLookup;
 			if (lookup?.has(receipts)) return lookup.read(receipts, turn);
 			for (let index = receipts.length - 1; index >= 0; index -= 1) {
