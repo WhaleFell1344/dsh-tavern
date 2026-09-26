@@ -1,3 +1,4 @@
+import { createStatusSourceIndex } from './status-source-index.js'
 import { statusViewDeclaration } from './status-view-declaration.js'
 import { createIndexedArrayApi } from './indexed-array.js'
 import { createImmutableJsonIndex, immutableArrayChanges } from './freeze-json.js'
@@ -5,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { applyTavernRegexText } from './tavern-regex-display.js'
 import { projectDisplayParts, resolveDisplayIdentityMacros } from './reply-presentation.js'
 
+const sourceIndex = createStatusSourceIndex()
 const matchIndex = createIndexedArrayApi({eligible:row=>Boolean(row?.origin),maximum:row=>row?.legacy?1:0,measure:row=>JSON.stringify([row.origin,row.content,[...row.removed]]).length*2})
 const fallbackIndex = createIndexedArrayApi({eligible:row=>Boolean(row),measure:row=>JSON.stringify(row).length*2})
 const filteredIndex = createImmutableJsonIndex({measure:row=>JSON.stringify(row).length*2})
@@ -26,6 +28,7 @@ function projectStatusView(messages, projections, options, compile, summary) {
   }
   const templates = new Map()
   const prior = summary?.previous
+  let legacySources = prior?.legacySources ? sourceIndex.update(prior.legacySources,sourceMessages,summary.messageIndices) : null
   const changes = prior ? immutableArrayChanges(prior.source,sourceProjections) : null
   const matchStates = new Map(), fallbackStates = new Map()
   let legacy = false
@@ -33,8 +36,8 @@ function projectStatusView(messages, projections, options, compile, summary) {
   const enabled = rules.filter(rule => rule && rule.disabled !== true && rule.enabled !== false)
   function legacyMatches(part, projection, rule) {
     if (!Number.isInteger(part.statusRule)) return false
-    const message = sourceMessages.find(message => message.role === 'assistant' && (Number(message.turn) || 1) === projection.turn)
-    const source = String(message?.sourceText ?? message?.text ?? '')
+    legacySources ||= sourceIndex.update(null,sourceMessages)
+    const source = sourceIndex.get(legacySources,projection.turn)
     // Old captures have only an array index. Recover solely when the original
     // source names exactly one status declaration; never guess from MVU reads.
     const candidates = enabled.filter(candidate => statusViewDeclaration(candidate) && applyTavernRegexText(source, [candidate], { placement: 2, isMarkdown: true, depth: 0 }).changed)
@@ -132,8 +135,8 @@ function projectStatusView(messages, projections, options, compile, summary) {
   const filtered=incremental ? filteredIndex.update(prior.filtered,changes.map(id=>[id,filter(sourceProjections[id],id)]),sourceProjections.length)
     : summary ? filteredIndex.from(sourceProjections.map(filter)) : sourceProjections.map(filter)
   if(summary){
-    summary.next={source:sourceProjections,matches:matchStates,filtered,contentSignature,legacy,fallbacks:fallbackStates}
-    summary.filteredBytes=[...fallbackStates.values()].reduce((size,state)=>size+fallbackIndex.info(state.openings).bytes+fallbackIndex.info(state.receipts).bytes,0) + filteredIndex.info(filtered).bytes + matchedRows.reduce((size,rows)=>size+matchIndex.info(rows).bytes,0)
+    summary.next={source:sourceProjections,matches:matchStates,filtered,contentSignature,legacy,fallbacks:fallbackStates,legacySources}
+    summary.filteredBytes=(legacySources?sourceIndex.bytes(legacySources):0) + [...fallbackStates.values()].reduce((size,state)=>size+fallbackIndex.info(state.openings).bytes+fallbackIndex.info(state.receipts).bytes,0) + filteredIndex.info(filtered).bytes + matchedRows.reduce((size,rows)=>size+matchIndex.info(rows).bytes,0)
   }
   return {
     projections: filtered,
