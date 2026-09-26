@@ -12,7 +12,7 @@ function displayDependencies(options) {
 }
 
 // Derived, disposable state only. The journal remains the authority for changed indices.
-export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 1024, maxEntries = 4, onIndexVisit = () => {}, onStatusMatch = () => {}, onStatusFilter = () => {} } = {}) {
+export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 1024, maxEntries = 4, onIndexVisit = () => {}, onStatusMatch = () => {}, onStatusFilter = () => {}, onStatusFallback = () => {} } = {}) {
   const cache = new Map()
   const sourceIndex = createIndexedArrayApi({measure:value=>48+String(value).length*2})
   const rowIndex = createIndexedArrayApi({eligible:value=>Boolean(value),measure:value=>JSON.stringify(value).length*2,visit:onIndexVisit})
@@ -92,7 +92,7 @@ export function createIncrementalReplyView({ readChanges, maxBytes = 8 * 1024 * 
     const projections = compatible ? projectionIndex.update(previous.projections,projectionEdits) : projectionIndex.from(projectionEdits)
     const targets = targetIndex.update(compatible ? previous.targets : [],targetEdits,messages.length)
     const hasStatusRules = (statusOptions.regexScripts || []).some(rule => rule && rule.disabled !== true && rule.enabled !== false && statusViewDeclaration(rule))
-    const statusSummary={latestTurn:Math.max(1,targetIndex.maximum(targets)),previous:compatible?previous.statusState:undefined,onMatch:onStatusMatch,onFilter:onStatusFilter}
+    const statusSummary={latestTurn:Math.max(1,targetIndex.maximum(targets)),previous:compatible?previous.statusState:undefined,onMatch:onStatusMatch,onFilter:onStatusFilter,onFallback:onStatusFallback,messageIndices:compatible?indices:undefined}
     const status = hasStatusRules ? projectPersistentStatusView(messages, projections, statusOptions, statusSummary) : {projections,statusView:null,statusViews:[]}
     const latest = rowIndex.previous(rows,rows.length)
     const result = freezeJson({ ...status, presentation: null, latestSourceBacked: rows[latest]?.latestSourceBacked || false })

@@ -6,6 +6,7 @@ import { applyTavernRegexText } from './tavern-regex-display.js'
 import { projectDisplayParts, resolveDisplayIdentityMacros } from './reply-presentation.js'
 
 const matchIndex = createIndexedArrayApi({eligible:row=>Boolean(row?.origin),maximum:row=>row?.legacy?1:0,measure:row=>JSON.stringify([row.origin,row.content,[...row.removed]]).length*2})
+const fallbackIndex = createIndexedArrayApi({eligible:row=>Boolean(row),measure:row=>JSON.stringify(row).length*2})
 const filteredIndex = createImmutableJsonIndex({measure:row=>JSON.stringify(row).length*2})
 
 function contentOf(part) {
@@ -26,7 +27,7 @@ function projectStatusView(messages, projections, options, compile, summary) {
   const templates = new Map()
   const prior = summary?.previous
   const changes = prior ? immutableArrayChanges(prior.source,sourceProjections) : null
-  const matchStates = new Map()
+  const matchStates = new Map(), fallbackStates = new Map()
   let legacy = false
   const rules = Array.isArray(options.regexScripts) ? options.regexScripts : []
   const enabled = rules.filter(rule => rule && rule.disabled !== true && rule.enabled !== false)
@@ -74,23 +75,37 @@ function projectStatusView(messages, projections, options, compile, summary) {
         // Captured dynamic templates retain the latest matching source output.
         if (/<%|&lt;%/.test(String(rule.replaceString)) || /\$\d+|\$<[^>]+>|\{\{match\}\}/i.test(String(rule.replaceString))) templateContent=candidates[last].content
       }
-      if (!origin && !/<%|&lt;%|\$\d+|\$<[^>]+>|\{\{match\}\}/i.test(String(rule.replaceString))) {
-        // Template synchronization can remove the rendered marker before the
-        // browser's sidebar capture arrives. The authored opening declaration
-        // remains authority; panel lifetime must not depend on that receipt.
-        for (const message of sourceMessages) {
-          if (message.role !== 'assistant' || message.greeting !== true) continue
-          const source = String(message.sourceText ?? message.text ?? '')
-          if (applyTavernRegexText(source, [rule], { placement: 2, isMarkdown: true, isEdit: false, depth: 0 }).changed) {
-            origin = { sourceTurn: Number(message.turn) || 1, sourcePartIndex: 0 }
-          }
-        }
+      const staticTemplate = !/<%|&lt;%|\$\d+|\$<[^>]+>|\{\{match\}\}/i.test(String(rule.replaceString))
+      function opening(message) {
+        if (!staticTemplate || message?.role !== 'assistant' || message.greeting !== true) return null
+        const source=String(message.sourceText ?? message.text ?? '')
+        return applyTavernRegexText(source,[rule],{placement:2,isMarkdown:true,isEdit:false,depth:0}).changed
+          ? {sourceTurn:Number(message.turn)||1,sourcePartIndex:0} : null
       }
-      if (!origin) {
-        for (const message of sourceMessages) {
-          const frame = message.displayRuntime?.frames?.find(frame => frame.placement === 'sidebar' && (frame.panelId === viewId || frame.panelId === 'status-' + revision))
-          if (frame) origin = { sourceTurn: Number(message.turn) || 1, sourcePartIndex: Number(frame.partIndex) || 0 }
+      function receipt(message) {
+        const frame=message?.displayRuntime?.frames?.find(frame=>frame.placement==='sidebar' && (frame.panelId===viewId || frame.panelId==='status-'+revision))
+        return frame ? {sourceTurn:Number(message.turn)||1,sourcePartIndex:Number(frame.partIndex)||0} : null
+      }
+      if(summary){
+        const old=prior?.fallbacks?.get(matchKey)
+        const incremental=old && Array.isArray(summary.messageIndices)
+        const ids=incremental ? summary.messageIndices : Array.from({length:sourceMessages.length},(_,id)=>id)
+        const openings=[],receipts=[]
+        for(const id of ids){
+          summary.onFallback?.()
+          const message=sourceMessages[id]
+          openings.push([id,opening(message)]);receipts.push([id,receipt(message)])
         }
+        const state={
+          openings:fallbackIndex.update(incremental?old.openings:[],openings,sourceMessages.length),
+          receipts:fallbackIndex.update(incremental?old.receipts:[],receipts,sourceMessages.length)
+        }
+        fallbackStates.set(matchKey,state)
+        // Authored opening declarations outrank retained sidebar receipts.
+        if(!origin)origin=state.openings[fallbackIndex.previous(state.openings,state.openings.length)] || state.receipts[fallbackIndex.previous(state.receipts,state.receipts.length)] || null
+      }else{
+        if(!origin)for(const message of sourceMessages)origin=opening(message)||origin
+        if(!origin)for(const message of sourceMessages)origin=receipt(message)||origin
       }
       if (latestTurn <= 1 && !origin) continue
       templates.set(revision, {
@@ -117,8 +132,8 @@ function projectStatusView(messages, projections, options, compile, summary) {
   const filtered=incremental ? filteredIndex.update(prior.filtered,changes.map(id=>[id,filter(sourceProjections[id],id)]),sourceProjections.length)
     : summary ? filteredIndex.from(sourceProjections.map(filter)) : sourceProjections.map(filter)
   if(summary){
-    summary.next={source:sourceProjections,matches:matchStates,filtered,contentSignature,legacy}
-    summary.filteredBytes=filteredIndex.info(filtered).bytes + matchedRows.reduce((size,rows)=>size+matchIndex.info(rows).bytes,0)
+    summary.next={source:sourceProjections,matches:matchStates,filtered,contentSignature,legacy,fallbacks:fallbackStates}
+    summary.filteredBytes=[...fallbackStates.values()].reduce((size,state)=>size+fallbackIndex.info(state.openings).bytes+fallbackIndex.info(state.receipts).bytes,0) + filteredIndex.info(filtered).bytes + matchedRows.reduce((size,rows)=>size+matchIndex.info(rows).bytes,0)
   }
   return {
     projections: filtered,
