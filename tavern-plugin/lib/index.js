@@ -803,7 +803,7 @@ export async function apply(ctx) {
       readIndex,
       writeIndex,
       readChat,
-      readChatState: chatPersistence.readSessionState,
+      readChatState: id => chatPersistence.readSessionState(id, {scoped:true}),
       readBackgroundConfig: chatPersistence.readBackgroundConfig,
       readSceneImageState: chatPersistence.readSceneImageState,
       writeChat: rawWriteChat,
@@ -1650,7 +1650,7 @@ export async function apply(ctx) {
 
   async function projectCachedSessionView(chat, previous, activity) {
     const mode = chat.mode || 'story'
-    const reused = Object.assign({}, previous, volatileSessionViewFields(chat, activity, {baseRevision:chat._storageRevision,indices:[]}))
+    const reused = Object.assign({}, previous, volatileSessionViewFields(chat, activity, {baseRevision:chat._storageRevision,indices:[],layoutChanged:false}))
     if (mode === 'script') {
       reused.scriptProgress = await requestPerformance.stage('scriptProgress', async () => {
         const script = await readScript(chat.cardPath)
@@ -1665,7 +1665,7 @@ export async function apply(ctx) {
     const card = await readChatCard(chat)
     const mode = chat.mode || 'story'
     const previousMessages = previous.tavernHelper.messages
-    const changes = {baseRevision:previous.tavernHelper.stateRevision,indices:[...dirtyMessageIndices]}
+    const changes = {baseRevision:previous.tavernHelper.stateRevision,indices:[...dirtyMessageIndices],layoutChanged}
     const next = Object.assign({}, previous, volatileSessionViewFields(chat, activity, changes), {
       posture: chat.posture || '',
       guides: Array.isArray(chat.guides) ? chat.guides : []

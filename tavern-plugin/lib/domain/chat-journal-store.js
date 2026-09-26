@@ -1,3 +1,4 @@
+import { createSessionMessageIndex } from './session-message-index.js'
 import { Worker } from 'node:worker_threads'
 import { createScopedMessages } from './scoped-messages.js'
 import { createIndexedArrayApi } from './indexed-array.js'
@@ -135,6 +136,7 @@ export function createChatJournalStore(options = {}) {
   const pendingReads = new Map()
   const sizes = new WeakMap()
   let cachedBytes = 0
+  const sessionMessages = createSessionMessageIndex()
   const indexedMessages = createIndexedArrayApi({
     valid: row => Boolean(row && typeof row === 'object' && !Array.isArray(row)),
     measure: value => estimateBytes(value),
@@ -162,7 +164,10 @@ export function createChatJournalStore(options = {}) {
       rows.set(id,applyJsonChangesShared(row,[{...change,path:change.path.slice(2)}]))
     }
     const result = applyJsonChangesShared(chat,head)
-    return rows.size ? {...result,messages:indexedMessages.update(chat.messages,[...rows])} : result
+    if (!rows.size) return result
+    const messages=indexedMessages.update(chat.messages,[...rows])
+    sessionMessages.advance(chat.id,chat.messages,messages,[...rows.keys()])
+    return {...result,messages}
   }
   function estimateBytes(value) {
     if (typeof value === 'string') return 24 + value.length * 2
@@ -474,9 +479,11 @@ export function createChatJournalStore(options = {}) {
     const state = await cachedState(chatId)
     return state ? copyJsonTree(state.chat) : undefined
   }
-  async function readSessionState(chatId) {
+  async function readSessionState(chatId, options = {}) {
+    // Internal readers opt into lazy, detached rows. Default callers retain
+    // ordinary arrays (including structuredClone compatibility).
     const state = await cachedState(chatId)
-    return state ? projectChatSessionState(state.chat) : undefined
+    return state ? projectChatSessionState(state.chat, options.scoped === true ? sessionMessages.project(state.chat) : {}) : undefined
   }
   async function readSettlementCheckpoint(chatId, messageId, operationId) {
     const state = await cachedState(chatId)
@@ -547,7 +554,7 @@ export function createChatJournalStore(options = {}) {
     for (const change of changes) {
       if (!change.path.length) { tail = 0; layoutChanged = true; break }
       if (change.path[0] !== 'messages') continue
-      if (change.path.length <= 2 || ['turn','role','greeting','tavernRole'].includes(change.path[2])) layoutChanged = true
+      if (change.path.length <= 2 || ['turn','role','greeting','tavernRole','importSource'].includes(change.path[2])) layoutChanged = true
       if (change.path.length > 1 && Number.isSafeInteger(change.path[1])) indices.add(change.path[1])
       else tail = Math.min(tail, change.op === 'splice' ? change.index : 0)
     }
@@ -750,6 +757,7 @@ export function createChatJournalStore(options = {}) {
     await serialize(chatId, async function () {
       const paths = layout(chatId)
       forgetState(chatId)
+      sessionMessages.forget(chatId)
       await rm(paths.root, { recursive: true, force: true })
       if (legacyData && typeof legacyData.remove === 'function') await legacyData.remove(paths.legacyRelative)
       else await rm(paths.legacy, { force: true })

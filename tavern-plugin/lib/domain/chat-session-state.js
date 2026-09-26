@@ -19,8 +19,8 @@ export function pendingMvuSettlementState(chat) {
 
 // Detached inputs for session activity, retry eligibility and cache-hit view fields.
 // This is not a writable Chat or a source for rebuilding history projections.
-export function projectChatSessionState(chat) {
-  const pendingMvuSettlement = pendingMvuSettlementState(chat)
+export function projectChatSessionState(chat, options = {}) {
+  const pendingMvuSettlement = Object.hasOwn(options,"pendingMvuSettlement") ? options.pendingMvuSettlement : pendingMvuSettlementState(chat)
   // Legacy timeline inspection migrates a foreground body using its full text.
   if (Object.values(chat.timeline?.operations || {}).some(operation =>
     operation?.kind === 'body' && operation.status === 'foreground-completed')) return { ...copyJsonTree(chat), pendingMvuSettlement }
@@ -42,18 +42,19 @@ export function projectChatSessionState(chat) {
       turn: saved.turn, foreground: { afterCount: saved.foreground?.afterCount }
     }
   }
-  selected.messages = (Array.isArray(chat.messages) ? chat.messages : []).map(message => {
-    if (!message || typeof message !== 'object') return message
-    return {
-      role: message.role, turn: message.turn, greeting: message.greeting,
-      ...(message.importSource ? { importSource: { operationId: message.importSource.operationId } } : {}),
-      ...(message.mvu ? { mvu: {
-        receipt: message.mvu.receipt, diagnostics: message.mvu.diagnostics,
-        pending: message.mvu.pending, modified: message.mvu.modified
-      } } : {})
-    }
-  })
+  if (options.messages) return {...copyJsonTree(selected),messages:options.messages}
+  selected.messages = (Array.isArray(chat.messages) ? chat.messages : []).map(projectSessionMessage)
   return copyJsonTree(selected)
+}
+
+export function projectSessionMessage(message) {
+  if (!message || typeof message !== 'object') return message
+  return {
+    role: message.role, turn: message.turn, greeting: message.greeting,
+    ...(message.importSource ? {importSource:{operationId:message.importSource.operationId}} : {}),
+    ...(message.mvu ? {mvu:{receipt:message.mvu.receipt,diagnostics:message.mvu.diagnostics,
+      pending:message.mvu.pending,modified:message.mvu.modified}} : {})
+  }
 }
 
 export function settlementTurn(chat) {
@@ -67,16 +68,33 @@ export function settlementTurn(chat) {
 
 export function createSessionStateView({ activity: activityOf, evidence: evidenceOf }) {
   const receiptIndex = createMvuReceiptIndex()
+  const rollbackCache = new Map()
   function mvuReceiptsOf(chat, changes) { return receiptIndex(chat,activityOf(chat),changes) }
-  function rollbackViewFields(chat, evidence = evidenceOf(chat.sessionId)) {
-    const nodes = evidence.session?.surface?.nodes
+  function rollbackViewFields(chat, evidence = evidenceOf(chat.sessionId), changes) {
+    const session = evidence.session, events = evidence.events
+    const nodes = session?.surface?.nodes
+    // Only the native immutable-log contract supplies a reliable O(1) stamp.
+    // Legacy mutable evidence always runs the original inspection.
+    const generation = session?.surface?.replaceGeneration
+    const native = session?.header?.version >= 3 && typeof session.snapshotEvents === 'function'
+      && Array.isArray(events) && Object.isFrozen(events) && Array.isArray(nodes) && Number.isSafeInteger(generation)
+    const key = native ? JSON.stringify([chat.sessionId,chat.messages?.length,chat.tavernHelperLifecycleRevision,
+      chat.importHistory?.rescue,chat.importHistory?.operationId,chat.hiddenDshErrorTurns,chat.suppressedDshTurns,chat.regeneratedDshTurns,
+      nodes.length,nodes[0],nodes.at(-1),generation]) : null
+    const previous = rollbackCache.get(chat.id)
+    if (native && changes?.layoutChanged === false && previous?.session.deref() === session
+      && previous.events.deref() === events && previous.key === key
+      && (previous.revision === chat._storageRevision || previous.revision === changes.baseRevision)) {
+      previous.revision = chat._storageRevision
+      return {...copyJsonTree(previous.value),undoRollbackTurn:canUndoRollback(chat,session) ? chat.rollbackUndo.turn : null}
+    }
     const rollbackState = Array.isArray(nodes) ? rollbackAvailability(chat, { events: evidence.events, nodes }) : {
       canRollback: false, canClearIncompleteReply: false,
       reason: '当前会话的消息流尚未加载，请重新打开对话后重试；历史正文仍保留。'
     }
     const replayTarget = Array.isArray(nodes) ? failedTurnReplayAvailability({ events: evidence.events || [], nodes }).target : null
     const hasRound = hasRollbackMessages(chat.messages)
-    return {
+    const result = {
       hiddenDshErrorTurns: chat.hiddenDshErrorTurns || [],
       suppressedDshTurns: foregroundSuppressedTurns(chat, evidence.events || []),
       regeneratedDshTurns: Object.fromEntries(Object.entries(chat.regeneratedDshTurns && typeof chat.regeneratedDshTurns === 'object' && !Array.isArray(chat.regeneratedDshTurns) ? chat.regeneratedDshTurns : {})
@@ -93,18 +111,26 @@ export function createSessionStateView({ activity: activityOf, evidence: evidenc
       undoRollbackTurn: canUndoRollback(chat, evidence.session) ? chat.rollbackUndo.turn : null,
       rollbackUnavailableReason: rollbackState.reason
     }
+    if (native && chat.id && Number.isSafeInteger(chat._storageRevision)
+      && key.length + JSON.stringify(result).length < 1024*1024) {
+      rollbackCache.delete(chat.id)
+      rollbackCache.set(chat.id,{key,revision:chat._storageRevision,session:new WeakRef(session),events:new WeakRef(events),value:copyJsonTree(result)})
+      while(rollbackCache.size>8)rollbackCache.delete(rollbackCache.keys().next().value)
+    }
+    return result
   }
 
   // Cache hits receive projectChatSessionState; keep its inputs in sync with
   // these readers (including rollback and MVU receipts), not full history.
   function volatileSessionViewFields(chat, activity, changes) {
     let scriptProgress = null
+    const rollback = rollbackViewFields(chat,undefined,changes)
     return {
-      ...rollbackViewFields(chat),
+      ...rollback,
       activity,
       settleStatus: activity.busy ? 'running' : (activity.phase === 'failed' && activity.role === 'settlement' ? 'error' : 'done'),
       settleError: activity.reason === 'interrupted' ? '后台结算已中断，请重试结算。' : (chat.settleError || null),
-      settlementTurn: settlementTurn(chat),
+      settlementTurn: rollback.rollbackTargetTurn,
       scriptProgress,
       statusBarPlacement: chat.statusBarPlacement === 'body' ? 'body' : 'sidebar',
       updatedAt: chat.updatedAt || 0,
