@@ -67,8 +67,8 @@ export function settlementTurn(chat) {
     return 0
   }
 
-export function createSessionStateView({ activity: activityOf, evidence: evidenceOf }) {
-  const receiptIndex = createMvuReceiptIndex()
+export function createSessionStateView({ activity: activityOf, evidence: evidenceOf, sharedReceipts = false }) {
+  const receiptIndex = createMvuReceiptIndex({shared:sharedReceipts})
   const rollbackCache = new Map()
   function mvuReceiptsOf(chat, changes) { return receiptIndex(chat,activityOf(chat),changes) }
   function rollbackViewFields(chat, evidence = evidenceOf(chat.sessionId), changes) {

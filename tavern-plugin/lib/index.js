@@ -1641,6 +1641,7 @@ export async function apply(ctx) {
     return Object.assign({}, operation, { result: { candidates } })
   }
   const sessionStateView = createSessionStateView({
+    sharedReceipts: true,
     activity: chat => backgroundTasks.activity(chat),
     evidence: sessionId => sessionDebugEvidence(sessionId, true)
   })
