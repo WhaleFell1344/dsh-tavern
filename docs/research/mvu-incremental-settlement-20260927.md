@@ -589,3 +589,22 @@ copyLazyHistoryHeader 此前只延迟历史数组/撤销载荷，仍完整复制
 边界：实际完整枚举仍需处理全部输出；映射真实变更的归一化、存储版本检测以及其他大头部字段仍需继续审计。
 
 定向 31 项通过；最终完整回归：2,974 项通过、10 项跳过、0 失败。diff 检查通过，本轮未修改客户端源码。
+
+## 第四十五轮：真实变量 API 写入路径的多规模测量
+
+给既有 variable-write-benchmark 增加 --count=N 参数，保持默认 600 消息不变。使用临时存储，真实 ScriptHostAdapter.updateVariables、Chat persistence/journal、conversation registry 和磁盘 summary index，固定每楼正文/变量大小及每次新值大小；compact 模式各类型一次预热、五次采样。读回断言目标变量、首楼历史隔离，并重新打开存储比对完整档案。未运行模型/官方 MVU 解析/浏览器，不是完整 MVU 结算总耗时。
+
+本机 Node v22.22.0，代码基线 164c79d8；运行命令为 `node tests/fixtures/variable-write-benchmark.mjs output/variable-write-scaling/N --compact --count=N`。原始结果分别保存在 output/variable-write-scaling/{20,200,800,10000}/results.json。
+
+| 消息数 | 初始 JSON 字节 | message 中位 ms | chat 中位 ms | script 中位 ms | message 内部完整读档中位 ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 20 | 481998 | 17.60 | 17.44 | 16.66 | 0.25 |
+| 200 | 4818468 | 18.32 | 19.47 | 19.83 | 0.41 |
+| 800 | 19273368 | 19.09 | 17.56 | 19.54 | 1.15 |
+| 10000 | 240915168 | 32.18 | 31.05 | 31.34 | 10.45 |
+
+message 返回字节为 36362–36368，chat 为 6181，script 为 6216，不随历史内容扩张。index.write 阶段中位约 16–18 ms；总量仍增长的明确部分是实际 updateVariables 内 resolveChat 的完整读档（另两个类型在 10000 条也约 10.3–10.5 ms）。源码确认生产适配器 resolveChat 连接 chatForSession，mutationChat 在事务外直接使用该完整读取；message 更新还在捕获 before 时对全部 messages 执行 map。
+
+采样前后的完整正确性读回不计入测量区间，但可能影响 GC/缓存，所以这些短时本机数据不是严格复杂度证明。阶段内完整读档和全量 map 的源码证据则足以确定下一项修复目标：为事务外变量更新引入目标切片读取与目标旧值捕获，保留事务内语义、生命周期检查、CAS 和兼容回退。不能用先前客户端定点通知测试替代这条实际写入链路的验证。
+
+本轮未改运行时代码，四组基准（共 72 次写入及读回、四次重启比对）均通过，不重复完整单测。diff 检查通过。
