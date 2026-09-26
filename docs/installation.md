@@ -37,20 +37,14 @@ Desktop 固定为 **2.0.13**；以后在酒馆界面更新插件。仅 Desktop �
 
 适用于已经安装 **DSH 0.1.5-rc.2、Node.js 22.19+、pnpm**、准备新建独立 `tavern` Profile 的用户：
 
-```bash
-dsh plugin --profile tavern add dsh-profile-tavern@latest
-dsh --profile tavern
-```
-
-也可从 GitHub 安装（需要 Git）：
+需要 Git，在终端运行：
 
 ```bash
 dsh plugin --profile tavern add github:flizzywine/dsh-tavern
+dsh --profile tavern
 ```
 
-npm 包：[dsh-profile-tavern](https://www.npmjs.com/package/dsh-profile-tavern)。国内镜像可能延迟同步新版本。
-
-**npm 包仅在正式版本（大版本）发布时同步，不包含期间的小更新和即时修复。** `@latest` 指最新已发布的 npm 包，不代表 GitHub 最新代码；重复运行 npm 安装命令也无法获取尚未发布到 npm 的更新。需要跟进最新代码，请使用上面的 GitHub 安装方式，或下文的专用安装方式。
+npm 安装渠道已停止维护。此前通过 npm 安装的用户，也使用上述 GitHub 命令更新，继续使用原 Profile 数据。
 
 第一条命令由 DSH 创建 Profile、安装完整运行包并启用酒馆；第二条启动网页。酒馆使用当前 DSH，不会另装或升级宿主。运行包包含 Web 配置、侧栏、人物卡功能、预设和 Skill，无需自行构建。启动时检查 DSH 适配版本。
 
