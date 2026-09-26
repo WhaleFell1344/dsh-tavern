@@ -5949,7 +5949,7 @@ window.__ModuleLoader__.load({
 				);
 			}
 			function tavernAssistantViewPaths(turn) {
-				return ["mode", "regeneratedDshTurns", "tavernHelper",
+				return ["mode", "tavernHelper",
 					"tavernRuntimePolicy", "settlementTurn", "activity", "releaseCapabilities", "statusBarPlacement"].map(field => [field]).concat([["$projectionTurn", String(turn)], ["$projectionLatestTurn", String(turn)]]);
 			}
 			function TavernTurnMvuReceipt(props) {
@@ -5971,7 +5971,7 @@ window.__ModuleLoader__.load({
 				const turn = turnRef ? Number(turnRef.turn) : 0;
 				const settled = data.status !== "running";
 				const revision = String(data.status || "") + ":" + String(data.finalNode && data.finalNode.seq || "");
-				const mapping = useScopedLiveTavernView(props.sessionId, revision, [["regeneratedDshTurns"]]);
+				const mapping = useLiveTavernView(props.sessionId, revision, [["$storyHostTurn", String(turn)]]);
 				const storyTurn = tavernStoryTurnForDshTurn(mapping.view, turn);
 				const liveState = useLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths(storyTurn));
 				const sessionTransitioning = React.useSyncExternalStore(tavernSessionTransition.subscribe, tavernSessionTransition.getSnapshot, tavernSessionTransition.getSnapshot);

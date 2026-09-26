@@ -66,6 +66,10 @@ function createLiveTavernViewModule(options) {
 			&& record.state.phase === state.phase && record.state.error === state.error) {
 			const delta = result.viewDelta;
 			const paths = delta.set.map(entry => entry[0]).concat(delta.remove);
+			if (paths.some(path => path[0] === "regeneratedDshTurns")) {
+				if (Array.isArray(result.storyChanges)) for (const turn of result.storyChanges) paths.push(["$storyHostTurn", String(turn)]);
+				else paths.push(["$storyHostTurn"]);
+			}
 			if (paths.some(path => path[0] === "replyProjections")) {
 				const change = result.projectionChanges;
 				if (change) {
@@ -94,6 +98,7 @@ function createLiveTavernViewModule(options) {
 			const paths = [];
 			for (const key of keys) if (Object.prototype.hasOwnProperty.call(before, key) !== Object.prototype.hasOwnProperty.call(after, key)
 				|| !Object.is(before[key], after[key])) paths.push([key]);
+			if (paths.some(path => path[0] === "regeneratedDshTurns")) paths.push(["$storyHostTurn"]);
 			if (paths.some(path => path[0] === "replyProjections")) paths.push(["$projectionTurn"], ["$projectionLatestTurn"]);
 			if (paths.some(path => path[0] === "mvuReceipts")) paths.push(["$mvuReceiptTurn"]);
 			listeners = affected(record.paths, paths);

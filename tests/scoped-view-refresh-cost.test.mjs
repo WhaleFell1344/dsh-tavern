@@ -177,3 +177,32 @@ for(const count of [20,400,10000])test(`projection edits and newest ownership ro
  await run([[['replyProjections'],[]]])
  assert.equal(notices.size,count+1)
 })
+
+for(const count of [20,400,10000])test(`regeneration mapping updates only old and new host turns across ${count} entries`,async()=>{
+ const h=harness(),begin=h.createSessionViewReader(),jobs=[]
+ let cursor='base',seq=0,sets=[],remove=[],visits=0
+ h.createSessionViewReader.onStoryLookupVisit=()=>visits++
+ h.createSessionViewReader.onTurnFieldVisit=()=>visits++
+ const first=begin('s').accept({viewCursor:cursor,view:{regeneratedDshTurns:Object.fromEntries(Array.from({length:count},(_,id)=>[id+1,id+100]))}}).view
+ const live=h.createLiveTavernViewModule({deduplicateViews:true,pollWhileBusy:false,schedule:run=>{jobs.push(run);return jobs.length},cancel(){},load:async()=>{
+  const next=String(++seq),result=begin('s').accept({viewCursor:next,viewDelta:{baseCursor:cursor,set:sets,remove}});cursor=next;return result
+ }})
+ live.setView('s',first)
+ const notices=new Set()
+ for(let turn=100;turn<count+100;turn++)live.subscribe('s',()=>notices.add(turn),[['$storyHostTurn',String(turn)]])
+ notices.clear();visits=0
+ async function run(edits,removed=[]){sets=edits;remove=removed;if(!jobs.length)live.invalidate('s');jobs.shift()();await new Promise(resolve=>setImmediate(resolve))}
+ await run([[['regeneratedDshTurns','1'],101]])
+ assert.deepEqual([...notices].sort((a,b)=>a-b),[100,101]);assert.ok(visits<1000,`${count}: ${visits}`)
+ const lookup=h.createSessionViewReader.storyTurnLookup
+ assert.equal(lookup.read(live.getSnapshot('s').view.regeneratedDshTurns,101),1,'first numeric story key wins duplicate host')
+ assert.equal(lookup.read(first.regeneratedDshTurns,101),2,'old mapping remains isolated')
+ notices.clear();visits=0
+ await run([],[['regeneratedDshTurns','1']])
+ assert.deepEqual([...notices],[101]);assert.equal(lookup.read(live.getSnapshot('s').view.regeneratedDshTurns,101),2)
+ assert.ok(visits<1000)
+ notices.clear()
+ await run([[['regeneratedDshTurns'],{'legacy':101,'2':101}]])
+ assert.equal(notices.size,count)
+ assert.equal(lookup.read(live.getSnapshot('s').view.regeneratedDshTurns,101),2,'noncanonical keys retain ordinary object order')
+})

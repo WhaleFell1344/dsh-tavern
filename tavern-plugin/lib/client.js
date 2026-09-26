@@ -750,7 +750,7 @@ window.__ModuleLoader__.load({
 		      cursor: base && base.cursor,
 		      receiptSync: ordered ? 1 : undefined,
 		      accept(result) {
-		        let view = result.view, projectionChanges = null;
+		        let view = result.view, projectionChanges = null, storyChanges = null, storyKeys = null;
 		        if (result.viewDelta) {
 		          if (!base || result.viewDelta.baseCursor !== base.cursor) throw new Error("会话增量已过期，请重新读取");
 		          const delta = result.viewDelta;
@@ -788,13 +788,14 @@ window.__ModuleLoader__.load({
 		              && projectionEdits.every(([path]) => path[1] === "length" || Number.isSafeInteger(path[1]));
 
 		            const fieldUpdates = new Map();
-		            for (const field of ["inputSources", "inputTemplateDisplays"]) {
+		            for (const field of ["inputSources", "inputTemplateDisplays", "regeneratedDshTurns"]) {
 		              const source = base.view?.[field];
 		              const sets = delta.set.filter(([path]) => path[0] === field);
 		              const removes = delta.remove.filter(path => path[0] === field);
 		              if (turnFields?.has(source) && sets.every(([path]) => path.length === 2 && turnFields.validKey(path[1]))
 		                && removes.every(path => path.length === 2 && turnFields.validKey(path[1]))) {
 		                fieldUpdates.set(field, turnFields.update(source, sets.map(([path,value]) => [path[1],value]), removes.map(path => path[1])));
+		                if (field === "regeneratedDshTurns") storyKeys = [...new Set([...sets.map(([path]) => String(path[1])), ...removes.map(path => String(path[1]))])];
 		              }
 		            }
 		            function parent(path) {
@@ -876,18 +877,18 @@ window.__ModuleLoader__.load({
 		          if (!index.info(view.replyProjections)) view = {...view,replyProjections:index.from(view.replyProjections)};
 		          projectionLookup.remember(view.replyProjections);
 		        }
-		        if (turnFields) for (const field of ["inputSources", "inputTemplateDisplays"]) {
+		        if (turnFields) for (const field of ["inputSources", "inputTemplateDisplays", "regeneratedDshTurns"]) {
 		          const value = turnFields.from(view?.[field]);
 		          if (value !== view?.[field]) view = {...view, [field]: value};
 		        }
-		        storyTurnLookup.remember(view?.regeneratedDshTurns);
+		        storyChanges = storyTurnLookup.remember(view?.regeneratedDshTurns, base?.view?.regeneratedDshTurns, storyKeys);
 		        const latest = sessions.get(sessionId);
 		        if (!latest || latest.sequence < requestSequence) {
 		          sessions.delete(sessionId);
 		          sessions.set(sessionId, { view, cursor: result.viewCursor, sequence: requestSequence });
 		          while (sessions.size > maxSessions) sessions.delete(sessions.keys().next().value);
 		        }
-		        return Object.assign({}, result, { view, viewBase: result.viewDelta ? base.view : undefined, projectionChanges });
+		        return Object.assign({}, result, { view, viewBase: result.viewDelta ? base.view : undefined, projectionChanges, storyChanges });
 		      }
 		    };
 		  };
@@ -958,20 +959,53 @@ window.__ModuleLoader__.load({
 		}
 
 		function createStoryTurnLookup() {
-		  const versions=new WeakMap();
-		  return {
-		    remember(source) {
-		      if (!source || typeof source!=="object" || versions.has(source)) return;
-		      const turns=new Map();
-		      for (const story of Object.keys(source)) {
-		        const turn=Number(source[story]);
-		        if (!Number.isNaN(turn) && !turns.has(turn)) turns.set(turn,Number(story));
+		  const versions = new WeakMap();
+		  const ordered = typeof createOrderedNumericIndex === "function" ? createOrderedNumericIndex({visit: () => createSessionViewReader.onStoryLookupVisit?.()}) : null;
+		  const validKey = key => /^(0|[1-9]\d*)$/.test(key) && Number(key) < 0xffffffff;
+		  function remember(source, before, keys) {
+		    if (!source || typeof source !== "object") return null;
+		    if (versions.has(source)) return source === before ? [] : null;
+		    const previous = versions.get(before);
+		    if (ordered && previous?.root && Array.isArray(keys) && keys.every(validKey)) {
+		      let root = previous.root;
+		      const hosts = new Set();
+		      function change(host, story, remove) {
+		        if (Number.isNaN(host)) return;
+		        hosts.add(host);
+		        let rows = ordered.get(root, host) || ordered.from([]);
+		        rows = ordered.update(rows, [[Number(story), remove ? undefined : Number(story)]]);
+		        root = ordered.update(root, [[host, rows.length ? rows : undefined]]);
 		      }
-		      versions.set(source,turns);
-		    },
-		    has:source=>versions.has(source),
-		    read(source,turn) { const key=Number(turn),turns=versions.get(source);return turns.has(key)?turns.get(key):key; }
-		  };
+		      for (const key of keys) if (Object.prototype.hasOwnProperty.call(before, key)) change(Number(before[key]), key, true);
+		      for (const key of keys) if (Object.prototype.hasOwnProperty.call(source, key)) change(Number(source[key]), key, false);
+		      versions.set(source, { root });
+		      return [...hosts];
+		    }
+		    const names = Object.keys(source);
+		    if (ordered && names.every(validKey)) {
+		      const hosts = new Map();
+		      for (const story of names) {
+		        const host = Number(source[story]);
+		        if (Number.isNaN(host)) continue;
+		        if (!hosts.has(host)) hosts.set(host, []);
+		        hosts.get(host).push([Number(story), Number(story)]);
+		      }
+		      versions.set(source, { root: ordered.from([...hosts].map(([host, rows]) => [host, ordered.from(rows)])) });
+		    } else {
+		      const turns = new Map();
+		      for (const story of names) {
+		        const turn = Number(source[story]);
+		        if (!Number.isNaN(turn) && !turns.has(turn)) turns.set(turn, Number(story));
+		      }
+		      versions.set(source, { turns });
+		    }
+		    return null;
+		  }
+		  return { remember, has: source => versions.has(source), read(source, turn) {
+		    const key = Number(turn), version = versions.get(source);
+		    if (version?.root && !Number.isNaN(key)) return ordered.get(version.root, key)?.[0] ?? key;
+		    return version?.turns?.has(key) ? version.turns.get(key) : key;
+		  } };
 		}
 
 		// Canonical array-index keys retain ordinary object enumeration order. Legacy
@@ -1337,6 +1371,10 @@ window.__ModuleLoader__.load({
 					&& record.state.phase === state.phase && record.state.error === state.error) {
 					const delta = result.viewDelta;
 					const paths = delta.set.map(entry => entry[0]).concat(delta.remove);
+					if (paths.some(path => path[0] === "regeneratedDshTurns")) {
+						if (Array.isArray(result.storyChanges)) for (const turn of result.storyChanges) paths.push(["$storyHostTurn", String(turn)]);
+						else paths.push(["$storyHostTurn"]);
+					}
 					if (paths.some(path => path[0] === "replyProjections")) {
 						const change = result.projectionChanges;
 						if (change) {
@@ -1365,6 +1403,7 @@ window.__ModuleLoader__.load({
 					const paths = [];
 					for (const key of keys) if (Object.prototype.hasOwnProperty.call(before, key) !== Object.prototype.hasOwnProperty.call(after, key)
 						|| !Object.is(before[key], after[key])) paths.push([key]);
+					if (paths.some(path => path[0] === "regeneratedDshTurns")) paths.push(["$storyHostTurn"]);
 					if (paths.some(path => path[0] === "replyProjections")) paths.push(["$projectionTurn"], ["$projectionLatestTurn"]);
 					if (paths.some(path => path[0] === "mvuReceipts")) paths.push(["$mvuReceiptTurn"]);
 					listeners = affected(record.paths, paths);
@@ -8718,7 +8757,7 @@ window.__ModuleLoader__.load({
 				);
 			}
 			function tavernAssistantViewPaths(turn) {
-				return ["mode", "regeneratedDshTurns", "tavernHelper",
+				return ["mode", "tavernHelper",
 					"tavernRuntimePolicy", "settlementTurn", "activity", "releaseCapabilities", "statusBarPlacement"].map(field => [field]).concat([["$projectionTurn", String(turn)], ["$projectionLatestTurn", String(turn)]]);
 			}
 			function TavernTurnMvuReceipt(props) {
@@ -8740,7 +8779,7 @@ window.__ModuleLoader__.load({
 				const turn = turnRef ? Number(turnRef.turn) : 0;
 				const settled = data.status !== "running";
 				const revision = String(data.status || "") + ":" + String(data.finalNode && data.finalNode.seq || "");
-				const mapping = useScopedLiveTavernView(props.sessionId, revision, [["regeneratedDshTurns"]]);
+				const mapping = useLiveTavernView(props.sessionId, revision, [["$storyHostTurn", String(turn)]]);
 				const storyTurn = tavernStoryTurnForDshTurn(mapping.view, turn);
 				const liveState = useLiveTavernView(props.sessionId, revision, tavernAssistantViewPaths(storyTurn));
 				const sessionTransitioning = React.useSyncExternalStore(tavernSessionTransition.subscribe, tavernSessionTransition.getSnapshot, tavernSessionTransition.getSnapshot);
