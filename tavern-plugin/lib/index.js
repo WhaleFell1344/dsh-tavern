@@ -1,3 +1,4 @@
+import { freezeJson } from './domain/freeze-json.js'
 import { createScopedMessages } from './domain/scoped-messages.js'
 import {registerVariableReadTool} from './domain/read-variables.js'
 import { createBackgroundSessionRetirement, installRetiredBackgroundFilter } from './domain/background-session-retirement.js'
@@ -1522,8 +1523,8 @@ export async function apply(ctx) {
       latestAssistantMessageId,
       forkTurnsByMessageId,
       latestAssistantTurn: latestStoryTurn,
-      inputSources,
-      inputTemplateDisplays,
+      inputSources: freezeJson(inputSources),
+      inputTemplateDisplays: freezeJson(inputTemplateDisplays),
       ...rollbackFields,
       presentation: null,
       replyProjections: replyDisplay.projections,

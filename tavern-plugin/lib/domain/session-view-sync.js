@@ -25,7 +25,9 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
       if (['replyProjections','mvuReceipts'].includes(key) && Array.isArray(value)) {
         add([key, 'length'], value.length)
         // Row hashes are retained separately, like Helper messages.
-      } else if (['inputSources', 'inputTemplateDisplays', 'tavernHelper'].includes(key) && value && typeof value === 'object') {
+      } else if (['inputSources', 'inputTemplateDisplays'].includes(key) && value && typeof value === 'object') {
+        add([key], {})
+      } else if (key === 'tavernHelper' && value && typeof value === 'object') {
         add([key], {})
         for (const [field, item] of Object.entries(value)) {
           if (key === 'tavernHelper' && field === 'messages' && Array.isArray(item)) {
@@ -47,6 +49,19 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
     const keyedChanges=keyedReceipts && base?.receiptSync ? immutableOrderedChanges(base.receiptSource?.deref(),view.mvuReceipts) : null
     if(Boolean(base?.receiptSync)!==keyedReceipts || keyedReceipts && base && !keyedChanges)base=null
     const current = parts(view,keyedReceipts)
+    const inputFields = new Map(), inputSet = [], inputRemove = []
+    for (const field of ['inputSources','inputTemplateDisplays']) {
+      const value=view[field], old=base?.inputFields?.get(field)
+      if(isImmutableJson(value) && old?.source?.deref()===value){inputFields.set(field,old);continue}
+      const hashes=new Map()
+      if(value && typeof value==='object')for(const [key,item] of Object.entries(value)){
+        if(item===undefined)continue
+        const hash=hashValue(item);hashes.set(key,hash)
+        if(old?.hashes.get(key)!==hash)inputSet.push([[field,key],item])
+      }
+      if(old)for(const key of old.hashes.keys())if(!hashes.has(key))inputRemove.push([field,key])
+      inputFields.set(field,{hashes,source:isImmutableJson(value)?new WeakRef(value):undefined})
+    }
     const messages = view?.tavernHelper?.messages, replies = view?.replyProjections
     const receipts=view?.mvuReceipts
     const receiptChanges=keyedReceipts ? null : immutableArrayChanges(base?.receiptSource?.deref(),receipts)
@@ -83,6 +98,7 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
     readers.set(nextCursor, {
       sessionId,
       hashes,
+      inputFields,
       messageHashes: arrays[0].next,
       replyHashes: arrays[1].next,
       receiptHashes: arrays[2]?.next,
@@ -93,12 +109,13 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
     })
     while (readers.size > maxReaders) readers.delete(readers.keys().next().value)
     if (!base) return { view, viewCursor: nextCursor, ...(keyedReceipts ? {receiptSync:1} : {}) }
-    const set = [], remove = messageRemove
+    const set = [], remove = [...messageRemove,...inputRemove]
     for (const [key, item] of current) {
       if (previous.hashes.get(key) === item.hash) continue
       set.push([item.path, item.value])
     }
     for (const key of previous.hashes.keys()) if (!current.has(key)) remove.push(JSON.parse(key))
+    for (const entry of inputSet) set.push(entry)
     for (const entry of messageSet) set.push(entry)
     return { viewCursor: nextCursor, viewDelta: { baseCursor: cursor, set, remove, ...(keyedReceipts ? {receiptDelta:{set:keyedChanges.filter(row=>row.after!==undefined).map(row=>row.after),remove:keyedChanges.filter(row=>row.after===undefined).map(row=>row.key)}} : {}) } }
   }
