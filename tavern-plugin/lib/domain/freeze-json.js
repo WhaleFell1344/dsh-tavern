@@ -31,10 +31,19 @@ export function immutableArrayChanges(before,after) {
 export function createImmutableOrderedJsonIndex(options) {
   const index=createOrderedNumericIndex(options)
   const owner={ordered:index,changed(before,after){
-    if(index.info(before)?.count!==index.info(after)?.count)return null
     const changes=index.changed(before,after)
-    if(!changes || changes.some(row=>row.before===undefined || row.after===undefined))return null
-    return changes.map(row=>index.rank(after,row.key))
+    if(!changes)return null
+    const dirty=new Set()
+    let shifted=after.length
+    for(const row of changes){
+      if(row.before===undefined || row.after===undefined){
+        shifted=Math.min(shifted,index.rank(before,row.key),index.rank(after,row.key))
+      }else dirty.add(index.rank(after,row.key))
+    }
+    // Positional consumers must see shifted rows, but a tail append/truncation
+    // leaves the shared prefix untouched. Never scan that prefix for hashes.
+    for(let position=shifted;position<after.length;position++)dirty.add(position)
+    return [...dirty]
   }}
   const brand=value=>{immutable.add(value);indexedOwners.set(value,owner);return value}
   return {...index,
