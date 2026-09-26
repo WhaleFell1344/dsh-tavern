@@ -1,5 +1,6 @@
 import {createIndexedArrayApi} from './indexed-array.js'
-import {freezeJson} from './freeze-json.js'
+import {freezeJson,createImmutableJsonIndex} from './freeze-json.js'
+import {copyJsonTree} from './copy-json-tree.js'
 const notable = new Set(['pending','error','interrupted','partial','stale'])
 function rowOf(message) {
   const assistant = message?.role === 'assistant'
@@ -14,6 +15,7 @@ function rowOf(message) {
 }
 // Public reads detach receipts; internal views may share branded immutable output.
 export function createMvuReceiptIndex({maxBytes = 8*1024*1024, shared = false, onVisit} = {}) {
+  const outputIndex=createImmutableJsonIndex({visit:onVisit,measure:row=>JSON.stringify(row).length*2})
   const cache = new Map()
   let retainedBytes = 0
   const all = createIndexedArrayApi({visit:onVisit,eligible:row=>row.assistant,measure:row=>JSON.stringify(row).length*2})
@@ -25,12 +27,13 @@ export function createMvuReceiptIndex({maxBytes = 8*1024*1024, shared = false, o
     const reuse = previous && changes && Number.isSafeInteger(revision) && previous.lifecycle === chat.tavernHelperLifecycleRevision
       && (previous.revision === revision || previous.revision === changes.baseRevision)
       && Array.isArray(changes.indices)
-    let state
+    let state, pointEntries
     if (reuse) {
       const indices = new Set(previous.revision === revision ? [] : changes.indices)
       for(let id=previous.length;id<messages.length;id++)indices.add(id)
       const entries = [...indices].filter(id=>id>=0 && id<messages.length).map(id=>[id,rowOf(messages[id])])
         .filter(([id,row])=>id>=previous.length || JSON.stringify(row)!==JSON.stringify(previous.all[id]))
+      pointEntries=entries
       const unchanged = entries.length===0 && previous.length===messages.length
       state = {...previous,revision,length:messages.length,all:unchanged ? previous.all : all.update(previous.all,entries,messages.length),
         quiet:unchanged ? previous.quiet : quiet.update(previous.quiet,entries,messages.length),alerts:unchanged ? previous.alerts : alerts.update(previous.alerts,entries,messages.length)}
@@ -43,6 +46,15 @@ export function createMvuReceiptIndex({maxBytes = 8*1024*1024, shared = false, o
     const unchangedOutput = reuse && state.all===previous.all && previous.interrupted===interrupted && previous.output
     if (unchangedOutput) {
       state.output=previous.output;state.outputBytes=previous.outputBytes
+    } else if (reuse && previous.length===messages.length && previous.interrupted===interrupted
+      && pointEntries.every(([id,row])=>{
+        const old=previous.all[id]
+        return old.assistant===row.assistant && old.turn===row.turn && Boolean(old.receipt)===Boolean(row.receipt)
+          && notable.has(String(old.receipt?.status ?? ''))===notable.has(String(row.receipt?.status ?? ''))
+      })) {
+      const entries=pointEntries.filter(([id])=>previous.outputPositions.has(id)).map(([id,row])=>[previous.outputPositions.get(id),{turn:row.turn,receipt:displayReceipt(row,id,interrupted)}])
+      state.output=entries.length ? outputIndex.update(previous.output,entries) : previous.output
+      state.outputBytes=outputIndex.info(state.output).bytes
     } else {
       const selected = []
       for(let id=alerts.previous(state.alerts,messages.length);id>=0;id=alerts.previous(state.alerts,id)) selected.push(id)
@@ -53,18 +65,16 @@ export function createMvuReceiptIndex({maxBytes = 8*1024*1024, shared = false, o
       selected.push(...ordinary.reverse())
       const byTurn = new Map()
       for(const id of selected) {
-        const row = state.all[id], receipt = structuredClone(row.receipt)
-        if(id===interrupted) {
-          receipt.status='interrupted'
-          receipt.summary='后台结算因服务重启或异常退出而中断，请重试结算；正文和已保存变量保留。'
-        }
-        byTurn.set(row.turn,{turn:row.turn,receipt})
+        const row = state.all[id]
+        byTurn.set(row.turn,{id,value:{turn:row.turn,receipt:displayReceipt(row,id,interrupted)}})
       }
-      state.output=freezeJson([...byTurn.values()].sort((a,b)=>a.turn-b.turn))
-      state.outputBytes=JSON.stringify(state.output).length*2
+      const selectedRows=[...byTurn.values()].sort((a,b)=>a.value.turn-b.value.turn)
+      state.outputPositions=new Map(selectedRows.map((row,index)=>[row.id,index]))
+      state.output=outputIndex.from(selectedRows.map(row=>row.value))
+      state.outputBytes=outputIndex.info(state.output).bytes
     }
     state.interrupted=interrupted
-    state.bytes = all.info(state.all).bytes + quiet.info(state.quiet).bytes + alerts.info(state.alerts).bytes + state.outputBytes
+    state.bytes = all.info(state.all).bytes + quiet.info(state.quiet).bytes + alerts.info(state.alerts).bytes + state.outputBytes + state.outputPositions.size*48
     if (chat.id && Number.isSafeInteger(revision) && state.bytes <= maxBytes && !(previous?.revision > revision)) {
       if(previous) { retainedBytes -= previous.bytes; cache.delete(chat.id) }
       while(cache.size && (cache.size>=8 || retainedBytes+state.bytes>maxBytes)) {
@@ -72,6 +82,11 @@ export function createMvuReceiptIndex({maxBytes = 8*1024*1024, shared = false, o
       }
       cache.set(chat.id,state);retainedBytes+=state.bytes
     }
-    return shared ? state.output : structuredClone(state.output)
+    return shared ? state.output : copyJsonTree(state.output)
   }
+}
+
+function displayReceipt(row,id,interrupted) {
+  if(id!==interrupted)return row.receipt
+  return {...row.receipt,status:'interrupted',summary:'后台结算因服务重启或异常退出而中断，请重试结算；正文和已保存变量保留。'}
 }

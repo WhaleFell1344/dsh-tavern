@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createIndexedArrayApi } from './indexed-array.js'
-import { isImmutableJson } from './freeze-json.js'
+import { isImmutableJson, immutableArrayChanges } from './freeze-json.js'
 
 // Reader cursors retain fingerprints only; never retain another full chat snapshot.
 export function createSessionViewSync({ maxReaders = 32 } = {}) {
@@ -21,7 +21,7 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
       result.set(key, { path, value, hash: hashValue(value) })
     }
     for (const [key, value] of Object.entries(view || {})) {
-      if (key === 'replyProjections' && Array.isArray(value)) {
+      if (['replyProjections','mvuReceipts'].includes(key) && Array.isArray(value)) {
         add([key, 'length'], value.length)
         // Row hashes are retained separately, like Helper messages.
       } else if (['inputSources', 'inputTemplateDisplays', 'tavernHelper'].includes(key) && value && typeof value === 'object') {
@@ -44,10 +44,13 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
     const base = previous?.sessionId === sessionId ? previous : null
     const current = parts(view)
     const messages = view?.tavernHelper?.messages, replies = view?.replyProjections
+    const receipts=view?.mvuReceipts
+    const receiptChanges=immutableArrayChanges(base?.receiptSource?.deref(),receipts)
     const sameReplies = isImmutableJson(replies) && base?.replySource?.deref() === replies
     const arrays = [
       {path:['tavernHelper','messages'],value:messages,previous:base?.messageHashes,dirty:dirtyMessageIndices},
-      {path:['replyProjections'],value:replies,previous:base?.replyHashes,dirty:sameReplies ? new Set() : null}
+      {path:['replyProjections'],value:replies,previous:base?.replyHashes,dirty:sameReplies ? new Set() : null},
+      {path:['mvuReceipts'],value:receipts,previous:base?.receiptHashes,dirty:receiptChanges ? new Set(receiptChanges) : null}
     ]
     const messageSet = [], messageRemove = []
     for (const field of arrays) {
@@ -77,6 +80,8 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
       hashes,
       messageHashes: arrays[0].next,
       replyHashes: arrays[1].next,
+      receiptHashes: arrays[2].next,
+      receiptSource: isImmutableJson(receipts) ? new WeakRef(receipts) : undefined,
       replySource: isImmutableJson(replies) ? new WeakRef(replies) : undefined,
       revision: Number.isSafeInteger(options.revision) ? options.revision : previous?.revision
     })

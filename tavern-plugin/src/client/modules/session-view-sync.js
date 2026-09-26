@@ -23,6 +23,15 @@ function createSessionViewReader(maxSessions = 4) {
             && messageRemovals.every(path => typeof path[2] === "number")
             && messageEdits.every(([path]) => path[2] === "length" || Number.isSafeInteger(path[2]));
 
+          const receiptPath = path => path[0] === "mvuReceipts" && path.length === 2;
+          const receiptEdits = result.viewDelta.set.filter(([path]) => receiptPath(path));
+          const receiptRemovals = result.viewDelta.remove.filter(receiptPath);
+          const incrementalReceipts = Array.isArray(base.view?.mvuReceipts)
+            && !result.viewDelta.set.some(([path]) => path[0] === "mvuReceipts" && path.length < 2)
+            && !result.viewDelta.remove.some(path => path[0] === "mvuReceipts" && path.length < 2)
+            && receiptRemovals.every(path => Number.isSafeInteger(path[1]))
+            && receiptEdits.every(([path]) => path[1] === "length" || Number.isSafeInteger(path[1]));
+
           function parent(path) {
             let target = view;
             for (let i = 0; i < path.length - 1; i++) {
@@ -39,13 +48,20 @@ function createSessionViewReader(maxSessions = 4) {
           }
           // Remove old descendants before replacing a parent with null or a new object.
           for (const path of result.viewDelta.remove.slice().sort((a, b) => b.length - a.length)) {
-            if (incrementalMessages && messagePath(path)) continue;
+            if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path)) continue;
             const target = parent(path), key = path[path.length - 1];
             if (!(Array.isArray(target) && key === "length")) delete target[key];
           }
           for (const [path, value] of result.viewDelta.set) {
-            if (incrementalMessages && messagePath(path)) continue;
+            if (incrementalMessages && messagePath(path) || incrementalReceipts && receiptPath(path)) continue;
             parent(path)[path[path.length - 1]] = value;
+          }
+          if (incrementalReceipts) {
+            const old = base.view.mvuReceipts;
+            const length = receiptEdits.find(([path]) => path[1] === "length")?.[1] ?? old.length;
+            const entries = receiptEdits.filter(([path]) => path[1] !== "length").map(([path,value]) => [path[1],value]);
+            if (receiptRemovals.some(path => path[1] < length)) throw new Error("Invalid sparse receipt delta");
+            view.mvuReceipts = index.update(old,entries,length);
           }
           if (incrementalMessages) {
             const old = base.view.tavernHelper.messages;
@@ -59,6 +75,7 @@ function createSessionViewReader(maxSessions = 4) {
         if (Array.isArray(view?.tavernHelper?.messages)) {
           view = {...view,tavernHelper:{...view.tavernHelper,messages:index.from(view.tavernHelper.messages)}};
         }
+        if (Array.isArray(view?.mvuReceipts)) view = {...view,mvuReceipts:index.from(view.mvuReceipts)};
         const latest = sessions.get(sessionId);
         if (!latest || latest.sequence < requestSequence) {
           sessions.delete(sessionId);
