@@ -26,7 +26,7 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
       if (['replyProjections','mvuReceipts'].includes(key) && Array.isArray(value)) {
         add([key, 'length'], value.length)
         // Row hashes are retained separately, like Helper messages.
-      } else if (['inputSources', 'inputTemplateDisplays'].includes(key) && value && typeof value === 'object') {
+      } else if (['inputSources', 'inputTemplateDisplays', 'regeneratedDshTurns'].includes(key) && value && typeof value === 'object') {
         add([key], {})
       } else if (key === 'tavernHelper' && value && typeof value === 'object') {
         add([key], {})
@@ -51,7 +51,7 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
     if(Boolean(base?.receiptSync)!==keyedReceipts || keyedReceipts && base && !keyedChanges)base=null
     const current = parts(view,keyedReceipts)
     const inputFields = new Map(), inputSet = [], inputRemove = []
-    for (const field of ['inputSources','inputTemplateDisplays']) {
+    for (const field of ['inputSources','inputTemplateDisplays','regeneratedDshTurns']) {
       const value=view[field], old=base?.inputFields?.get(field)
       if(isImmutableJson(value) && old?.source?.deref()===value){inputFields.set(field,old);continue}
       const changed=old && immutableTurnFieldChanges(old.source?.deref(),value)
