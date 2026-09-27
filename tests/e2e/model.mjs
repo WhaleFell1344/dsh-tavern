@@ -67,7 +67,7 @@ export function apply(ctx) {
         type: 'tool-call', id: postureId, name: 'posture_submit',
         arguments: JSON.stringify({ posture: '站在柜台前，收下奖励。' })
       })
-      if (!blocks.length) blocks.push({ type: 'text', text: (cardUpdate ? '更新后的世界中，你又获得十枚金币。' : presetRound ? `预设切换后继续游玩，金币 ${gold}。` : gold === 30 ? '雨夜里，你重新领取了奖励。' : gold === 20 ? '你再次领取了奖励，金币累计二十枚。' : '你获得了十枚金币。') + '\n\n<StatusPlaceHolderImpl/>' })
+      if (!blocks.length) blocks.push({ type: 'text', text: (cardUpdate ? '更新后的世界中，你又获得十枚金币。' : presetRound ? `预设切换后继续游玩，金币 ${gold}。` : gold === 30 ? '雨夜里，你重新领取了奖励。' : gold === 20 ? '你再次领取了奖励，金币累计二十枚。' : '你获得了十枚金币。') + (process.env.TAVERN_E2E_PERFORMANCE_DIR && process.env.TAVERN_PERF_HISTORY_READY === '1' ? '\n' + '这是性能测试的合成剧情，不对应真实存档。'.repeat(Number(process.env.TAVERN_PERF_BODY_REPEATS || 60)) : '') + '\n\n<StatusPlaceHolderImpl/>' })
       if (cardUpdate && process.env.TAVERN_E2E_REQUEST_AUDIT) await appendFile(process.env.TAVERN_E2E_REQUEST_AUDIT, JSON.stringify({cardUpdate:true,newWorldbook:text.includes(tools.has('mvu_submit_update') ? 'E2E_LIVE_MVU_RULES_V2' : 'E2E_LIVE_WORLDBOOK_V2'),settlement:tools.has('mvu_submit_update') || tools.has('posture_submit')})+'\n')
       if (presetRound && blocks.some(block => block.type === 'text') && process.env.TAVERN_E2E_REQUEST_AUDIT) {
         await appendFile(process.env.TAVERN_E2E_REQUEST_AUDIT, JSON.stringify({ gold,

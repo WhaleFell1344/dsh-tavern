@@ -22,24 +22,36 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
   assert.ok(Number.isInteger(rounds) && rounds >= 2 && rounds <= 10000)
   assert.ok(Number.isInteger(fields) && fields >= 0 && fields <= 2000)
   assert.ok(Number.isInteger(runs) && runs >= 1 && runs <= 100)
-  const fixture = await savedChat()
+  const historyReady = process.env.TAVERN_PERF_HISTORY_READY === '1'
+  let fixture = await savedChat()
+  if (historyReady) {
+    // Use flags produced by the real template engine for these exact bodies.
+    // A copied flag for a different synthetic body creates a repair backlog.
+    const deadline=Date.now()+60000
+    while (!fixture.messages.every(row=>row.tavernPluginData?.template_rendered)) {
+      assert.ok(Date.now()<deadline,'initial historical template displays must finish before cloning')
+      await page.waitForTimeout(250)
+      fixture=await savedChat()
+    }
+  }
   const chatId = fixture.id
   let size
   report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + journal + React; synthetic history, fixed model; tracing disabled', requireCompact, size: { rounds, fields }, samples: [] }
   await step(`构造 ${rounds} 轮隔离长档并重新打开`, async () => {
-    await restartServer(async () => {
+    const reopening = await restartServer(async () => {
       const next = structuredClone(fixture), greeting = next.messages[0], user = next.messages.find(m => m.role === 'user'), assistant = next.messages.at(-1)
       const state = structuredClone(assistant.variables[0])
       assert.equal(Object.keys(state.stat_data).length, fields + 1, 'large variable schema must come from real card initialization')
-      const body = '这是性能测试的合成剧情，不对应真实存档。'.repeat(bodyRepeats) + '\n\n<StatusPlaceHolderImpl/>'
+      const body = historyReady ? assistant.text : '这是性能测试的合成剧情，不对应真实存档。'.repeat(bodyRepeats) + '\n\n<StatusPlaceHolderImpl/>'
+      const userBody = turn => historyReady ? user.text : '性能测试输入 ' + turn
       next.messages = [{ ...greeting, variables: [structuredClone(state)] }]
       const rows = []
       const event = (type, d, surfaceOp) => rows.push({ seq: rows.length, time: 1, type, data: d, ...(surfaceOp ? { surfaceOp } : {}) })
       for (let turn = 1; turn <= rounds; turn++) {
         event('turn/start', { turn }); event('step/start', { turn, step: 1 })
         if (turn > 1) {
-          next.messages.push({ ...structuredClone(user), turn, text: '性能测试输入 ' + turn, sourceText: '性能测试输入 ' + turn })
-          event('user/message', { id: 'perf-u-' + turn, role: 'user', content: [{ type: 'text', text: '性能测试输入 ' + turn }], source: { kind: 'user' } }, 'append')
+          next.messages.push({ ...structuredClone(user), turn, text: userBody(turn), sourceText: userBody(turn) })
+          event('user/message', { id: 'perf-u-' + turn, role: 'user', content: [{ type: 'text', text: userBody(turn) }], source: { kind: 'user' } }, 'append')
           const message = { ...structuredClone(assistant), turn, text: body, sourceText: body, swipes: [body], variables: [structuredClone(state)] }
           message.mvuBaseline = { swipeId: 0, variables: structuredClone(state) }
           next.messages.push(message)
@@ -47,7 +59,7 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
         event('assistant/message', { turn, step: 1, message: { id: 'perf-a-' + turn, role: 'assistant', content: [{ type: 'text', text: turn === 1 ? greeting.text : body }], source: { kind: 'model', provider: 'tavern-e2e', model: 'fixed' } } }, 'append')
         event('step/end', { turn, step: 1 }); event('turn/end', { turn, reason: { kind: 'completed' } })
       }
-      size = { rounds, bodyRepeats, messages: next.messages.length, variableFields: fields + 1, bytes: Buffer.byteLength(JSON.stringify(next)), snapshotBytes: Buffer.byteLength(JSON.stringify(state)) }
+      size = { rounds, bodyRepeats, historyReady, messages: next.messages.length, variableFields: fields + 1, bytes: Buffer.byteLength(JSON.stringify(next)), snapshotBytes: Buffer.byteLength(JSON.stringify(state)) }
       report.settlementPerformance.size = size
       const estimate = value => {
         if (typeof value === 'string') return 24 + value.length * 2
@@ -71,6 +83,10 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
       assert.ok(found, 'synthetic Chat and native Session must have matching turn coordinates')
     })
     await page.frameLocator('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame').locator('#e2e-gold').filter({ hasText: /^金币：10$/ }).waitFor({ timeout: 120000 })
+    if (reopening) {
+      size.runtimeBootMs = reopening.bootMs
+      size.coldOpenToStatusMs = Date.now() - reopening.openStarted
+    }
     // Exclude cold initialization and allow snapshot maintenance to settle.
     await page.waitForTimeout(3000)
   })

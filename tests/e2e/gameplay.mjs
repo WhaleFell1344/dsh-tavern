@@ -181,9 +181,12 @@ try {
       await Promise.race([new Promise(resolve => child.once('exit', resolve)), pause(5000)])
       assert.notEqual(child.exitCode, null, '旧服务必须退出后再重启')
       await whileStopped?.()
+      const bootStarted = Date.now()
       const next = new URL(await launchServer())
+      const bootMs = Date.now() - bootStarted
       current.host = next.host
       current.searchParams.set('token', next.searchParams.get('token'))
+      const openStarted = Date.now()
       await page.goto(current.toString(), { waitUntil: 'domcontentloaded' })
       const history = page.locator('.dsh-tavern-history-group-toggle').filter({ hasText: 'E2E 奖励验收' })
       const sidebarToggle = page.getByRole('button', { name: /^(Open|Expand) sidebar$/ })
@@ -192,6 +195,7 @@ try {
       await history.click()
       await page.locator('.dsh-tavern-side-row-name').first().click()
       await openStatus()
+      return {bootMs,openStarted}
     }
     browser = await chromium.launch({ headless: true })
     context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, ...(recoveryScenario ? { hasTouch: true } : {}) })
