@@ -29,6 +29,7 @@ function canProjectDirty(previous, chat, indices) {
 export function createSessionViewReader({ readState, readChat, readChanges, readViewDelta, project, activity,
   trace, foregroundRunning, synchronize, resourceVersion = async () => '' }) {
   const cache = new Map()
+  const pending = new Map()
   async function changes(chat, revision) {
     const target = Number(chat._storageRevision) || 0
     if (revision === target) return new Set()
@@ -36,10 +37,18 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
     return changed?.revision === target ? new Set(changed.indices) : null
   }
   async function load(sessionId, options = {}) {
+    const state=await readState(sessionId)
+    const resources=state ? await resourceVersion(state) : ''
+    const key=JSON.stringify([String(sessionId),state?.id,state && identity(state),resources,options])
+    if (pending.has(key)) return pending.get(key)
+    const work=loadSnapshot(sessionId,options,state,resources)
+    pending.set(key,work)
+    try { return await work }
+    finally { if(pending.get(key)===work)pending.delete(key) }
+  }
+  async function loadSnapshot(sessionId, options, state, resources) {
     const selected = await trace.stage('readChat', async () => {
-      const state = await readState(sessionId)
       if (state === undefined) return { chat: undefined }
-      const resources = await resourceVersion(state)
       const cached = cache.get(state.id), next = {...identity(state), resourceVersion: resources}
       if (matches(cached, next) && cached.revision === next.revision) return { chat: state, cached, resourceVersion: resources }
       let verifiedDelta

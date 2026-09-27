@@ -71,3 +71,14 @@ test('verified truncation evidence reaches input projection while the full view 
  assert.equal(evidence.baseRevision,1);assert.deepEqual([...evidence.indices],[])
  assert.deepEqual(evidence.changedHeaderFields,['_storageRevision'])
 })
+
+test('concurrent cold consumers share a full read and projection at the same revision',async()=>{
+ const f=fixture(),entered=gate(),finish=gate(),original=f.deps.readChat
+ f.deps.readChat=async()=>{entered.resolve();await finish.promise;return original()}
+ const reads=Array.from({length:12},()=>f.reader.read('s',{windowHelperMessages:true}))
+ await entered.promise;await new Promise(resolve=>setImmediate(resolve));finish.resolve()
+ const results=await Promise.all(reads)
+ assert.equal(f.calls.fullRead,1)
+ assert.equal(f.calls.full,1)
+ assert.ok(results.every(view=>view.tavernHelper.messages[0].text==='one'))
+})
