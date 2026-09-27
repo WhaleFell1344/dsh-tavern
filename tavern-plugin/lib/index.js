@@ -1949,7 +1949,7 @@ export async function apply(ctx) {
     },
     resolveForegroundWorldbookReads: async input => {
       if (!['settlement', 'candidate', 'character-design'].includes(input.task)) return ''
-      const chat = await chatForSession(input.sessionId)
+      const chat = await sessionStateForSession(input.sessionId)
       const session = agentRegistry.get(input.sessionId)?.session || sessionStore.get(input.sessionId)
       return foregroundWorldbookReads(chat, session)
     },
@@ -2457,7 +2457,7 @@ export async function apply(ctx) {
       snapshot = await prepareNextWorldBookContext(snapshot, signal)
       signal?.throwIfAborted()
       if (snapshot === null) return
-      const taskRun = await backgroundTasks.begin(snapshot, 'settlement')
+      const taskRun = await backgroundTasks.begin(snapshot, 'settlement', { reuseSnapshot: true })
       snapshot = taskRun.chat
       let backgroundSessionId = str(taskRun.participantRequest.sessionId)
       let backgroundBoundary = null

@@ -107,43 +107,63 @@ export function createBackgroundTaskCoordinator(options = {}) {
     const chatId = str(chat && chat.id)
     const requestId = str(input.requestId).trim().slice(0, 160)
     const begun = await serialize(chatId, async function () {
-      const latest = await store.readChat(chatId)
-      const source = latest === undefined ? chat : latest
-      const requestedRole = str(role)
-      if (blocked(source)) {
-        const error = new Error('Tavern 正在压缩前台与后台上下文，请等待完成')
-        error.code = 'COMPACTION_RUNNING'
-        throw error
-      }
-      if (requestId !== '') {
-        const operations = Object.values(timeline.inspect({ chat: source }).operations || {})
-        const existing = operations.find(function (operation) {
-          return operation && operation.kind === 'agent' && str(operation.requestId) === requestId
-        })
-        if (existing !== undefined) {
-          if (str(existing.role) !== requestedRole) {
-            const error = new Error('同一后台请求标识对应了不同 Agent role')
-            error.code = 'IDEMPOTENCY_CONFLICT'
-            throw error
-          }
-          return {
-            chat: source,
-            value: { operationId: existing.id, basedOn: existing.basedOn, participant: null, created: false }
+      let fast = input.reuseSnapshot === true && requestId === '' && store.patchChat && Number.isSafeInteger(chat?._storageRevision)
+        && chat.timeline?.schemaVersion === 1 && Array.isArray(chat.timeline.checkpoints) && !Object.values(chat.timeline.operations || {}).some(op => op?.kind === 'body' && op.status === 'foreground-completed')
+      let source = fast ? chat : (await store.readChat(chatId) ?? chat)
+      while (true) {
+        const requestedRole = str(role)
+        if (blocked(source)) {
+          const error = new Error('Tavern 正在压缩前台与后台上下文，请等待完成')
+          error.code = 'COMPACTION_RUNNING'
+          throw error
+        }
+        if (requestId !== '') {
+          const operations = Object.values(timeline.inspect({ chat: source }).operations || {})
+          const existing = operations.find(function (operation) {
+            return operation && operation.kind === 'agent' && str(operation.requestId) === requestId
+          })
+          if (existing !== undefined) {
+            if (str(existing.role) !== requestedRole) {
+              const error = new Error('同一后台请求标识对应了不同 Agent role')
+              error.code = 'IDEMPOTENCY_CONFLICT'
+              throw error
+            }
+            return {
+              chat: source,
+              value: { operationId: existing.id, basedOn: existing.basedOn, participant: null, created: false }
+            }
           }
         }
+        const currentActivity = activity(source)
+        const expectedPending = currentActivity.phase === 'pending' && currentActivity.role === requestedRole
+        const conflictingPending = currentActivity.phase === 'pending' && currentActivity.role !== requestedRole
+        if ((currentActivity.busy || conflictingPending) && !expectedPending) {
+          const error = new Error('后台 Agent 正在执行 ' + currentActivity.role + '，请等待完成')
+          error.code = 'BACKGROUND_BUSY'
+          error.activity = currentActivity
+          throw error
+        }
+        // agent.begin only changes timeline metadata. Omit historic checkpoints
+        // from cloning/diffing; retain them in the returned full snapshot.
+        const projected = fast ? { timeline: { ...source.timeline, checkpoints: [] }, ...(Object.hasOwn(source, 'candidateAgent') ? { candidateAgent: source.candidateAgent } : {}) } : source
+        const next = timeline.apply({ chat: projected, intent: { kind: 'agent.begin', role, requestId } })
+        if (fast) {
+          const changes = diffJson(projected, next.chat)
+          const safe = changes.every(change => change.path[0] === 'candidateAgent' ||
+            change.path[0] === 'timeline' && change.path.length > 1 && change.path[1] !== 'checkpoints')
+          const saved = safe && await store.patchChat(chatId, source._storageRevision, changes,
+            { source: 'background.' + requestedRole + '.begin', operationId: next.value.operationId, requestId, returnProjection: 'settlement' })
+          if (saved) return { ...next, chat: { ...source, ...saved,
+            timeline: { ...next.chat.timeline, checkpoints: source.timeline.checkpoints }, messages: source.messages } }
+          // A concurrent writer invalidated our snapshot. Revalidate all guards
+          // against authoritative state using the established compatibility path.
+          fast = false
+          source = await store.readChat(chatId) ?? chat
+          continue
+        }
+        await store.writeChat(next.chat, { source: 'background.' + requestedRole + '.begin', operationId: next.value.operationId, requestId })
+        return next
       }
-      const currentActivity = activity(source)
-      const expectedPending = currentActivity.phase === 'pending' && currentActivity.role === requestedRole
-      const conflictingPending = currentActivity.phase === 'pending' && currentActivity.role !== requestedRole
-      if ((currentActivity.busy || conflictingPending) && !expectedPending) {
-        const error = new Error('后台 Agent 正在执行 ' + currentActivity.role + '，请等待完成')
-        error.code = 'BACKGROUND_BUSY'
-        error.activity = currentActivity
-        throw error
-      }
-      const next = timeline.apply({ chat: source, intent: { kind: 'agent.begin', role, requestId } })
-      await store.writeChat(next.chat, { source: 'background.' + requestedRole + '.begin', operationId: next.value.operationId, requestId })
-      return next
     })
     const task = {
       chat: begun.chat,

@@ -444,3 +444,59 @@ test('session binding can return task state without reloading story history',asy
  assert.equal(state.timeline.operations[task.operationId].startedSessionId,'background')
  assert.equal(chat.messages[0].text,'keep')
 })
+
+for(const conflict of [false,true])test(`settlement begin reuses an exact snapshot without full reads; conflict=${conflict}`,async()=>{
+ const timeline=createStoryTimeline()
+ let chat=timeline.apply({chat:{id:'c',_storageRevision:1,messages:[{role:'assistant',text:'keep'}]},intent:{kind:'ensure'}}).chat
+ let reads=0,writes=0,patches=0
+ const store={readChat:async()=>{reads++;return structuredClone(chat)},writeChat:async value=>{writes++;chat=value},updateChat:async(_id,fn)=>{chat=fn(chat);return chat},
+  patchChat:async(_id,revision,changes)=>{
+   patches++
+   if(conflict){chat._storageRevision++;chat.messages[0].text='concurrent';return undefined}
+   assert.equal(revision,chat._storageRevision)
+   const {applyJsonChanges}=await import('../tavern-plugin/lib/domain/json-mutation.js')
+   chat=applyJsonChanges(chat,changes);chat._storageRevision++
+   return {...chat,messages:[]}
+  }}
+ const task=await createBackgroundTaskCoordinator({timeline,store}).begin(structuredClone(chat),'settlement',{reuseSnapshot:true})
+ assert.equal(patches,1)
+ assert.equal(reads,conflict?1:0)
+ assert.equal(writes,conflict?1:0)
+ assert.equal(task.chat.messages[0].text,conflict?'concurrent':'keep')
+ assert.equal(task.chat._storageRevision,chat._storageRevision)
+ assert.equal(chat.timeline.operations[task.operationId].status,'running')
+})
+
+test('native fast begin retains history and checkpoints in storage and the returned snapshot',async t=>{
+ const {mkdtemp,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path')
+ const {createChatJournalStore}=await import('../tavern-plugin/lib/domain/chat-journal-store.js')
+ const root=await mkdtemp(join(tmpdir(),'native-begin-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const p=createChatPersistence({store:createChatJournalStore({dataRoot:root,newConversations:true})}),timeline=createStoryTimeline()
+ const original=timeline.apply({chat:{id:'c',sessionId:'s',messages:[{role:'assistant',text:'keep',variables:[{hp:3}]}]},intent:{kind:'ensure'}}).chat
+ original.timeline.checkpoints=[{id:'old',before:{messages:[{text:'historic'}]}}]
+ await p.write(original)
+ let reads=0,writes=0
+ const task=await createBackgroundTaskCoordinator({timeline,store:{readChat:async()=>{reads++;throw Error('unexpected full read')},writeChat:async()=>{writes++;throw Error('unexpected full write')},updateChat:p.update,patchChat:p.patch}}).begin(await p.read('c'),'settlement',{reuseSnapshot:true})
+ const disk=await p.read('c')
+ assert.equal(reads+writes,0)
+ assert.deepEqual(disk.messages,original.messages)
+ assert.deepEqual(task.chat.messages,disk.messages)
+ assert.deepEqual(task.chat.timeline.checkpoints,original.timeline.checkpoints)
+ assert.deepEqual(disk.timeline.checkpoints,original.timeline.checkpoints)
+ assert.equal(task.chat._storageRevision,disk._storageRevision)
+ assert.equal(disk.timeline.operations[task.operationId].status,'running')
+})
+
+test('fast begin rechecks busy guards after a concurrent operation wins the CAS',async()=>{
+ const timeline=createStoryTimeline()
+ let chat=timeline.apply({chat:{id:'c',_storageRevision:1,messages:[]},intent:{kind:'ensure'}}).chat
+ let writes=0
+ const coordinator=createBackgroundTaskCoordinator({timeline,store:{readChat:async()=>chat,writeChat:async()=>{writes++},updateChat:async()=>{},patchChat:async()=>{
+  chat=timeline.apply({chat,intent:{kind:'agent.begin',role:'candidate'}}).chat
+  chat._storageRevision++
+  return undefined
+ }}})
+ await assert.rejects(coordinator.begin(structuredClone(chat),'settlement',{reuseSnapshot:true}),/后台 Agent 正在执行/)
+ assert.equal(writes,0)
+ assert.equal(Object.values(chat.timeline.operations).filter(op=>op.role==='settlement').length,0)
+})

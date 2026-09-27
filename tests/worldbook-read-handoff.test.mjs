@@ -48,3 +48,12 @@ test('explicit query-and-read hands full text to settlement, but mismatched quer
   result.text=JSON.stringify({...JSON.parse(result.text),query:'其他'})
   assert.equal(foregroundWorldbookReads(chat,{events}),'')
 })
+
+test('session-state projection preserves regenerated foreground handoff without story bodies',async()=>{
+ const {projectChatSessionState}=await import('../tavern-plugin/lib/domain/chat-session-state.js')
+ const chat={id:'c',sessionId:'s',messages:[{role:'assistant',turn:1,greeting:true},{role:'user',turn:2,text:'body'},{role:'assistant',turn:2,text:'story',variables:[{large:'snapshot'}]}],regeneratedDshTurns:{2:7}}
+ const session={events:read(7,'regenerated',[entry('62','资料')])}
+ const selected=projectChatSessionState(chat)
+ assert.equal(selected.messages[2].text,undefined)
+ assert.equal(foregroundWorldbookReads(selected,session),foregroundWorldbookReads(chat,session))
+})
