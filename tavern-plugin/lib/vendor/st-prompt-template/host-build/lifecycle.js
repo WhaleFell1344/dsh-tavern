@@ -31,7 +31,7 @@ export function createTemplateLifecycle() {
     }
     // Yield between bounded batches so generation work can run before the next batch.
     const batch = new Set(settings.enabled && settings.render_enabled ? [...pending].slice(0, 8) : pending)
-    mountTemplateMessages({renderIndices:batch})
+    mountTemplateMessages({renderIndices:settings.enabled && settings.render_enabled ? batch : new Set()})
     if (previous && chat.length < previous.length) await eventSource.emit('MESSAGE_DELETED', chat.length)
     for (const index of batch) {
       const message = chat[index], old = previous?.[index]

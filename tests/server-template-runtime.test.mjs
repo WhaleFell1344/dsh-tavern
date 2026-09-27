@@ -237,3 +237,12 @@ test('deferred upstream token statistics cannot crash an idle template worker', 
   assert.equal((await runtime.inspect('s')).present, true)
   assert.equal((await engine.render('still alive')).text, 'still alive')
 })
+
+test('bounded formatting mirror preserves full historical data and template input rendering', async t => {
+  const {engine,state} = fixture(t)
+  state('s').state.chat = Array.from({length:401}, (_, i) => ({mes:'history '+i,name:'User',is_user:true,is_system:false,swipe_id:0,swipes:['history '+i],variables:[{gold:i}]}))
+  const result = await engine.renderInput('<%= window.SillyTavern.getContext().chat[0].variables[0].gold %> / <%= window.SillyTavern.getContext().chat.length %>')
+  assert.match(result.message.template_display?.html || result.message.mes, /0 \/ 402/)
+  assert.equal(state('s').state.chat.length, 401)
+  assert.equal((await engine.render('<%= window.SillyTavern.getContext().chat[0].mes %>')).text, 'history 0')
+})

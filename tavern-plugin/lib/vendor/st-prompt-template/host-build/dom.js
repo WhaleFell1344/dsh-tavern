@@ -127,20 +127,34 @@ function installMirrorFormatting() {
 export function mountTemplateMessages({renderIndices = new Set()} = {}) {
   let root = document.getElementById('chat')
   if (!root) { root = document.createElement('div'); root.id = 'chat'; root.hidden = true; document.body.append(root) }
-  while (root.children.length > chat.length) root.lastElementChild.remove()
-  chat.forEach((message, index) => {
+  // Like the visible chat, the formatting mirror is a window over full chat data.
+  // Historical batches explicitly add their targets; never format every archived
+  // message just to evaluate one new input or eight display rows.
+  const visible = new Set(renderIndices)
+  for (let index = Math.max(0, chat.length - 200); index < chat.length; index++) visible.add(index)
+  const rows = new Map()
+  for (const row of Array.from(root.children)) {
+    const index = Number(row.getAttribute('mesid'))
+    if (visible.has(index) && index < chat.length) rows.set(index, row)
+    else row.remove()
+  }
+  const tail = document.createDocumentFragment()
+  for (const index of [...visible].filter(index => Number.isInteger(index) && index >= 0 && index < chat.length).sort((a,b) => a-b)) {
+    const message = chat[index]
     const display = message.template_display
     const saved = display?.source === message.mes && display.swipe === (message.swipe_id || 0) ? display.html : undefined
     const source = saved ?? message.mes
-    let row = root.children[index]
+    let row = rows.get(index)
     if (!row) {
       row = document.createElement('div'); row.className = 'mes'; row.setAttribute('mesid', String(index))
-      const content = document.createElement('div'); content.className = 'mes_text'; row.append(content); root.append(row)
+      const content = document.createElement('div'); content.className = 'mes_text'; row.append(content)
     }
-    if (!renderIndices.has(index) && row.templateSource === source && row.templateSwipe === (message.swipe_id || 0)) return
+    tail.append(row)
+    if (!renderIndices.has(index) && row.templateSource === source && row.templateSwipe === (message.swipe_id || 0)) continue
     row.firstElementChild.innerHTML = inertMarkup(!renderIndices.has(index) && saved !== undefined ? saved : formatTemplateMessage(message.mes, message.name, message.is_system, message.is_user, index))
     row.templateSource = source; row.templateSwipe = message.swipe_id || 0
-  })
+  }
+  root.append(tail)
 }
 
 export function createTemplateDOMServices() {
