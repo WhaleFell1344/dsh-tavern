@@ -28,11 +28,20 @@ export function createConversationState({store}){
  async function validRoot(id,root){
   if(await tree(id).type(root)!=='object'||await tree(id).type(root,'/variables')!=='object')throw error('CONVERSATION_INPUT','World requires variables')
  }
- async function create(id,input){
+ async function create(id,input,options){
   const value=capture(input)
   world(value.world)
+  let runtime={}
+  if(value.runtimeState!==undefined){
+   const r=value.runtimeState
+   if(value.metadata?.runtimeLayout!==1||!object(r)||!/^[a-f0-9]{64}$/.test(r.chatHeaderRef)
+     ||!Number.isSafeInteger(r.chatRevision)||r.chatRevision<1
+     ||!(r.worldMessage===null||Number.isSafeInteger(r.worldMessage)&&r.worldMessage>=0)
+     ||!Number.isSafeInteger(r.worldSwipe)||r.worldSwipe<0)throw error('CONVERSATION_INPUT','Invalid runtime state')
+   runtime={chatHeaderRef:r.chatHeaderRef,chatRevision:r.chatRevision,worldMessage:r.worldMessage,worldSwipe:r.worldSwipe}
+  }
   return store.create(id,{metadata:{format:FORMAT,settings:value.metadata??{}},messages:value.messages??[],
-   state:{branchId:randomUUID(),storyRevision:0,worldRevision:0,lifecycleRevision:0,activeSettlementId:null,worldRef:await tree(id).create(value.world)}})
+   state:{...runtime,branchId:randomUUID(),storyRevision:0,worldRevision:0,lifecycleRevision:0,activeSettlementId:null,worldRef:await tree(id).create(value.world)}},options)
  }
  async function open(id,{limit=50,includeWorld=true}={}){
   const view=await store.openConversation(id,{limit})
@@ -70,6 +79,7 @@ export function createConversationState({store}){
   if(typeof args.userText!=='string'||typeof args.assistantText!=='string'||!object(args.basis))throw error('CONVERSATION_INPUT')
   const signature=fingerprint(args)
   return transact(id,async view=>{
+   if(view.metadata.settings?.runtimeLayout)throw error('CONVERSATION_FORMAT','Runtime conversations require the runtime transaction adapter')
    const keys=[key,...(view.state.activeSettlementId?[view.state.activeSettlementId]:[])]
    const existing=await records(id,view,keys)
    if(existing[key]){

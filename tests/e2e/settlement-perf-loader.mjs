@@ -18,6 +18,10 @@ export async function load(url, context, next) {
     replace('      async commit(input = {}) {', '      async commit(input = {}) {\n' + mark('commit-start') + '\ntry {')
     replace('      },\n      async fail(trace)', '} finally {' + mark('commit-return') + '}\n      },\n      async fail(trace)')
   } else if (url.endsWith('/chat-journal-store.js')) {
+    for (const state of ['state','currentState']) {
+      const seam=`        const saved=await native.write(chatId,${state},next,changes,metadata.assertCurrent)`
+      replace(seam,seam+"\nconsole.log('[settlement-perf]'+JSON.stringify({stage:'native-head-published',at:performance.timeOrigin+performance.now(),source:metadata.source,revision:saved.revision}));")
+    }
     replace('    if (bytes > cacheMaxBytes) return', "    if (bytes > cacheMaxBytes) { console.log('[settlement-perf]'+JSON.stringify({stage:'cache-oversized',at:performance.timeOrigin+performance.now(),bytes,limit:cacheMaxBytes,revision:state.revision})); return }")
     replace("    await appendFile(openPath, encodeFrame(frame), 'utf8')", "    await appendFile(openPath, encodeFrame(frame), 'utf8')\n" + "console.log('[settlement-perf]'+JSON.stringify({stage:'journal-appended',at:performance.timeOrigin+performance.now(),source:frame.source,revision:frame.revision}));")
   }

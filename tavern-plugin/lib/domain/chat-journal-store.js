@@ -1,3 +1,4 @@
+import { createNativeConversationStorage } from './native-conversation-storage.js'
 import { createLegacyCompatibleStorage } from './legacy-compatible-storage.js'
 import { createSessionMessageIndex } from './session-message-index.js'
 import { copyLazyHistoryHeader } from './lazy-history-read.js'
@@ -62,6 +63,7 @@ async function readJson(target) {
 export function createChatJournalStore(options = {}) {
   const dataRoot = path.resolve(String(options.dataRoot || ''))
   const chatsRoot = path.join(dataRoot, 'chats')
+  const native = createNativeConversationStorage({dataRoot,onIO:options.onNativeIO})
   const compatible = options.compatibleStorage === false ? null : createLegacyCompatibleStorage({dataRoot,onIO:options.onCompatibilityIO})
   const legacyData = options.legacyData
   const logger = options.logger || console
@@ -349,7 +351,7 @@ export function createChatJournalStore(options = {}) {
   }
 
   async function materialize(chatId, targetRevision = Number.POSITIVE_INFINITY) {
-    return await compatible?.read(chatId,targetRevision) || materializeLegacy(chatId,targetRevision)
+    return await native.read(chatId,targetRevision) || await compatible?.read(chatId,targetRevision) || materializeLegacy(chatId,targetRevision)
   }
   async function materializeLegacy(chatId, targetRevision = Number.POSITIVE_INFINITY) {
     const paths = layout(chatId)
@@ -668,6 +670,12 @@ export function createChatJournalStore(options = {}) {
       changes = normalized
       const next=applyIndexedChanges(state.chat,changes)
       if(next.id!==chatId || revisionOf(next)!==expectedRevision+1)throw new Error('Invalid journal patch revision')
+      if(state.native){
+        const recent=knownChanges(chatId,state)
+        const saved=await native.write(chatId,state,next,changes,metadata.assertCurrent)
+        rememberState(chatId,await version(chatId),saved,rememberChanges(recent,saved.revision,changes))
+        return slice(next,[],metadata.returnProjection).chat
+      }
       if(state.compatible){
         const recent=knownChanges(chatId,state)
         const saved=await compatible.write(chatId,state,next,changes,metadata.assertCurrent)
@@ -710,6 +718,11 @@ export function createChatJournalStore(options = {}) {
       // detached by copying its JSON containers without another full JSON string.
       const next = jsonClone(produced)
       if (next === undefined || next === null || typeof next !== 'object' || Array.isArray(next)) throw new Error('Chat Journal 只能保存 JSON object')
+      if (currentState == null && options.newConversations === true && next.mode !== 'card') {
+        const saved=await native.create(chatId,next,metadata.assertCurrent)
+        rememberState(chatId,await version(chatId),saved)
+        return copyJsonTree(next)
+      }
       if (currentState == null) {
         await mkdir(paths.journals, { recursive: true })
         const revision = revisionOf(next)
@@ -724,6 +737,12 @@ export function createChatJournalStore(options = {}) {
       if (revision !== baseRevision + 1) throw new Error('Chat Journal 写入 revision 非连续，期望 ' + (baseRevision + 1) + '，实际 ' + revision)
       const changes = diffJson(current, next)
       if (changes.length === 0) return copyJsonTree(current)
+      if(currentState.native){
+        const recent=knownChanges(chatId,currentState)
+        const saved=await native.write(chatId,currentState,next,changes,metadata.assertCurrent)
+        rememberState(chatId,await version(chatId),saved,rememberChanges(recent,saved.revision,changes))
+        return copyJsonTree(next)
+      }
       if(currentState.compatible){
         const recent=knownChanges(chatId,currentState)
         const saved=await compatible.write(chatId,currentState,next,changes,metadata.assertCurrent)
@@ -760,7 +779,7 @@ export function createChatJournalStore(options = {}) {
     })
   }
 
-  async function version(chatId) {return await compatible?.version(chatId) || legacyVersion(chatId)}
+  async function version(chatId) {return await native.version(chatId) || await compatible?.version(chatId) || legacyVersion(chatId)}
   async function legacyVersion(chatId) {
     const paths = layout(chatId)
     if (!(await exists(paths.root))) {
@@ -793,6 +812,7 @@ export function createChatJournalStore(options = {}) {
 
   const migrationFailures=new Map()
   async function migrateCompatibility(chatId,{force=false}={}){
+    if(await native.version(chatId))return {status:'native'}
     if(!compatible)throw new Error('Compatible storage is disabled')
     const current=await compatible.status(chatId)
     if(current?.mode==='legacy'&&!force)return {status:'legacy',reason:'explicit-restore'}
@@ -825,6 +845,7 @@ export function createChatJournalStore(options = {}) {
     }
   }
   async function restoreLegacy(chatId){
+    if(await native.version(chatId))throw new Error('Native conversations are not legacy migrations')
     if(!compatible)throw new Error('Compatible storage is disabled')
     await flushMaintenance()
     return serialize(chatId,async()=>{

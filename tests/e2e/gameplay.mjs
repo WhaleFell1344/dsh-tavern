@@ -1,3 +1,5 @@
+import { createConversationPageStore } from '../../tavern-plugin/lib/domain/conversation-page-store.js'
+import { createConversationState } from '../../tavern-plugin/lib/domain/conversation-state.js'
 import { settlementPerformanceChecks, settlementPerformanceInitialVariables } from './settlement-performance.mjs'
 import {setupRealVariables,realVariableLookupChecks} from './real-variable-lookup.mjs'
 import { incrementalMvuChecks } from './mvu-incremental.mjs'
@@ -54,6 +56,23 @@ async function savedChat() {
   const games = chats.filter(chat => chat.mode !== 'card')
   assert.equal(games.length, 1, '本次只应创建一局游戏')
   return games[0]
+}
+async function assertNativeStorage() {
+  const chat=await savedChat()
+  const pages=createConversationPageStore({root:join(data,'chats')})
+  const domain=createConversationState({store:pages})
+  const view=await domain.open(chat.id,{limit:2})
+  assert.equal(view.metadata.format,'conversation-state-v2')
+  assert.equal(view.metadata.settings.runtimeLayout,1)
+  assert.equal(view.messageCount,chat.messages.length)
+  assert.equal(view.state.chatRevision,chat._storageRevision)
+  assert.ok(view.messages.every(row=>row.message.runtimeRef&&!Object.hasOwn(row.message,'variables')))
+  const latest=[...chat.messages].reverse().find(row=>row.variables?.[row.swipeId||0])
+  if(latest)assert.deepEqual(view.state.world.variables,latest.variables[latest.swipeId||0])
+  const files=await readdir(join(data,'chats',chat.id))
+  assert.ok(files.includes('head.json')&&files.includes('blocks'))
+  assert.ok(!files.includes('snapshots')&&!files.includes('journals')&&!files.includes('storage-format.json'))
+  report.nativeFormat={format:view.metadata.format,chatId:chat.id,messageCount:view.messageCount,revision:view.state.chatRevision,gold:view.state.world.variables.stat_data?.gold,files}
 }
 function inspectSaved(chat) {
   const replies = chat.messages.filter(message => message.role === 'assistant' && !message.greeting)
@@ -219,6 +238,7 @@ try {
     await page.frameLocator('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame')
       .locator('#e2e-gold').filter({ hasText: /^金币：0$/ }).waitFor()
   })
+  if(process.argv.includes('--native-format'))await step('确认新局直接写入原生分页存档',assertNativeStorage)
   if (process.argv.includes('--text-colors')) {
     await step('实际正文挂载主题对白高亮', async () => {
       await page.locator('.dsh-tavern-colored-markdown').waitFor()
@@ -388,6 +408,15 @@ try {
   if (process.argv.includes('--card-update')) await cardUpdateChecks({page,step,savedChat,data,output,report})
   if (process.argv.includes('--sidebar') || process.argv.includes('--sidebar-only')) await sidebarUpgrade({ page, step, savedChat, output, report })
   }
+  if(process.argv.includes('--native-format'))await step('服务重启后打开同一原生存档并核对当前变量',async()=>{
+    const before=await savedChat()
+    await restartServer()
+    const expected=[...before.messages].reverse().find(row=>row.variables?.[row.swipeId||0]).variables[0].stat_data.gold
+    await page.frameLocator('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame').locator('#e2e-gold').filter({hasText:new RegExp('^金币：'+expected+'$')}).waitFor()
+    assert.deepEqual((await savedChat()).messages,before.messages)
+    await assertNativeStorage()
+    report.nativeFormat.restart=true
+  })
   assert.deepEqual(errors, [], '整个验收不得出现未捕获浏览器异常')
   assert.doesNotMatch(log, /服务端模板进程异常|Unsupported or expired template RPC/, '验收期间模板子进程不得异常退出')
   report.status = 'passed'

@@ -130,7 +130,7 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
   for(const [slot,entries] of groups)children[slot]=await putEntries(dir,read,children[slot],entries,depth+1)
   return writeBlock(dir,{kind:'entries',children})
  }
- async function create(id,input){
+ async function create(id,input,{assertCurrent}={}){
   const dir=directory(id),value=copy(input)
   if(!record(value.state)||!Array.isArray(value.messages??[])||!(value.messages??[]).every(record))throw Error('Invalid initial conversation')
   let result
@@ -141,11 +141,12 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
     stateId:await writeBlock(dir,{kind:'state',value:value.state}),metadataId:await writeBlock(dir,{kind:'metadata',value:value.metadata??{}})}
    const headId=await writeBlock(dir,head)
    result={revision:1,snapshotId:headId}
+   assertCurrent?.()
    return JSON.stringify({format:FORMAT,headId})
   })
   return result
  }
- async function commit(id,input){
+ async function commit(id,input,{assertCurrent}={}){
   const dir=directory(id),change=copy(input),read=reader(dir)
   if(!integer(change.expectedRevision,1)||!Array.isArray(change.append??[])||!(change.append??[]).every(record)
     ||!Array.isArray(change.edits??[])||(Object.hasOwn(change,'state')&&!record(change.state)))throw Error('Invalid commit')
@@ -157,17 +158,20 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
    const head=validateHead(await read(reference.headId,'head'),id)
    if(head.revision!==change.expectedRevision)throw conflict()
    if(!integer(head.revision+1,1))throw Error('Revision overflow')
+   const retained=change.truncateTo ?? head.count
+   if(!integer(retained)||retained>head.count)throw Error('Invalid truncation')
    const pages=new Map()
    async function pageAt(page){
-    if(!pages.has(page))pages.set(page,page*PAGE_SIZE<head.count?[...await leaf(read,head.root,head.height,page)]:[])
+    if(!pages.has(page))pages.set(page,page*PAGE_SIZE<retained?(await leaf(read,head.root,head.height,page)).slice(0,Math.min(PAGE_SIZE,retained-page*PAGE_SIZE)):[])
     return pages.get(page)
    }
    for(const edit of change.edits??[]){
-    if(!integer(edit.position)||edit.position>=head.count||!record(edit.message))throw Error('Invalid edit position or message')
+    if(!integer(edit.position)||edit.position>=retained||!record(edit.message))throw Error('Invalid edit position or message')
     const page=Math.floor(edit.position/PAGE_SIZE)
     ;(await pageAt(page))[edit.position%PAGE_SIZE]=edit.message
    }
-   let count=head.count
+   if(retained<head.count&&retained%PAGE_SIZE)await pageAt(Math.floor(retained/PAGE_SIZE))
+   let count=retained
    for(const message of change.append??[]){
     if(!integer(count+1)||count>=PAGE_SIZE*FANOUT**10)throw Error('History capacity exceeded')
     ;(await pageAt(Math.floor(count/PAGE_SIZE)))[count%PAGE_SIZE]=message;count++
@@ -192,6 +196,7 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
    if(Object.hasOwn(change,'metadata'))next.metadataId=await writeBlock(dir,{kind:'metadata',value:change.metadata})
    const headId=await writeBlock(dir,next)
    result={revision:next.revision,snapshotId:headId}
+   assertCurrent?.()
    return JSON.stringify({format:FORMAT,headId})
   })
   return result

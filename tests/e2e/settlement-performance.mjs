@@ -36,7 +36,7 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
   }
   const chatId = fixture.id
   let size
-  report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + journal + React; synthetic history, fixed model; tracing disabled', requireCompact, size: { rounds, fields }, samples: [] }
+  report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + active storage + React; synthetic history, fixed model; tracing disabled', requireCompact, size: { rounds, fields }, samples: [] }
   await step(`构造 ${rounds} 轮隔离长档并重新打开`, async () => {
     const reopening = await restartServer(async () => {
       const next = structuredClone(fixture), greeting = next.messages[0], user = next.messages.find(m => m.role === 'user'), assistant = next.messages.at(-1)
@@ -91,7 +91,7 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     await page.waitForTimeout(3000)
   })
   const samples = []
-  report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + journal + React; synthetic history, fixed model; tracing disabled', requireCompact, size, samples }
+  report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + active storage + React; synthetic history, fixed model; tracing disabled', requireCompact, size, samples }
   for (let run = 0; run < runs; run++) await step(`长档结算采样 ${run + 1}/${runs}`, async () => {
     const gold = 100 + run
     await writeFile(join(output, 'performance-control.json'), JSON.stringify({ id: run, gold }))
@@ -153,15 +153,16 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     const commitStart = events.find(x=>x.stage==='commit-start' && x.at>=runtime)?.at
     const commitAt = events.find(x=>x.stage==='commit-return' && x.at>=commitStart)?.at
     assert.ok(submitted && runtime && commitStart && commitAt, 'all real settlement boundaries must be measured')
-    const journal = events.filter(x => x.stage === 'journal-appended' && x.source === 'background.settlement.commit' && x.at >= commitStart && x.at <= commitAt).at(-1)?.at
-    assert.ok(journal, 'final commit must append a journal frame (OS-visible write, not fsync)')
+    const persisted = events.filter(x => ['journal-appended','native-head-published'].includes(x.stage) && x.source === 'background.settlement.commit' && x.at >= commitStart && x.at <= commitAt).at(-1)
+    assert.ok(persisted, 'final commit must publish native head or append legacy journal')
+    const persistedAt=persisted.at
     const browserEvents = await page.evaluate(() => window.__perfSettlement.events)
     const eventId = events.find(x => x.stage === 'dispatch-start')?.eventId
     const browserCompleteAt = browserEvents.find(x => x.eventId === eventId)?.at
     assert.ok(browserCompleteAt, 'observe completion of the exact MVU browser event')
     const round = n => Math.round(n * 10) / 10
-    const sample = { run, append, gold, clickedAt, submittedAt: submitted, runtimeReturnedAt: runtime, commitStartedAt: commitStart, journalAppendedAt: journal, commitAt, visibleAt, receiptAt, browserCompleteAt,
-      browserToJournalMs: round(journal - browserCompleteAt), browserToCommitMs: round(commitAt - browserCompleteAt), browserToVisibleMs: round(visibleAt - browserCompleteAt),
+    const sample = { run, append, gold, clickedAt, submittedAt: submitted, runtimeReturnedAt: runtime, commitStartedAt: commitStart, persistenceCompletedAt:persistedAt, persistenceKind:persisted.stage, ...(persisted.stage==='journal-appended'?{journalAppendedAt:persistedAt}:{}), commitAt, visibleAt, receiptAt, browserCompleteAt,
+      browserToPersistenceMs: round(persistedAt - browserCompleteAt), ...(persisted.stage==='journal-appended'?{browserToJournalMs:round(persistedAt-browserCompleteAt)}:{}), browserToCommitMs: round(commitAt - browserCompleteAt), browserToVisibleMs: round(visibleAt - browserCompleteAt),
       inputToSubmitMs: round(submitted - clickedAt), inputToVisibleMs: round(visibleAt - clickedAt),
       submitToCommitMs: round(commitAt - submitted), submitToVisibleMs: round(visibleAt - submitted), runtimeToCommitMs: round(commitAt - runtime),
       runtimeToVisibleMs: round(visibleAt - runtime), commitMs: round(commitAt - commitStart), commitToVisibleMs: round(visibleAt - commitAt),
