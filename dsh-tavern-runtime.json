@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "b9ae9d49189b54e40fa632f3cf6581f570c96a5d",
-  "releaseSequence": 412,
+  "revision": "e6184bb13396f4d91fcc90a8a220b2d741871c6b",
+  "releaseSequence": 413,
   "version": "2.3.0",
   "files": [
     {
@@ -356,8 +356,8 @@
     },
     {
       "path": "tavern-plugin/lib/client.js",
-      "sha256": "c1750708f6d3e7b6daa1b81a5fd5b357e8caa22364a1df11c9f6549719cc4626",
-      "size": 1191960
+      "sha256": "26e43a28b8d5a6621a84daff46c4506a2d33debb92ca1a8914bd5b91859da78a",
+      "size": 1192206
     },
     {
       "path": "tavern-plugin/lib/cordis-inspect.js",
@@ -451,8 +451,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/candidate-tasks.js",
-      "sha256": "61f843af811421a2b91fb818ffded1b8660b5173b17d948181a1f9f44c9c9dc7",
-      "size": 7956
+      "sha256": "dde724edc6c88c0f6faa886339eae074b53955999722f820b9611bd304890664",
+      "size": 8043
     },
     {
       "path": "tavern-plugin/lib/domain/card-deletion.js",
@@ -611,8 +611,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/coordination-event-publisher.js",
-      "sha256": "331fb1c246779b5010a6987409e635578cf1ab406aabc19bcbb07240122f5a6f",
-      "size": 4423
+      "sha256": "897440b997de1d2d71720d01493cb300c608b8a5a322c7d7b85abe4b3a2d2c9a",
+      "size": 4671
     },
     {
       "path": "tavern-plugin/lib/domain/copy-json-tree.js",
@@ -4076,8 +4076,8 @@
     },
     {
       "path": "tavern-plugin/src/client/main.js",
-      "sha256": "bbbe73a8c284196288120bd6490b7f9f330f26d35b9ceabe8ded612755f39145",
-      "size": 813523
+      "sha256": "653acfefc45577b22ff1c89e16b61d4edf3241da38368f814a20fa81974fd794",
+      "size": 813769
     },
     {
       "path": "tavern-plugin/src/client/modules/assistant-visibility.js",
