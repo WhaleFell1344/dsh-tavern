@@ -1313,6 +1313,13 @@ export async function apply(ctx) {
       await sessionStore.flush(session)
     },
     resolveChat: chatForSession,
+    resolveHelperContext: async sessionId => {
+      const chatId = (await readSessionMap())[sessionId]
+      if (!chatId) return undefined
+      const selected = await chatPersistence.readHelperContext(chatId)
+      if (!selected || selected.chat.sessionId !== sessionId || selected.chat.backgroundConfigVersion !== 1 || selected.chat.conversationFeaturesVersion !== 1) return undefined
+      return selected
+    },
     resolveSettlementBase: async sessionId => {
       const chatId = (await readSessionMap())[sessionId]
       if (!chatId) return undefined
@@ -3484,7 +3491,13 @@ export async function apply(ctx) {
       case 'getFullTemplateRuntimeInfo': throw new Error('提示词模板已迁移到服务端，请刷新页面');
       case 'getSession': return sessionViews.response(args || {})
       case 'hydrateTavernHelperMessages': {
-        const chat = await chatForSession(args && args.sessionId)
+        const sessionId = args && args.sessionId
+        const chatId = (await readSessionMap())[sessionId]
+        const selected = chatId && await chatPersistence.readHelperContext(chatId, {from:args?.from,to:args?.to})
+        if (selected && selected.chat.sessionId === sessionId && selected.chat.backgroundConfigVersion === 1 && selected.chat.conversationFeaturesVersion === 1) {
+          return {from:selected.from,to:selected.to,messages:selected.context.messages}
+        }
+        const chat = await chatForSession(sessionId)
         if (!chat) throw new Error('请先打开游玩会话')
         return hydrateTavernHelperMessages(chat, args && args.from, args && args.to)
       }

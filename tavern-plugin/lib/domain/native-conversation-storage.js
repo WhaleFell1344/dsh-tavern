@@ -1,3 +1,4 @@
+import {projectTavernHelperContext,projectTavernHelperMessage} from './tavern-helper-context.js'
 import {projectSessionMessage,projectChatSessionState} from './chat-session-state.js'
 import {createScopedMessages} from './scoped-messages.js'
 import {createBufferedJsonRecords} from './buffered-json-records.js'
@@ -103,6 +104,34 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   }
   for(const position of indices)chat.messages.push(await t.get(references.get(position)))
   return {chat,messageCount:view.messageCount,denseMessages:true}
+ }
+ // Helper owns a read projection, not an editable runtime Chat. Bind header
+ // and every page to one immutable head, even while another writer appends.
+ async function readHelperContext(id,range){
+  const view=await head(id)
+  if(!view)return null
+  const chat=await selectedHeader(id,view,range?['id','sessionId','_storageRevision','backgroundConfigVersion','conversationFeaturesVersion']:'settlement'),t=tree(id)
+  const from=range?Math.max(0,Number(range.from)||0):0
+  const to=range?Math.min(view.messageCount-1,Number.isSafeInteger(Number(range.to))?Number(range.to):view.messageCount-1):view.messageCount-1
+  if(!Number.isSafeInteger(from))throw Error('消息楼层不存在: '+from)
+  const messages=[],turnMessageIds={}
+  const fields=['role','tavernRole','tavernHidden','name','turn','greeting','swipeId','swipes','sourceText','text','variables','tavernPluginData']
+  for(let start=from;start<=to;start+=500){
+   const page=await pages.readHistoryPage(id,{cursor:{snapshotId:view.snapshotCursor.snapshotId,before:Math.min(to+1,start+500)},limit:Math.min(500,to-start+1)})
+   for(const {position,message} of page.messages){
+    const source={}
+    for(const field of fields){
+     const value=await t.get(message.runtimeRef,'/'+field)
+     if(value!==undefined)source[field]=value
+    }
+    const projected=projectTavernHelperMessage(source,position)
+    messages.push(projected)
+    const turn=Math.max(0,Number(source.turn)||(source.greeting===true?1:0))
+    if(projected.role==='assistant'&&turn>0)turnMessageIds[String(turn)]=position
+   }
+  }
+  const context={...projectTavernHelperContext({...chat,messages:[]}),messages,turnMessageIds}
+  return {chat,context,from,to}
  }
  async function readSessionState(id,options={}){
   const view=await head(id)
@@ -228,5 +257,5 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    records:[['chat-revision:'+stored.revision,view.snapshotCursor.snapshotId]]},{assertCurrent})
   return result(next,await head(id))
  }
- return Object.freeze({read,readSlice,readSessionState,version,create,write})
+ return Object.freeze({read,readHelperContext,readSlice,readSessionState,version,create,write})
 }

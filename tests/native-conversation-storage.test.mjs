@@ -1,3 +1,4 @@
+import {projectTavernHelperContext,hydrateTavernHelperMessages} from '../tavern-plugin/lib/domain/tavern-helper-context.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtemp,rm,readdir,readFile} from 'node:fs/promises'
@@ -163,4 +164,38 @@ test('new-format option does not convert existing journals or card chats; stale 
  third.posture='third';await persistence.write(third)
  fourth.posture='fourth'
  await assert.rejects(persistence.write(fourth),{code:'DSH_TAVERN_CHAT_CONFLICT'})
+})
+
+
+test('cold Helper projections read only requested page rows and preserve all historical API fields',async t=>{
+ const {root,persistence}=await fixture(t)
+ const messages=Array.from({length:530},(_,i)=>({...row(i),turn:i+1,swipeId:1,swipes:['a'+i,'b'+i],variables:[{gold:i},{gold:i+1}],tavernPluginData:{custom:i}}))
+ messages[0]={...messages[0],role:'tavern-helper',tavernRole:'system',tavernHidden:true,name:'plugin'}
+ // These large runtime-only fields must never be read for a Helper request.
+ messages[529].displayRuntime={frames:['diagnostic'.repeat(20000)]}
+ messages[529].mvuBaseline={variables:{archive:'baseline'.repeat(20000)}}
+ const chat=await persistence.write({id:'helper',sessionId:'s',messages,variables:{chat:true},tavernHelperScriptVariables:{test:{value:1}},tavernPluginMetadata:{custom:true}})
+ const io=[]
+ const cold=createChatPersistence({store:createChatJournalStore({dataRoot:root,cacheMaxBytes:1,onNativeIO:e=>io.push(e)})})
+ const range=await cold.readHelperContext('helper',{from:527,to:600})
+ assert.deepEqual({from:range.from,to:range.to,messages:range.context.messages},hydrateTavernHelperMessages(chat,527,600))
+ assert.ok(io.filter(e=>e.type==='page').length<=2)
+ assert.ok(io.every(e=>e.bytes<65536),'skip runtime-only blobs even in selected rows')
+ io.length=0
+ const full=await cold.readHelperContext('helper')
+ assert.deepEqual(full.context,projectTavernHelperContext(chat))
+ assert.ok(io.every(e=>e.bytes<65536))
+ full.context.messages[0].variables.gold=-1
+ assert.deepEqual((await cold.readHelperContext('helper')).context,projectTavernHelperContext(chat),'detached full API')
+ assert.deepEqual((await cold.readHelperContext('helper',{from:540})).context.messages,[])
+ assert.deepEqual((await cold.read('helper')).messages,chat.messages,'full runtime API stays lossless')
+})
+
+test('legacy Helper reads keep the complete context and range fallback',async t=>{
+ const {root}=await fixture(t)
+ const p=createChatPersistence({store:createChatJournalStore({dataRoot:root,newConversations:false})})
+ const chat=await p.write({id:'legacy-helper',messages:[row(1),row(2)],variables:{custom:true}})
+ assert.deepEqual((await p.readHelperContext(chat.id)).context,projectTavernHelperContext(chat))
+ const selected=await p.readHelperContext(chat.id,{from:1,to:1})
+ assert.deepEqual({from:selected.from,to:selected.to,messages:selected.context.messages},hydrateTavernHelperMessages(chat,1,1))
 })

@@ -1,3 +1,4 @@
+import {projectTavernHelperContext,hydrateTavernHelperMessages} from './tavern-helper-context.js'
 import { createNativeConversationStorage } from './native-conversation-storage.js'
 import { createLegacyCompatibleStorage } from './legacy-compatible-storage.js'
 import { createSessionMessageIndex } from './session-message-index.js'
@@ -488,6 +489,16 @@ export function createChatJournalStore(options = {}) {
     const state = await cachedState(chatId)
     return state ? copyJsonTree(state.chat) : undefined
   }
+  async function readHelperContext(chatId, range) {
+    const selected = await native.readHelperContext(chatId, range)
+    if (selected !== null) return selected
+    const chat = await read(chatId)
+    if (!chat) return undefined
+    const context = projectTavernHelperContext(range ? {...chat,messages:[]} : chat)
+    if (!range) return {chat,context}
+    const hydrated = hydrateTavernHelperMessages(chat,range.from,range.to)
+    return {chat,context:{...context,messages:hydrated.messages},from:hydrated.from,to:hydrated.to}
+  }
   async function readSessionState(chatId, options = {}) {
     const cached=readCache.get(chatId)
     if(!cached||cached.stamp!==await version(chatId)){
@@ -923,5 +934,5 @@ export function createChatJournalStore(options = {}) {
 
   // update() owns both boundaries: updater drafts and returned values are
   // detached from cached state and from each other, including aborted writes.
-  return Object.freeze({ detachedUpdate: true, migrateCompatibility, restoreLegacy, read, readSessionState, readSceneImageState, readSettlementCheckpoint, readBackgroundConfig, readDisplayRuntimeState, flushMaintenance, prepareSnapshot, readSlice, readSettlementBase, readChangedSlice, readChangedIndices, readViewDelta, patch, readRevision, update, version, remove })
+  return Object.freeze({ detachedUpdate: true, migrateCompatibility, restoreLegacy, read, readHelperContext, readSessionState, readSceneImageState, readSettlementCheckpoint, readBackgroundConfig, readDisplayRuntimeState, flushMaintenance, prepareSnapshot, readSlice, readSettlementBase, readChangedSlice, readChangedIndices, readViewDelta, patch, readRevision, update, version, remove })
 }

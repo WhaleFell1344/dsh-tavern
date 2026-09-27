@@ -1,3 +1,4 @@
+import {projectTavernHelperContext} from '../tavern-plugin/lib/domain/tavern-helper-context.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -693,4 +694,20 @@ for (const concurrent of [false, true, 'conflict']) test(`prompt updates use exa
   assert.equal(saved.variables.concurrent,concurrent?true:undefined)
   assert.equal(result.context.stateRevision,saved._storageRevision)
   assert.equal(result.context.messages[0].message,'旧正文')
+})
+
+
+test('Helper context uses its native projection without reopening the full Chat', async () => {
+ const value=chat(),expected=projectTavernHelperContext(value)
+ const {messages,...header}=value
+ const {adapter}=harness(value,{
+  resolveChat:async()=>{throw Error('unexpected complete history read')},
+  resolveHelperContext:async()=>({chat:header,context:structuredClone(expected)}),
+  globalVariables:{read:async()=>({global:1})}
+ })
+ const actual=await adapter.context('session-1')
+ assert.deepEqual(actual.messages,expected.messages)
+ assert.deepEqual(actual.turnMessageIds,expected.turnMessageIds)
+ assert.equal(actual.globalVariables.global,1)
+ assert.equal(actual.worldbook.entries[0].content,'旧内容')
 })

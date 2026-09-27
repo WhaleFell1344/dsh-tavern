@@ -33,6 +33,14 @@ try{
   const result=await fresh().readSlice('scale',Array.from({length:Math.min(100,messages.length)},(_,i)=>messages.length-Math.min(100,messages.length)+i),'settlement')
   assert.equal(result.messageCount,messages.length);assert.equal(result.chat.messages.at(-1).variables[0].stat_data.gold,messages.length-1)
  })
+ if(process.argv.includes('--helper'))await measure('cold-helper-tail-48',async()=>{
+  const from=Math.max(0,messages.length-48)
+  const result=await fresh().readHelperContext('scale',{from})
+  assert.equal(result.context.messages.length,messages.length-from)
+  assert.equal(result.context.messages[0].message_id,from)
+  assert.equal(result.context.messages.at(-1).variables.stat_data.gold,messages.length-1)
+  assert.ok(io.pages<=2,'Helper tail must not read the complete history')
+ })
  await measure('cold-session-summary',async()=>{
   const result=await fresh().readSessionState('scale',{scoped:true})
   assert.equal(result.messages.length,messages.length);assert.equal(result.messages.at(-1).turn,rounds)
@@ -50,6 +58,6 @@ try{
  report.status='passed'
 }catch(error){report.status='failed';report.error=error.stack;process.exitCode=1;console.error(error)}
 finally{
- await writeFile(join(output,'scale-'+rounds+'.json'),JSON.stringify(report,null,2)+'\n')
+ await writeFile(join(output,'scale-'+(process.argv.includes('--helper')?'helper-':'')+rounds+'.json'),JSON.stringify(report,null,2)+'\n')
  await rm(root,{recursive:true,force:true})
 }

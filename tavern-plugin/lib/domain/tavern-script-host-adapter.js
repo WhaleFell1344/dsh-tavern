@@ -634,7 +634,8 @@ export function createTavernScriptHostAdapter(options = {}) {
   }
 
   async function context(sessionId, chatValue, transientUserText = '', indices) {
-    const chat = chatValue || await resolveChat(sessionId)
+    const selected = !chatValue && !transientUserText && !indices ? await options.resolveHelperContext?.(sessionId) : undefined
+    const chat = chatValue || selected?.chat || await resolveChat(sessionId)
     const draft = { ...chat, messages: chat.messages || [] }
     const userText = str(transientUserText).trim()
     if (userText !== '') {
@@ -643,7 +644,7 @@ export function createTavernScriptHostAdapter(options = {}) {
       if (previousVariables !== undefined) message.variables = [structuredClone(previousVariables)]
       draft.messages = draft.messages.concat(message)
     }
-    const projected = projectTavernHelperContext(indices ? { ...draft, messages: [] } : draft)
+    const projected = selected?.context || projectTavernHelperContext(indices ? { ...draft, messages: [] } : draft)
     if (indices) {
       projected.messages = indices.map(i => projectTavernHelperMessage(draft.messages[i], i))
       // An indexed dispatch is allowed only when floor identity/turn mapping

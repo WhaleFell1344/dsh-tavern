@@ -321,6 +321,9 @@ export function createChatPersistence(options = {}) {
     const chat = await read(chatId)
     return chat ? projectDisplayRuntimeState(chat, turn) : undefined
   }
+  async function readHelperContext(chatId, range) {
+    return records.readHelperContext?.(chatId, range)
+  }
   async function readSlice(chatId, indices=[], fields) {
     if(!records.readSlice)return undefined
     const selected=await records.readSlice(chatId,indices,fields)
@@ -355,5 +358,5 @@ export function createChatPersistence(options = {}) {
     await records.remove(chatId)
   }
 
-  return Object.freeze({ read, readSessionState, readSceneImageState, readSettlementCheckpoint, readBackgroundConfig, readDisplayRuntimeState, readSlice, readSettlementBase, readChangedSlice, readChangedIndices, readViewDelta, patch, readRevision, write, writeHeader, update, version, remove })
+  return Object.freeze({ read, readHelperContext, readSessionState, readSceneImageState, readSettlementCheckpoint, readBackgroundConfig, readDisplayRuntimeState, readSlice, readSettlementBase, readChangedSlice, readChangedIndices, readViewDelta, patch, readRevision, write, writeHeader, update, version, remove })
 }
