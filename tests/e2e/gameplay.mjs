@@ -74,7 +74,7 @@ async function assertNativeStorage() {
   if(latest)assert.deepEqual(view.state.world.variables,latest.variables[latest.swipeId||0])
   const files=await readdir(join(data,'chats',chat.id))
   assert.ok(files.includes('head.json')&&files.includes('blocks'))
-  assert.ok(!files.includes('snapshots')&&!files.includes('journals')&&!files.includes('storage-format.json'))
+  if(!process.argv.includes('--migrate-native'))assert.ok(!files.includes('snapshots')&&!files.includes('journals')&&!files.includes('storage-format.json'))
   report.nativeFormat={format:view.metadata.format,chatId:chat.id,messageCount:view.messageCount,revision:view.state.chatRevision,gold:view.state.world.variables.stat_data?.gold,files}
 }
 function inspectSaved(chat) {
@@ -303,6 +303,25 @@ try {
     assert.deepEqual(errors, [], '浏览器不得出现未捕获异常')
     await page.screenshot({ path: join(output, 'after-reload.png'), fullPage: true })
   })
+  if(process.argv.includes('--migrate-native'))await step('旧 journal 存档迁移原生分页并重开',async()=>{
+    await restartServer(async()=>{
+      const original=await savedChat(),old=createChatJournalStore({dataRoot:data}),history=[]
+      for(let revision=1;revision<=original._storageRevision;revision++)history.push(await old.readRevision(original.id,revision))
+      assert.ok(history.every(Boolean),'夹具必须保留全部迁移前版本')
+      // Isolated generated fixture only; never alter the host Session log.
+      await rm(join(data,'chats',original.id),{recursive:true,force:true})
+      const legacy=createChatJournalStore({dataRoot:data})
+      for(const snapshot of history)await legacy.update(original.id,()=>snapshot)
+      await legacy.flushMaintenance()
+      assert.deepEqual(await legacy.read(original.id),original)
+      const started=Date.now(),receipt=await legacy.migrateNative(original.id)
+      assert.deepEqual(await legacy.read(original.id),original)
+      for(let i=0;i<history.length;i++)assert.deepEqual(await legacy.readRevision(original.id,i+1),history[i])
+      report.migration={...receipt,elapsedMs:Date.now()-started,retainedRevisions:history.length}
+    })
+    await inspectScreen()
+    await assertNativeStorage()
+  })
   if (process.argv.includes('--settlement-performance')) {
     if(process.env.TAVERN_PERF_PROFILE==='1'){
       cpuProfiler=await context.newCDPSession(page)
@@ -433,7 +452,7 @@ try {
   if (process.argv.includes('--card-update')) await cardUpdateChecks({page,step,savedChat,data,output,report})
   if (process.argv.includes('--sidebar') || process.argv.includes('--sidebar-only')) await sidebarUpgrade({ page, step, savedChat, output, report })
   }
-  if(process.argv.includes('--native-format') && !process.argv.includes('--opening-only'))await step('服务重启后打开同一原生存档并核对当前变量',async()=>{
+  if((process.argv.includes('--native-format')||process.argv.includes('--migrate-native')) && !process.argv.includes('--opening-only'))await step('服务重启后打开同一原生存档并核对当前变量',async()=>{
     const before=await savedChat()
     await restartServer()
     const expected=[...before.messages].reverse().find(row=>row.variables?.[row.swipeId||0]).variables[0].stat_data.gold

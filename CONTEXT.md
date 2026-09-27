@@ -219,3 +219,7 @@ Tavern 启动时通过 `host-projection-replay.js` 适配宿主未发布的批�
 Task State reader 为候选同步、活动与启动恢复检查提供只读头部字段；Skill 列表与身份判断、空闲 manual 压缩检查不再读取全历史摘要。真正的任务恢复、开启的压缩与旧版未完成正文迁移保留完整读取。显示诊断在楼层语义一致时复用 scene 索引点查询；新增 displayIndexRevision 防止旧写入器留下的过期元数据被误用，旧索引 / 推断轮号不一致则回退。
 
 最终万轮 E2E run-rZVvyd：状态栏 3.005 秒，正文 1.637 秒，重新结算 4.464 秒，MVU 完成到落盘 0.954 秒；首屏及后续空闲诊断全历史摘要遍历为 0。严格检查用 `TAVERN_PERF_REQUIRE_BOUNDED_STATE=1`，测试与剩余边界见 `docs/verification/current-header-opening-20260928.md`。宿主事件恢复等工作仍随历史增长，不能宣称整体 O(1)。
+
+## Native Save Migration
+
+显式 `migrateNative` / `bin/migrate-conversation-storage.mjs --native` 将旧 JSON、journal 或兼容增量树转换为新局的原生分页布局。发布前完整读回比对并检查源版本，迁移与当前写入共用 conversation lock。保留旧文件；`legacyInitialRevision` 使迁移前 revision 继续由原存储解析，新进度只写原生布局。原生存档暂不支持 `--restore-legacy`，旧文件不代表最新进度。没有自动批量切换，也没有修改 DSH 本体。真实浏览器迁移后游玩、结算、编辑、回退/撤销、预设切换与重启通过，见 `docs/verification/native-save-migration-20260928.md`。

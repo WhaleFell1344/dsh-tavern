@@ -158,7 +158,7 @@ export function createConversationPageStore({root,onIO=()=>{},linkFile=link}={})
   for(const [slot,entries] of groups)children[slot]=await putEntries(dir,read,children[slot],entries,depth+1)
   return writeBlock(dir,{kind:'entries',children})
  }
- async function create(id,input,{assertCurrent}={}){
+ async function create(id,input,{assertCurrent,verifyBeforePublish}={}){
   const dir=directory(id),value=copy(input)
   if(!record(value.state)||!Array.isArray(value.messages??[])||!(value.messages??[]).every(record))throw Error('Invalid initial conversation')
   let result
@@ -169,6 +169,7 @@ export function createConversationPageStore({root,onIO=()=>{},linkFile=link}={})
     stateId:await writeBlock(dir,{kind:'state',value:value.state}),metadataId:await writeBlock(dir,{kind:'metadata',value:value.metadata??{}})}
    const headId=await writeBlock(dir,head)
    result={revision:1,snapshotId:headId}
+   await verifyBeforePublish?.(headId)
    assertCurrent?.()
    return JSON.stringify({format:FORMAT,headId})
   })

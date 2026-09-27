@@ -18,7 +18,8 @@ const header=({messages,...value})=>value
  * Chat is a detached projection, never an authoritative monolithic disk blob.
  * Existing MVU receipts, sessions and undo metadata remain owned by the runtime;
  * this bridge publishes their changed rows and current world in ONE head CAS.
- * Full read/update remain explicit compatibility materializations. No migration.
+ * Full read/update remain explicit compatibility materializations. Migration
+ * creates a verified head and retains pre-cutover revisions in legacy storage.
  */
 export function createNativeConversationStorage({dataRoot,onIO}){
  const pages=createConversationPageStore({root:path.join(dataRoot,'chats'),onIO})
@@ -88,6 +89,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   if(revision!==Infinity&&(!Number.isSafeInteger(revision)||revision<1))throw failure('DSH_TAVERN_REVISION_NOT_FOUND','Invalid native Chat revision')
   let view=await head(id)
   if(!view)return null
+  if(revision!==Infinity&&revision<view.metadata.settings?.legacyInitialRevision)return null
   if(revision!==Infinity&&revision!==view.state.chatRevision){
    const ref=(await pages.readEntries(id,['chat-revision:'+revision],{snapshotId:view.snapshotCursor.snapshotId}))['chat-revision:'+revision]
    if(!ref)throw failure('DSH_TAVERN_REVISION_NOT_FOUND','Native Chat revision not found: '+revision)
@@ -95,8 +97,8 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   }
   return view
  }
- async function read(id,revision=Infinity){
-  const view=await headAtRevision(id,revision)
+ async function read(id,revision=Infinity,snapshotId){
+  const view=snapshotId?await head(id,snapshotId):await headAtRevision(id,revision)
   if(!view)return null
   const t=tree(id),chat=await t.get(view.state.chatHeaderRef)
   const messages=new Array(view.messageCount)
@@ -509,7 +511,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   const saved=await write(id,result({...originalHeader,messages:[]},view),next,normalized,assertCurrent,{old,selected})
   return {...saved,chat:{...nextHeader,messages:[]}}
  }
- async function create(id,chat,assertCurrent){
+ async function create(id,chat,assertCurrent,{migration,verifyBeforePublish}={}){
   const batch=createBufferedJsonRecords({read:ref=>pages.readRecord(id,ref),writeMany:values=>pages.writeRecords(id,values)})
   const t=batch.tree,rows=[]
   for(const row of chat.messages??[])rows.push(await encode(id,row,undefined,undefined,t))
@@ -520,7 +522,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   assertCurrent?.()
   await batch.flush([sceneIndexRef,chatHeaderRef,...rows.map(row=>row.runtimeRef)])
   // The initial head is published atomically, including runtime references.
-  await domain.create(id,{world:selected.world,messages:rows,metadata:{runtimeLayout:1},runtimeState:{displayIndexRevision:chat._storageRevision,sceneIndexRevision:chat._storageRevision,sceneIndexRef,chatHeaderRef,chatRevision:chat._storageRevision,worldMessage: selected.position,worldSwipe:selected.swipe}},{assertCurrent})
+  await domain.create(id,{world:selected.world,messages:rows,metadata:{runtimeLayout:1,...(migration?{legacyInitialRevision:chat._storageRevision}: {})},runtimeState:{displayIndexRevision:chat._storageRevision,sceneIndexRevision:chat._storageRevision,sceneIndexRef,chatHeaderRef,chatRevision:chat._storageRevision,worldMessage: selected.position,worldSwipe:selected.swipe}},{assertCurrent,verifyBeforePublish:verifyBeforePublish?async snapshotId=>verifyBeforePublish((await read(id,Infinity,snapshotId)).chat):undefined})
   return result(chat,await head(id))
  }
  async function write(id,stored,next,changes,assertCurrent,worldSelection){
