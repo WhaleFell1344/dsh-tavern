@@ -1,0 +1,111 @@
+{
+  "scope": "offline old journal vs mapped page store; 50 visible bodies and current variables; legacy slice also carries historical variables; no browser/model/MVU execution; OS cache not cleared",
+  "runs": [
+    {
+      "rounds": 1000,
+      "messages": 2000,
+      "sourceJsonBytes": 3742740,
+      "audit": {
+        "scope": "read-only journal source to isolated paged shadow; no production cutover",
+        "status": "verified",
+        "revision": 1,
+        "snapshotId": "7fac834303f580cb88ac88e4f048adc0d8103f6d6c17d3fa21e04f684ef8a340",
+        "verified": true,
+        "sourceId": "old",
+        "sourceRevision": 2,
+        "sourceDigest": "c509ed126f85f32029e9cd1c7c202c5116d64acf7ea5201311cb3b84941bd2ed",
+        "messageCount": 2000,
+        "sourceReadMs": 29.63054199999999,
+        "importMs": 508.05241700000005,
+        "verifyMs": 109.82779100000005,
+        "sourceChanged": false,
+        "activated": false
+      },
+      "samples": [
+        {
+          "legacyMs": 25.52712500000007,
+          "pagedMs": 1.1872920000000704,
+          "readPages": 2,
+          "readBytes": 95079
+        },
+        {
+          "legacyMs": 27.54595900000004,
+          "pagedMs": 1.3819170000001577,
+          "readPages": 2,
+          "readBytes": 95079
+        },
+        {
+          "legacyMs": 25.500625000000127,
+          "pagedMs": 1.2664170000000468,
+          "readPages": 2,
+          "readBytes": 95079
+        },
+        {
+          "legacyMs": 25.033582999999908,
+          "pagedMs": 1.0996660000000702,
+          "readPages": 2,
+          "readBytes": 95079
+        },
+        {
+          "legacyMs": 24.838875000000144,
+          "pagedMs": 1.0571669999999358,
+          "readPages": 2,
+          "readBytes": 95079
+        }
+      ]
+    },
+    {
+      "rounds": 10000,
+      "messages": 20000,
+      "sourceJsonBytes": 37485743,
+      "audit": {
+        "scope": "read-only journal source to isolated paged shadow; no production cutover",
+        "status": "verified",
+        "revision": 1,
+        "snapshotId": "ba79e1511cf92cd92af5ca76051dca92c72e91b79949c6e99cf3f5ed6de5de3e",
+        "verified": true,
+        "sourceId": "old",
+        "sourceRevision": 2,
+        "sourceDigest": "c9def07162549c60788ff6b15ec3ff848187e7b3c818d01a33cd1d00ca91f62a",
+        "messageCount": 20000,
+        "sourceReadMs": 461.0920839999999,
+        "importMs": 4751.7333340000005,
+        "verifyMs": 727.7977089999995,
+        "sourceChanged": false,
+        "activated": false
+      },
+      "samples": [
+        {
+          "legacyMs": 317.95308399999976,
+          "pagedMs": 1.4645840000011958,
+          "readPages": 2,
+          "readBytes": 114022
+        },
+        {
+          "legacyMs": 306.9259579999998,
+          "pagedMs": 1.5956249999999272,
+          "readPages": 2,
+          "readBytes": 114022
+        },
+        {
+          "legacyMs": 303.28658299999915,
+          "pagedMs": 1.4871659999989788,
+          "readPages": 2,
+          "readBytes": 114022
+        },
+        {
+          "legacyMs": 303.7921669999996,
+          "pagedMs": 1.7878749999999854,
+          "readPages": 2,
+          "readBytes": 114022
+        },
+        {
+          "legacyMs": 303.5317500000001,
+          "pagedMs": 1.5254580000000715,
+          "readPages": 2,
+          "readBytes": 114022
+        }
+      ]
+    }
+  ]
+}

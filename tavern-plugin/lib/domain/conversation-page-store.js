@@ -176,9 +176,10 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
   return {revision:head.revision,messageCount:head.count,messages,
    snapshotCursor:{snapshotId:headId,before},previousCursor:start?{snapshotId:headId,before:start}:null}
  }
- async function openConversation(id,{limit=50}={}){
+ async function openConversation(id,{limit=50,snapshotId}={}){
   pageLimit(limit)
-  const dir=directory(id),read=reader(dir),selected=await current(dir,id,read)
+  const dir=directory(id),read=reader(dir)
+  const selected=snapshotId?{head:validateHead(await read(snapshotId,'head'),id),headId:snapshotId}:await current(dir,id,read)
   if(!selected)return undefined
   const {head,headId}=selected
   return {...await page(read,head,headId,head.count,limit),state:copy((await read(head.stateId,'state')).value),metadata:copy((await read(head.metadataId,'metadata')).value)}
@@ -201,5 +202,9 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
   const head=snapshotId?validateHead(await read(snapshotId,'head'),id):(await current(dir,id,read))?.head
   return head?copy((await read(head.stateId,'state')).value):undefined
  }
- return Object.freeze({create,commit,openConversation,readHistoryPage,readState})
+ // Detached immutable records let migration separate large historical state
+ // and extension payloads from the page body. They are not a second mutable head.
+ async function writeRecord(id,value){return writeBlock(directory(id),{kind:'record',value:copy(value)})}
+ async function readRecord(id,reference){return copy((await reader(directory(id))(reference,'record')).value)}
+ return Object.freeze({create,commit,openConversation,readHistoryPage,readState,writeRecord,readRecord})
 }
