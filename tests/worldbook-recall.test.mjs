@@ -227,3 +227,18 @@ test('批量结果缺失或执行失败不回退重跑，纯文本不派发模�
   }})
   assert.equal(plain.context,'纯文本')
 })
+
+for(const ownsHistory of [false,true])test(`worldbook projection respects runtime history ownership: ${ownsHistory}`,async()=>{
+ let context,oldReads=0
+ const messages=[{role:'assistant',text:'old'},{role:'assistant',text:'latest',variables:[{hp:7}]}]
+ Object.defineProperty(messages,0,{get(){oldReads++;return {role:'assistant',text:'old'}},enumerable:true})
+ const runtime={...(ownsHistory?{historyContext:'session'}:{}),render:async(_template,value)=>{
+  context=value;return {ok:true,text:'rendered',scopes:value.scopes}
+ }}
+ const result=await projectWorldBookTemplates({worldBook:{view:{entries:[entry('e','<%= 1 %>',{constant:true})]}},runtime,chat:{messages,variables:{x:1}},card:{name:'Alice'}})
+ assert.equal(oldReads,ownsHistory?0:1)
+ assert.equal(context.scopes.message.hp,7)
+ if(ownsHistory)assert.equal(Object.hasOwn(context,'transcript'),false)
+ else assert.deepEqual(context.transcript,[{role:'assistant',content:'old'},{role:'assistant',content:'latest'}])
+ assert.equal(result.context,'rendered')
+})

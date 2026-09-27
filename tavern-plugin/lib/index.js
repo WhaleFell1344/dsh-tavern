@@ -1956,7 +1956,11 @@ export async function apply(ctx) {
     resolveCurrentWorldbook: async function (input) {
       if (input.task === 'worldbook-filter') return ''
       if (input.task === 'image') return undefined
-      const chat = await chatForSession(input.sessionId)
+      // The server template engine owns absolute history and reads old floors
+      // on demand. Only its variable scope needs a proven latest snapshot here.
+      const recent = await readOpeningWindow(input.sessionId)
+      const chat = recent && (recent.chat.promptTemplateInput?.message || lastTavernHelperVariables(recent.chat.messages) !== undefined)
+        ? recent.chat : await chatForSession(input.sessionId)
       return chat ? await nativeWorldBookTemplateContext(chat, await readChatCard(chat)) : undefined
     },
     resolveStablePrefixRevision: async input => Number((await backgroundConfigForSession(input.sessionId))?.cardContextRevision) || 0,
@@ -2770,7 +2774,11 @@ export async function apply(ctx) {
 
   async function retrySettlement(sessionId, turn, guidance) {
     for (let attempt=0;attempt<5;attempt++) {
-      const chat = await chatForSession(sessionId)
+      const recent = await readOpeningWindow(sessionId)
+      const window = recent && recent.chat.timeline?.schemaVersion === 1
+        && !Object.values(recent.chat.timeline.operations || {}).some(op => op?.kind === 'body' && op.status === 'foreground-completed')
+        && recent.chat.messages.some(message => message.role === 'assistant' && message.greeting !== true) ? recent : null
+      const chat = window ? window.chat : await chatForSession(sessionId)
       if (chat === undefined) throw new Error('当前会话没有绑定人物卡')
       const activity = backgroundTasks.activity(chat)
       if (activity.busy) throw new Error('后台 Agent 正在运行，请稍候')
@@ -2782,7 +2790,7 @@ export async function apply(ctx) {
       for (let messageId = messages.length - 1; messageId >= 0; messageId--) {
         const message = messages[messageId]
         if (!message || message.role !== 'assistant' || message.greeting === true) continue
-        target = { messageId, message }
+        target = { messageId: messageId + (window?.from || 0), message }
         break
       }
       if (target === null || Math.max(0, Number(target.message.turn) || 0) !== Math.max(0, Number(turn) || 0)) {
@@ -2798,7 +2806,7 @@ export async function apply(ctx) {
           // Reuse the durable submission/effect and the existing per-chat job.
           // Never reset MVU state or request another model plan on redelivery.
           void queueSettlement(chat.id).catch(error => console.error('dsh-tavern: 重新投递变量结算失败', str(error?.message || error)))
-          return await view(chat, await readChatCard(chat))
+          return window ? await projectOpeningWindow(window) : await view(chat, await readChatCard(chat))
         }
         const swipeId = Math.max(0, Number(target.message.swipeId) || 0)
         if (!target.message.mvuBaseline || target.message.mvuBaseline.swipeId !== swipeId) {
@@ -2823,10 +2831,11 @@ export async function apply(ctx) {
       if (!saved) continue
       chat._storageRevision = saved._storageRevision
       chat.updatedAt = saved.updatedAt
+      if (window) window.revision = saved._storageRevision
       void queueSettlement(chat.id).catch(function (error) {
         console.error('dsh-tavern: 重试后台结算失败', str(error && error.message || error))
       })
-      return await view(chat, await readChatCard(chat))
+      return window ? await projectOpeningWindow(window) : await view(chat, await readChatCard(chat))
     }
     throw new Error('对话正在被其他操作更新，请稍后重新结算')
   }

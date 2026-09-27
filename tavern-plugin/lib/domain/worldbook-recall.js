@@ -173,7 +173,7 @@ export async function projectWorldBookTemplates(input = {}) {
     userName: str(input.chat && input.chat.macroState && input.chat.macroState.userName) || '你',
     runType: 'generate',
     generateType: str(input.generateType),
-    transcript: transcriptOf(input.chat),
+    ...(runtime.historyContext === 'session' ? {} : { transcript: transcriptOf(input.chat) }),
     worldBookSettings: worldBookSettings(input.worldBook),
     worldBookRandom: input.random,
     worldBookEntries: resources.map(function (entry) {

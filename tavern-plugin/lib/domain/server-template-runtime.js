@@ -154,6 +154,7 @@ export function createServerTemplateRuntime({ rpc, store, timeoutMs = 120000, id
   }
   return {
     forSession: sessionId => ({
+      historyContext: 'session',
       renderInput: (text, context = {}) => invoke(sessionId, 'input', { text, context }),
       prepareWorldbook: (entries, context = {}) => invoke(sessionId, 'worldbook', { entries, context }),
       command: text => invoke(sessionId, 'command', { text }),
