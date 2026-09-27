@@ -65,7 +65,7 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
     cache.set(id,value);onIO({kind:'read',type:value.kind,bytes:Buffer.byteLength(bytes)})
    }
    const value=cache.get(id)
-   if(value.kind!==kind)throw Error('Invalid block type')
+   if(kind&&value.kind!==kind)throw Error('Invalid block type')
    return value
   }
  }
@@ -106,6 +106,29 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
    refs=next;height++
   }
   return {root:refs[0]??null,height}
+ }
+ function recordKey(key){if(typeof key!=='string'||!key||key.length>512)throw Error('Invalid record key');return hash(key)}
+ async function lookup(read,root,key,route,depth=0){
+  if(!root)return undefined
+  const node=await read(root)
+  if(node.kind==='entry')return node.key===key?node.valueRef:undefined
+  if(node.kind!=='entries'||depth>=64)throw Error('Invalid record index')
+  return lookup(read,node.children[route[depth]],key,route,depth+1)
+ }
+ // Batch entries by hash path so imports do not rewrite the same branch per key.
+ async function putEntries(dir,read,root,updates,depth=0){
+  const node=root?await read(root):null
+  if(!node||node.kind==='entry'){
+   const merged=new Map(node?[[node.key,{key:node.key,valueRef:node.valueRef,route:recordKey(node.key)}]]:[])
+   for(const entry of updates)merged.set(entry.key,entry)
+   updates=[...merged.values()]
+   if(updates.length===1){const {key,valueRef}=updates[0];return writeBlock(dir,{kind:'entry',key,valueRef})}
+  }else if(node.kind!=='entries')throw Error('Invalid record index')
+  if(depth>=64)throw Error('Record key hash collision')
+  const children=node?.kind==='entries'?{...node.children}:{},groups=new Map()
+  for(const entry of updates){const slot=entry.route[depth];if(!groups.has(slot))groups.set(slot,[]);groups.get(slot).push(entry)}
+  for(const [slot,entries] of groups)children[slot]=await putEntries(dir,read,children[slot],entries,depth+1)
+  return writeBlock(dir,{kind:'entries',children})
  }
  async function create(id,input){
   const dir=directory(id),value=copy(input)
@@ -154,6 +177,17 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
    while(lastPage>=FANOUT**height){treeRoot=await writeBlock(dir,{kind:'index',children:treeRoot?[treeRoot]:[]});height++}
    for(const [page,messages] of pages)treeRoot=await setLeaf(dir,read,treeRoot,height,page,messages)
    const next={...head,revision:head.revision+1,count,root:treeRoot,height,previousHeadId:reference.headId}
+   if(change.records!==undefined){
+    if(!Array.isArray(change.records))throw Error('Invalid keyed records')
+    const updates=new Map()
+    for(const entry of change.records){
+     if(!Array.isArray(entry)||entry.length!==2)throw Error('Invalid keyed record')
+     const [key,value]=entry,route=recordKey(key)
+     const valueRef=await writeBlock(dir,{kind:'record',value})
+     updates.set(key,{key,valueRef,route})
+    }
+    if(updates.size)next.recordRoot=await putEntries(dir,read,next.recordRoot,[...updates.values()])
+   }
    if(Object.hasOwn(change,'state'))next.stateId=await writeBlock(dir,{kind:'state',value:change.state})
    if(Object.hasOwn(change,'metadata'))next.metadataId=await writeBlock(dir,{kind:'metadata',value:change.metadata})
    const headId=await writeBlock(dir,next)
@@ -206,5 +240,17 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
  // and extension payloads from the page body. They are not a second mutable head.
  async function writeRecord(id,value){return writeBlock(directory(id),{kind:'record',value:copy(value)})}
  async function readRecord(id,reference){return copy((await reader(directory(id))(reference,'record')).value)}
- return Object.freeze({create,commit,openConversation,readHistoryPage,readState,writeRecord,readRecord})
+ async function readEntries(id,keys,{snapshotId}={}){
+  if(!Array.isArray(keys))throw Error('Invalid record keys')
+  const routes=keys.map(recordKey),dir=directory(id),read=reader(dir)
+  const head=snapshotId?validateHead(await read(snapshotId,'head'),id):(await current(dir,id,read))?.head
+  if(!head)return undefined
+  const entries=[]
+  for(let i=0;i<keys.length;i++){
+   const ref=await lookup(read,head.recordRoot,keys[i],routes[i])
+   if(ref)entries.push([keys[i],copy((await read(ref,'record')).value)])
+  }
+  return Object.fromEntries(entries)
+ }
+ return Object.freeze({create,commit,openConversation,readHistoryPage,readState,writeRecord,readRecord,readEntries})
 }

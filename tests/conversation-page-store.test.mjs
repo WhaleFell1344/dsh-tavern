@@ -147,3 +147,28 @@ test('corrupt immutable pages fail explicitly instead of returning incomplete hi
  await writeFile(block(head.root),'{}')
  await assert.rejects(createConversationPageStore({root}).openConversation('a'),/checksum/)
 })
+
+test('keyed receipts use snapshot indexes and never read message pages',async t=>{
+ const {root,store,io}=await fixture(t,65)
+ const entries=Array.from({length:512},(_,i)=>['op:'+i,{value:i}])
+ const old=await store.commit('a',{expectedRevision:1,records:entries,state:{gold:20}})
+ await store.commit('a',{expectedRevision:2,records:[['op:17',{value:999}],['__proto__',{safe:true}]]})
+ const fresh=createConversationPageStore({root,onIO:e=>io.push(e)})
+ io.length=0
+ assert.deepEqual(await fresh.readEntries('a',['op:17','missing','op:511']),{'op:17':{value:999},'op:511':{value:511}})
+ assert.deepEqual(await fresh.readEntries('a',['op:17'],{snapshotId:old.snapshotId}),{'op:17':{value:17}})
+ assert.equal((await fresh.readEntries('a',['__proto__'])).__proto__.safe,true)
+ assert.equal(io.filter(e=>e.type==='page').length,0)
+ assert.ok(io.filter(e=>e.kind==='read').length<40)
+ assert.deepEqual(await fresh.readEntries('a',entries.map(([key])=>key),{snapshotId:old.snapshotId}),Object.fromEntries(entries))
+ await assert.rejects(store.commit('a',{expectedRevision:3,records:[['',{bad:true}]]}),/record key/)
+ assert.equal((await store.openConversation('a')).revision,3)
+})
+
+test('failed publication hides receipts and state together',async t=>{
+ const {root,store}=await fixture(t,0)
+ const failing=createConversationPageStore({root,onIO:e=>{if(e.kind==='write'&&e.type==='head')throw Error('interrupted')}})
+ await assert.rejects(failing.commit('a',{expectedRevision:1,state:{gold:99},records:[['op',{done:true}]]}),/interrupted/)
+ assert.deepEqual(await store.readEntries('a',['op']),{})
+ assert.equal((await store.openConversation('a')).state.gold,10)
+})

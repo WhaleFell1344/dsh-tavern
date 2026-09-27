@@ -1,0 +1,146 @@
+{
+  "generatedAt": "2026-09-27T10:11:00.511Z",
+  "node": "v22.22.0",
+  "platform": "darwin",
+  "scope": "isolated domain and durable file store; fresh JS readers, warm OS cache; no UI, scripts, model or native session",
+  "results": [
+    {
+      "rounds": 1000,
+      "priorReceipts": 2000,
+      "samples": [
+        {
+          "ms": {
+            "open": 5.832,
+            "foreground": 176.993,
+            "submit": 107.273,
+            "prepare": 96.654,
+            "settle": 124.12
+          },
+          "io": {
+            "read": {
+              "blocks": 74,
+              "pages": 8,
+              "bytes": 286022
+            },
+            "write": {
+              "blocks": 37,
+              "pages": 2,
+              "bytes": 91779
+            }
+          }
+        },
+        {
+          "ms": {
+            "open": 2.063,
+            "foreground": 180.985,
+            "submit": 112.552,
+            "prepare": 108.318,
+            "settle": 132.197
+          },
+          "io": {
+            "read": {
+              "blocks": 86,
+              "pages": 8,
+              "bytes": 300359
+            },
+            "write": {
+              "blocks": 41,
+              "pages": 2,
+              "bytes": 85527
+            }
+          }
+        },
+        {
+          "ms": {
+            "open": 2.996,
+            "foreground": 161.698,
+            "submit": 109.727,
+            "prepare": 101.356,
+            "settle": 124.493
+          },
+          "io": {
+            "read": {
+              "blocks": 75,
+              "pages": 8,
+              "bytes": 301192
+            },
+            "write": {
+              "blocks": 36,
+              "pages": 2,
+              "bytes": 84880
+            }
+          }
+        }
+      ]
+    },
+    {
+      "rounds": 10000,
+      "priorReceipts": 20000,
+      "samples": [
+        {
+          "ms": {
+            "open": 6.72,
+            "foreground": 201.53,
+            "submit": 108.811,
+            "prepare": 108.315,
+            "settle": 142.944
+          },
+          "io": {
+            "read": {
+              "blocks": 90,
+              "pages": 8,
+              "bytes": 412318
+            },
+            "write": {
+              "blocks": 44,
+              "pages": 2,
+              "bytes": 129914
+            }
+          }
+        },
+        {
+          "ms": {
+            "open": 2.511,
+            "foreground": 188.808,
+            "submit": 135.658,
+            "prepare": 109.337,
+            "settle": 146.168
+          },
+          "io": {
+            "read": {
+              "blocks": 91,
+              "pages": 8,
+              "bytes": 426332
+            },
+            "write": {
+              "blocks": 43,
+              "pages": 2,
+              "bytes": 123649
+            }
+          }
+        },
+        {
+          "ms": {
+            "open": 2.181,
+            "foreground": 210.993,
+            "submit": 112.102,
+            "prepare": 113.138,
+            "settle": 139.694
+          },
+          "io": {
+            "read": {
+              "blocks": 94,
+              "pages": 8,
+              "bytes": 429889
+            },
+            "write": {
+              "blocks": 44,
+              "pages": 2,
+              "bytes": 124324
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
