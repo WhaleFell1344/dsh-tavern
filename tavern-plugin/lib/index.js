@@ -2503,7 +2503,7 @@ export async function apply(ctx) {
             onPrepared: prepared => saveDelivery(prepared.submission, prepared),
             guidance: mvuTarget.message.mvu.guidance || '',
             preserveForeground: variableRetry,
-            onPersistentSessionReady: id => taskRun.bindSession(id),
+            onPersistentSessionReady: id => taskRun.bindSession(id, { stateOnly: true }),
             backgroundTasks: backgroundTasksSettings,
             operationId: taskRun.operationId,
             chatId: snapshot.id,
@@ -2576,7 +2576,7 @@ export async function apply(ctx) {
           let submittedPosture = null
           let settlementToolTail = Promise.resolve()
           const run = await backgroundAgentRunner.run({
-            onPersistentSessionReady: id => taskRun.bindSession(id),
+            onPersistentSessionReady: id => taskRun.bindSession(id, { stateOnly: true }),
             task: 'settlement',
             backgroundTasks: backgroundTasksSettings,
             persistent: true,
@@ -2722,7 +2722,7 @@ export async function apply(ctx) {
   }
   async function onSettlementSettled(chatId, signal) {
     try {
-      const latest = await readChat(chatId)
+      const latest = await chatPersistence.readSessionState(chatId)
       if (!signal.aborted && latest) void mvuSettlementReconciler.wake(latest.sessionId)
     } catch {
       if (!signal.aborted) void mvuSettlementReconciler.scan()
@@ -4350,7 +4350,9 @@ export async function apply(ctx) {
     return (async function * () {
       const prepared = await importContextPreparation.prepare(options)
       if (prepared !== options) { yield * ctx.llm.stream(prepared); return }
-      const chat = ownerSessionId === '' ? undefined : await chatForSession(ownerSessionId)
+      const chat = ownerSessionId === '' ? undefined : await chatHeaderForSession(ownerSessionId, [
+        'requestMode', 'compatibilityTraces', 'bypassPlanId', 'runtimePresetSnapshot', 'foregroundFrames'
+      ])
       if (chat && ['story', 'script'].includes(chat.mode) && options.purpose === undefined && chat.requestMode !== 'sillytavern' && !fullTemplateRequests.has(options)) {
         const projected = await fullTemplateRuntime.forSession(ownerSessionId).projectRequest({ messages: options.messages, system: options.system, model: options.model })
         const templated = { ...options, ...projected }

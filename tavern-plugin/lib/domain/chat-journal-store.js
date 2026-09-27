@@ -513,6 +513,15 @@ export function createChatJournalStore(options = {}) {
     return state ? projectChatSessionState(state.chat, options.scoped === true ? sessionMessages.project(state.chat) : {}) : undefined
   }
   async function readSettlementCheckpoint(chatId, messageId, operationId) {
+    const selected = await native.readSlice(chatId, [messageId], [
+      'id', 'sessionId', '_storageRevision', 'tavernHelperLifecycleRevision', 'timeline.schemaVersion',
+      'timeline.branchId', 'timeline.revision', 'timeline.operations'
+    ])
+    if (selected !== null) {
+      if (!selected) return undefined
+      const result = projectSettlementCheckpoint(selected.chat, 0, operationId)
+      return result
+    }
     const state = await cachedState(chatId)
     return state ? projectSettlementCheckpoint(state.chat, messageId, operationId) : undefined
   }

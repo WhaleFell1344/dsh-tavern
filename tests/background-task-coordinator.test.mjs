@@ -429,3 +429,18 @@ test('idle recovery uses only detached state and active recovery reloads the ful
   assert.equal(reads, 1); assert.equal(writes, 1)
   assert.equal(chat.messages[0].text, 'preserve')
 })
+
+test('session binding can return task state without reloading story history',async()=>{
+ const timeline=createStoryTimeline()
+ let chat=timeline.apply({chat:{id:'c',messages:[{role:'assistant',text:'keep'}]},intent:{kind:'ensure'}}).chat
+ let fullReads=0
+ const store={readChat:async()=>{fullReads++;return structuredClone(chat)},writeChat:async value=>{chat=value},updateChat:async(_id,fn)=>{chat=fn(chat);return chat},
+  readState:async()=>({...structuredClone(chat),messages:[]}),
+  patchChat:async(_id,_revision,changes)=>{for(const change of changes)chat[change.path[0]]=change.value;return chat}}
+ const task=await createBackgroundTaskCoordinator({timeline,store}).begin(chat,'settlement')
+ fullReads=0
+ const state=await task.bindSession('background',{stateOnly:true})
+ assert.equal(fullReads,0)
+ assert.equal(state.timeline.operations[task.operationId].startedSessionId,'background')
+ assert.equal(chat.messages[0].text,'keep')
+})

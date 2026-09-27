@@ -161,7 +161,7 @@ export function createBackgroundTaskCoordinator(options = {}) {
           boundary: Number.isSafeInteger(boundary) ? boundary : null
         }
       },
-      async bindSession(sessionId) {
+      async bindSession(sessionId, { stateOnly = false } = {}) {
         return serialize(chatId, async () => {
           const intent = { kind: 'agent.bind', operationId: begun.value.operationId, sessionId }
           const metadata = { source: 'background.' + str(role) + '.bind', operationId: begun.value.operationId }
@@ -172,7 +172,7 @@ export function createBackgroundTaskCoordinator(options = {}) {
               const next = timeline.apply({ chat: state, intent }).chat
               const saved = await store.patchChat(chatId, state._storageRevision,
                 [{ op: 'set', path: ['timeline'], value: next.timeline }], metadata)
-              if (saved) return store.readChat(chatId)
+              if (saved) return stateOnly ? store.readState(chatId) : store.readChat(chatId)
             }
           }
           return store.updateChat(chatId, source => timeline.apply({ chat: source, intent }).chat, metadata)

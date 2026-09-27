@@ -346,3 +346,21 @@ test('native display capture reads only target diagnostics at absolute coordinat
  for(const turn of [1,2,9])assert.deepEqual(await fresh.readDisplayRuntimeState('display',turn),projectDisplayRuntimeState(chat,turn))
  assert.ok(io.every(event=>event.bytes<65536),'display capture must skip body and variable blobs')
 })
+
+test('cold native settlement checkpoint reads only its target floor and preserves operation guards',async t=>{
+ const {root,persistence}=await fixture(t)
+ await persistence.write({id:'checkpoint',sessionId:'s',tavernHelperLifecycleRevision:3,
+  timeline:{schemaVersion:1,branchId:'b',revision:7,operations:{op:{id:'op',kind:'agent',status:'running'}}},
+  messages:Array.from({length:1200},(_,i)=>({...row(i),text:'floor '+i}))})
+ const io=[],cold=createChatJournalStore({dataRoot:root,onNativeIO:e=>io.push(e)})
+ const selected=await cold.readSettlementCheckpoint('checkpoint',1198,'op')
+ assert.equal(selected.chat.messages[0].variables[0].stat_data.gold,1198)
+ assert.ok(Number.isSafeInteger(selected.chat._storageRevision))
+ assert.equal(selected.chat.tavernHelperLifecycleRevision,3)
+ assert.equal(selected.chat.timeline.operations.op.status,'running')
+ assert.ok(io.filter(e=>e.type==='page').length<=2,'checkpoint must not materialize archive')
+ const saved=await createChatPersistence({store:cold}).patch('checkpoint',selected.chat._storageRevision,[{op:'set',path:['messages',1198,'mvu'],value:{pending:true}}])
+ assert.ok(saved,'selected revision must support a scoped CAS write')
+ selected.chat.messages[0].text='local'
+ assert.equal((await cold.readSlice('checkpoint',[1198])).chat.messages[0].text,'floor 1198')
+})
