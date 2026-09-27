@@ -77,3 +77,58 @@ test('an index from an older writer revision cannot return stale picture identit
  await db.patch(chat.id,chat._storageRevision,[{op:'set',path:['messages',3,'variables',0,'hp'],value:43}])
  assert.deepEqual(sceneTarget(await db.readSceneImageState(chat.id,{turns:[4]}),4),sceneTarget(chat,4))
 })
+
+test('display diagnostics share exact explicit-turn coordinates without scanning history',async t=>{
+ const {root,db,chat,io}=await fixture(t,130)
+ const {projectDisplayRuntimeState}=await import('../tavern-plugin/lib/domain/chat-session-state.js')
+ async function check(turn,bounded=true){
+  const full=await db.read(chat.id)
+  const cold=createChatJournalStore({dataRoot:root,onNativeIO:e=>io.push(e)})
+  io.length=0
+  assert.deepEqual(await cold.readDisplayRuntimeState(chat.id,turn),projectDisplayRuntimeState(full,turn))
+  if(bounded)assert.ok(io.filter(e=>e.type==='page').length<=1)
+ }
+ await check(130);await check(999)
+ await db.update(chat.id,c=>{c.messages.push({role:'assistant',turn:131,text:'next',displayRuntime:{frames:[{dom:'new'}]}});return c})
+ await check(131)
+ // Duplicate/descending turns: the display API chooses the first matching row
+ // and the maximum explicit turn, not simply the last row's turn.
+ await db.update(chat.id,c=>{c.messages[1].turn=131;return c})
+ await check(131)
+ await db.update(chat.id,c=>{c.messages.length=3;return c})
+ await check(3)
+ // An inferred legacy turn collides with an explicit one: retain full semantics.
+ await db.update(chat.id,c=>{c.messages=[{role:'user',text:'input'},{role:'assistant',text:'inferred',displayRuntime:{frames:[{dom:'first'}]}},{role:'assistant',turn:2,text:'explicit'}];return c})
+ await check(2,false)
+})
+
+test('older scene indexes without display metadata retain display compatibility',async t=>{
+ const {root,db,chat}=await fixture(t,3)
+ const {createIncrementalJsonState}=await import('../tavern-plugin/lib/domain/incremental-json-state.js')
+ const {projectDisplayRuntimeState}=await import('../tavern-plugin/lib/domain/chat-session-state.js')
+ const pages=createConversationPageStore({root:join(root,'chats')})
+ const head=await pages.readHead(chat.id)
+ const tree=createIncrementalJsonState({read:ref=>pages.readRecord(chat.id,ref),write:value=>pages.writeRecord(chat.id,value)})
+ const old=(await tree.apply(head.state.sceneIndexRef,[{op:'remove',path:'/display'}])).nextRoot
+ await pages.commit(chat.id,{expectedRevision:head.revision,state:{...head.state,sceneIndexRef:old}})
+ assert.deepEqual(await db.readDisplayRuntimeState(chat.id,3),projectDisplayRuntimeState(chat,3))
+})
+
+test('display metadata left by an older writer falls back until a body edit rebuilds it',async t=>{
+ const {root,db,chat}=await fixture(t,3)
+ const {createIncrementalJsonState}=await import('../tavern-plugin/lib/domain/incremental-json-state.js')
+ const {projectDisplayRuntimeState}=await import('../tavern-plugin/lib/domain/chat-session-state.js')
+ const pages=createConversationPageStore({root:join(root,'chats')})
+ const head=await pages.readHead(chat.id)
+ const tree=createIncrementalJsonState({read:ref=>pages.readRecord(chat.id,ref),write:value=>pages.writeRecord(chat.id,value)})
+ const stale=(await tree.apply(head.state.sceneIndexRef,[{op:'set',path:'/display/latestTurn',value:999}])).nextRoot
+ await pages.commit(chat.id,{expectedRevision:head.revision,state:{...head.state,sceneIndexRef:stale,displayIndexRevision:0}})
+ assert.deepEqual(await db.readDisplayRuntimeState(chat.id,3),projectDisplayRuntimeState(chat,3))
+ await db.patch(chat.id,chat._storageRevision,[{op:'set',path:['messages',2,'variables',0,'hp'],value:42}])
+ assert.equal((await pages.readHead(chat.id)).state.displayIndexRevision,0,'unverified metadata must not be stamped current')
+ assert.equal((await db.readDisplayRuntimeState(chat.id,3)).latestTurn,3)
+ await db.update(chat.id,c=>{c.messages[2].text='body edit';return c})
+ const repaired=await pages.readHead(chat.id)
+ assert.equal(repaired.state.displayIndexRevision,repaired.state.chatRevision)
+ assert.deepEqual(await db.readDisplayRuntimeState(chat.id,3),projectDisplayRuntimeState(await db.read(chat.id),3))
+})

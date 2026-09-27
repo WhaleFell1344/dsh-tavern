@@ -13,6 +13,7 @@ export async function load(url, context, next) {
     replace('    if (applied.deferred === true || applied.stale === true)', mark('runtime-return') + '\n    if (applied.deferred === true || applied.stale === true)')
     replace("    await record('finished', { status: result.receipt.status })", mark('settlement-return') + "\n    await record('finished', { status: result.receipt.status })")
   } else if (url.endsWith('/native-conversation-storage.js')) {
+    replace('  const loading=(async()=>{', "console.log('[settlement-perf]'+JSON.stringify({stage:'summary-history-read',at:performance.timeOrigin+performance.now(),caller:new Error().stack.split('\\n').slice(2,12)}));" + '\n  const loading=(async()=>{')
     replace(' async function readIndexedSceneState(id,options){', " async function readIndexedSceneState(id,options){\nconsole.log('[settlement-perf]'+JSON.stringify({stage:'scene-point-read',at:performance.timeOrigin+performance.now(),count:options.turns.length}));")
     replace('  return projectSceneImageState({...chat,messages})', mark('scene-full-read') + '\n  return projectSceneImageState({...chat,messages})')
     replace('  async function ensure(indices){', "  async function ensure(indices){\nconsole.log('[settlement-perf]'+JSON.stringify({stage:'settlement-history-load',at:performance.timeOrigin+performance.now(),full:indices===undefined,count:indices?.length??count,revision:view.state.chatRevision}));")

@@ -413,12 +413,13 @@ test('settlement checkpoint reads only its target and running operation', async 
   await assert.rejects(task.checkpointMessage(458, (_draft, target) => { target.text = 'late' }), /过期/)
 })
 
-test('idle recovery uses only detached state and active recovery reloads the full Chat', async () => {
+for (const readMethod of ['readState', 'readRecoveryState']) test(`idle recovery uses ${readMethod} and active recovery reloads the full Chat`, async () => {
   const timeline = createStoryTimeline()
   let chat = timeline.apply({ chat: { id: 'c', messages: [{ role: 'assistant', text: 'preserve' }] }, intent: { kind: 'ensure' } }).chat
   let reads = 0, writes = 0
   const coordinator = createBackgroundTaskCoordinator({ timeline, store: {
-    readState: async () => ({ id: 'c', timeline: structuredClone(chat.timeline), messages: [] }),
+    readState: async () => { throw Error('must prefer recovery metadata') },
+    [readMethod]: async () => ({ id: 'c', timeline: structuredClone(chat.timeline), messages: [] }),
     readChat: async () => { reads++; return structuredClone(chat) },
     writeChat: async value => { writes++; chat = value }, updateChat: async () => {}
   } })

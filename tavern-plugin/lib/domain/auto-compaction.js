@@ -22,6 +22,18 @@ export function createAutoCompaction(deps) {
   const blocked = chat => reserved.has(chat.id) || chat.contextCompaction?.operation?.status === 'running'
   async function save(id, mutate) { return deps.updateChat(id, chat => { chat.contextCompaction = mutate(chat.contextCompaction || {}); return chat }, { source: 'compaction.server' }) }
   async function run(sessionId, options = {}) {
+    // Idle manual-policy checks do not need round history. Active operations
+    // and enabled policies retain the complete eligibility/recovery path below.
+    if (deps.readMetadata && !options.manual) {
+      const metadata = await deps.readMetadata(sessionId)
+      if (!metadata || !['story', 'script'].includes(metadata.mode)) return null
+      if (!jobs.has(metadata.id) && metadata.contextCompaction?.operation?.status !== 'running') {
+        let policy
+        try { policy = compactionPolicy(await deps.policy()) }
+        catch { /* The normal job path persists policy/configuration errors. */ }
+        if (policy?.mode === 'manual') return null
+      }
+    }
     // Eligibility uses only rounds, timeline and compaction metadata. Load full
     // history only after deciding to perform compression under the exclusive lock.
     const chat = await (deps.readState || deps.readChat)(sessionId)

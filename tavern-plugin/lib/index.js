@@ -1,3 +1,4 @@
+import { createTaskStateReader } from './domain/task-state-reader.js'
 import { installHostProjectionReplay } from './domain/host-projection-replay.js'
 import { readSettlementInput } from './domain/settlement-input.js'
 import { createHelperHistoryAccess } from './domain/helper-history-access.js'
@@ -382,12 +383,12 @@ export async function apply(ctx) {
     const sessionId = agent?.session?.id
     if (!sessionId) return null
     if (backgroundAgentRunner.owns(sessionId)) return backgroundAgentRunner.requestContext(sessionId)?.task === 'image' ? 'image' : 'background'
-    const chat = await sessionStateForSession(sessionId)
+    const chat = await backgroundConfigForSession(sessionId)
     return chat ? (chat.mode === 'card' ? 'card' : 'foreground') : null
   }
   async function skillEnabledFor(skill, agent) {
     if (await skillRoleFor(agent) !== 'foreground') return true
-    const chat = await sessionStateForSession(agent?.session?.id)
+    const chat = await chatHeaderForSession(agent?.session?.id, ['disabledWritingSkills'])
     return !(chat?.disabledWritingSkills || []).map(canonicalTavernSkillName).includes(skill.name)
   }
   let invalidateTavernSkills = () => {}
@@ -850,6 +851,10 @@ export async function apply(ctx) {
     if (chat?.sessionId === sessionId && chat.backgroundConfigVersion === 1 && chat.conversationFeaturesVersion === 1) return chat
     return chatForSession(sessionId)
   }
+  const taskStateReader = createTaskStateReader({
+    readSlice: chatPersistence.readSlice, readState: chatPersistence.readSessionState,
+    headerForSession: chatHeaderForSession, stateForSession: sessionStateForSession
+  })
   const historyRecall = createHistoryRecall()
   const foregroundRecallScopes = new WeakMap()
   async function recallHistoryForSession(sessionId, args, scope, audience) {
@@ -1665,13 +1670,13 @@ export async function apply(ctx) {
     return scriptContinuity.inspect({ script: script, state: chat.scriptState, request: { kind: 'preview' } })
   }
   async function sessionActivity(sessionId) {
-    const chat = await sessionStateForSession(sessionId)
+    const chat = await taskStateReader.forSession(sessionId)
     if (chat === undefined) return null
     return sessionStateView.status(chat)
   }
 
   async function sessionOperation(sessionId, operationId) {
-    const chat = await sessionStateForSession(sessionId)
+    const chat = await taskStateReader.forSession(sessionId)
     if (chat === undefined) return null
     const operation = backgroundTasks.operation(chat, operationId)
     if (operation === null || operation.role !== 'candidate' || operation.successful !== true) return operation
@@ -1926,7 +1931,7 @@ export async function apply(ctx) {
     return conversationForkReceipt(fork, { lastTurn: turn, messageCount: fork.messages.length })
   }
 
-  const backgroundRetirement = createBackgroundSessionRetirement(profileData, { readState: sessionStateForSession, isRunning: id => agentRegistry.get(id)?.status === 'running' })
+  const backgroundRetirement = createBackgroundSessionRetirement(profileData, { readState: taskStateReader.forSession, isRunning: id => agentRegistry.get(id)?.status === 'running' })
   ctx.effect(() => installRetiredBackgroundFilter(ctx.get('subagents'), backgroundRetirement, ctx.get('sessionQuery')))
   const runtimePresetSnapshots = new Map()
   const backgroundAgentRunner = createBackgroundAgentRunner({
@@ -2062,7 +2067,7 @@ export async function apply(ctx) {
   }
   let tavernCompaction = null
   const backgroundTasks = createBackgroundTaskCoordinator({
-    store: { readChat, writeChat, updateChat, patchChat, readState: chatPersistence.readSessionState, readSlice: chatPersistence.readSlice, readSettlementCheckpoint: chatPersistence.readSettlementCheckpoint },
+    store: { readChat, writeChat, updateChat, patchChat, readState: chatPersistence.readSessionState, readRecoveryState: taskStateReader.read, readSlice: chatPersistence.readSlice, readSettlementCheckpoint: chatPersistence.readSettlementCheckpoint },
     timeline: storyTimeline,
     blocked: function (chat) { return (tavernCompaction !== null && tavernCompaction.blocked(chat)) || Boolean(autoCompaction?.blocked(chat)) }
   })
@@ -2110,7 +2115,7 @@ export async function apply(ctx) {
     return count
   }
   autoCompaction = createAutoCompaction({
-    readChat: chatForSession, readState: sessionStateForSession, updateChat,
+    readChat: chatForSession, readState: sessionStateForSession, readMetadata: taskStateReader.forSession, updateChat,
     policy: async () => (await readTavernSettings()).contextCompaction,
     activity: chat => backgroundTasks.activity(chat),
     exclusive: backgroundTasks.exclusive,
@@ -2295,7 +2300,7 @@ export async function apply(ctx) {
     logger: console
   })
   const candidateTasks = createCandidateTasks({
-    chats: { read: readChat, write: writeChat, forSession: chatForSession, stateForSession: sessionStateForSession, readState: chatPersistence.readSessionState },
+    chats: { read: readChat, write: writeChat, forSession: chatForSession, stateForSession: taskStateReader.forSession, readState: taskStateReader.read },
     generator: candidateGenerator,
     backgroundTasks,
     sessions: {
@@ -2739,7 +2744,12 @@ export async function apply(ctx) {
   function cancelSettlement(chatId, options) { return settlementJobs.cancel(chatId, options) }
   const mvuSettlementReconciler = createMvuSettlementReconciler({
     list: () => conversationRegistry.list(),
-    resolve: sessionId => sessionStateForSession(sessionId),
+    resolve: async sessionId => {
+      const state = await taskStateReader.forSession(sessionId)
+      // Pending delivery may need old message receipts. Idle eligibility does not.
+      return state && backgroundTasks.activity(state).phase === 'pending'
+        ? sessionStateForSession(sessionId) : state
+    },
     shouldResume: function (chat) {
       return Boolean(pendingMvuSettlementState(chat)?.hasSubmission
         && backgroundTasks.activity(chat).phase === 'pending')
@@ -2968,7 +2978,7 @@ export async function apply(ctx) {
   const foregroundHandoff = createForegroundHandoff({
     turns: turnOrchestrator,
     prepareOpeningWorldBook: prepareNextWorldBookContext,
-    store: { chatForSession, readChat, readState: chatPersistence.readSessionState },
+    store: { chatForSession, readChat, readState: taskStateReader.read },
     tasks: backgroundTasks,
     queueBackground: queueSettlement,
     cleanupFailedTurn: async function (input) {
@@ -3017,7 +3027,7 @@ export async function apply(ctx) {
   // ---------- 重新生成正文（生成即替换，无确认） ----------
   const { regenerate: regenBody, replayFailed: replayFailedTurn, recover: recoverRegeneration, rollback: rollbackTurn, undoRollback: undoRollbackTurn } = createRoundHistory({
     diagnostics: mvuDiagnostics,
-    chats: { read: readChat, readState: chatPersistence.readSessionState, forSession: chatForSession, readCard: readChatCard,
+    chats: { read: readChat, readState: taskStateReader.read, forSession: chatForSession, readCard: readChatCard,
       readRevision: readChatRevision, write: writeChat, update: updateChat },
     sessions: { get: function (sessionId) { return ctx.get('agents')?.get(sessionId) },
       getSession: sessionId => sessionStore.get(sessionId),
@@ -3271,12 +3281,12 @@ export async function apply(ctx) {
         return { saved: true }
       }
       case 'getConversationWritingSkills': {
-        const chat = await sessionStateForSession(str(args?.sessionId))
+        const chat = await chatHeaderForSession(str(args?.sessionId), ['disabledWritingSkills'])
         if (!chat || groupOfMode(chat.mode) !== 'play') throw new Error('请先打开游玩会话')
         return { skills: (await tavernSkills.list()).filter(skill => skill.agents.includes('foreground')).map(skill => ({ name: skill.name, description: skill.description, enabled: !(chat.disabledWritingSkills || []).map(canonicalTavernSkillName).includes(skill.name) })) }
       }
       case 'setConversationWritingSkill': {
-        const chat = await sessionStateForSession(str(args?.sessionId))
+        const chat = await chatHeaderForSession(str(args?.sessionId), ['disabledWritingSkills'])
         if (!chat || groupOfMode(chat.mode) !== 'play') throw new Error('请先打开游玩会话')
         const skill = await tavernSkills.read(args.name)
         if (!skill?.agents.includes('foreground') || typeof args.enabled !== 'boolean') throw new Error('无效的写作 Skill 配置')

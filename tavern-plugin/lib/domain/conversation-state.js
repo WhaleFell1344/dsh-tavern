@@ -39,7 +39,8 @@ export function createConversationState({store}){
      ||!(r.worldMessage===null||Number.isSafeInteger(r.worldMessage)&&r.worldMessage>=0)
      ||!Number.isSafeInteger(r.worldSwipe)||r.worldSwipe<0)throw error('CONVERSATION_INPUT','Invalid runtime state')
    if(r.sceneIndexRef!==undefined&&(!/^[a-f0-9]{64}$/.test(r.sceneIndexRef)||r.sceneIndexRevision!==r.chatRevision))throw error('CONVERSATION_INPUT','Invalid scene index')
-   runtime={...(r.sceneIndexRef?{sceneIndexRef:r.sceneIndexRef,sceneIndexRevision:r.sceneIndexRevision}:{}),chatHeaderRef:r.chatHeaderRef,chatRevision:r.chatRevision,worldMessage:r.worldMessage,worldSwipe:r.worldSwipe}
+   if(r.displayIndexRevision!==undefined&&(!r.sceneIndexRef||r.displayIndexRevision!==r.chatRevision))throw error('CONVERSATION_INPUT','Invalid display index')
+   runtime={...(r.displayIndexRevision!==undefined?{displayIndexRevision:r.displayIndexRevision}:{}),...(r.sceneIndexRef?{sceneIndexRef:r.sceneIndexRef,sceneIndexRevision:r.sceneIndexRevision}:{}),chatHeaderRef:r.chatHeaderRef,chatRevision:r.chatRevision,worldMessage:r.worldMessage,worldSwipe:r.worldSwipe}
   }
   return store.create(id,{metadata:{format:FORMAT,settings:value.metadata??{}},messages:value.messages??[],
    state:{...runtime,branchId:randomUUID(),storyRevision:0,worldRevision:0,lifecycleRevision:0,activeSettlementId:null,worldRef:await tree(id).create(value.world)}},options)

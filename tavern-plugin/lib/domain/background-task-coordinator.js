@@ -300,8 +300,8 @@ export function createBackgroundTaskCoordinator(options = {}) {
   async function recover(chat, options = {}) {
     const chatId = str(chat && chat.id)
     return await serialize(chatId, async function () {
-      if (store.readState && !options.operationId) {
-        const state = await store.readState(chatId)
+      if ((store.readRecoveryState || store.readState) && !options.operationId) {
+        const state = await (store.readRecoveryState || store.readState)(chatId)
         if (state?.timeline?.schemaVersion === 1) {
           const operations = Object.values(state.timeline.operations || {})
           const needsRecovery = operations.some(operation =>

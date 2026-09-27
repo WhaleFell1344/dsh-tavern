@@ -285,8 +285,9 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   const valid=view?.state.sceneIndexRef&&view.state.sceneIndexRevision===view.state.chatRevision
   if(!valid)start=0
   let root=valid?view.state.sceneIndexRef:undefined,latest=-1
+  let display={complete:true,inferred:1,latestTurn:1}
   let prefix=new ScenePrefixHash().update('['+JSON.stringify(id)+',[')
-  if(start>0){const previous=await oldRow(start-1);prefix=new ScenePrefixHash(previous.scene.hash);latest=previous.scene.latest}
+  if(start>0){const previous=await oldRow(start-1);prefix=new ScenePrefixHash(previous.scene.hash);latest=previous.scene.latest;display=previous.scene.display?{...previous.scene.display}:{complete:false,inferred:1,latestTurn:1}}
   const turns={}
   if(root)for(let index=start;index<view.messageCount;index++){
    const old=await oldRow(index),turn=old.scene?.target?.turn
@@ -303,6 +304,14 @@ export function createNativeConversationStorage({dataRoot,onIO}){
     if(selected!==undefined)row.swipes={[swipe]:selected}
    }
    const turn=Number(row.turn||(row.greeting?1:0)),swipeId=Math.max(0,Number(row.swipeId)||0)
+   if(row.role==='user')display.inferred++
+   if(row.role==='assistant'){
+    const displayTurn=Math.max(1,Number(row.turn)||display.inferred)
+    // The scene lookup may omit legacy inferred turns. Only share it when
+    // every assistant has exactly the display API's original turn identity.
+    display.complete&&=Number.isSafeInteger(displayTurn)&&turn===displayTurn
+    display.latestTurn=Math.max(display.latestTurn,Math.max(1,Number(row.turn)||1))
+   }
    let target
    if(row.role==='assistant'&&Number.isSafeInteger(turn)&&turn>=1){
     const source=String(row.swipes?.[swipeId]??row.sourceText??row.text??''),sourceDigest=createHash('sha256').update(source).digest('hex')
@@ -313,10 +322,10 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    }
    if(index)prefix.update(',')
    prefix.update(JSON.stringify([row.role,row.turn,row.sourceText??row.text]))
-   encoded.set(index,{...reference,scene:{hash:prefix.state(),latest,...(target?{target}:{})}})
+   encoded.set(index,{...reference,scene:{hash:prefix.state(),latest,display:{...display},...(target?{target}:{})}})
   }
-  if(!root)return t.create({turns,latest})
-  return (await t.apply(root,[{op:'set',path:'/latest',value:latest}])).nextRoot
+  if(!root)return t.create({turns,latest,display})
+  return (await t.apply(root,[{op:'set',path:'/latest',value:latest},{op:'set',path:'/display',value:display}])).nextRoot
  }
  async function readIndexedSceneState(id,options){
   const view=await headAtRevision(id,options.revision??Infinity)
@@ -373,6 +382,19 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   const view=await head(id)
   if(!view)return null
   const chat=await selectedHeader(id,view,['id','sessionId','_storageRevision','mode','backgroundConfigVersion','conversationFeaturesVersion','updatedAt','rollbackUndo'])
+  const t=tree(id),root=view.state.sceneIndexRef
+  const display=root&&view.state.sceneIndexRevision===view.state.chatRevision&&view.state.displayIndexRevision===view.state.chatRevision?await t.get(root,'/display'):null
+  if(display?.complete===true){
+   const index=Number.isSafeInteger(turn)&&turn>=1?await t.get(root,'/turns/'+turn):undefined
+   const result={...projectDisplayRuntimeState({...chat,messages:[]},turn),messageIndex:index??-1,latestTurn:display.latestTurn}
+   if(index!==undefined){
+    if(!Number.isSafeInteger(index)||index<0||index>=view.messageCount)throw Error('Invalid display index')
+    const page=await pages.readHistoryPage(id,{cursor:{snapshotId:view.snapshotCursor.snapshotId,before:index+1},limit:1})
+    if(page.messages[0].message.scene?.target?.turn!==turn)throw Error('Invalid display index')
+    result.displayRuntime=await t.get(page.messages[0].message.runtimeRef,'/displayRuntime')
+   }
+   return result
+  }
   const {messages}=await sessionSummaries(id,view)
   const result=projectDisplayRuntimeState({...chat,messages},turn)
   if(result.messageIndex>=0){
@@ -498,7 +520,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   assertCurrent?.()
   await batch.flush([sceneIndexRef,chatHeaderRef,...rows.map(row=>row.runtimeRef)])
   // The initial head is published atomically, including runtime references.
-  await domain.create(id,{world:selected.world,messages:rows,metadata:{runtimeLayout:1},runtimeState:{sceneIndexRevision:chat._storageRevision,sceneIndexRef,chatHeaderRef,chatRevision:chat._storageRevision,worldMessage: selected.position,worldSwipe:selected.swipe}},{assertCurrent})
+  await domain.create(id,{world:selected.world,messages:rows,metadata:{runtimeLayout:1},runtimeState:{displayIndexRevision:chat._storageRevision,sceneIndexRevision:chat._storageRevision,sceneIndexRef,chatHeaderRef,chatRevision:chat._storageRevision,worldMessage: selected.position,worldSwipe:selected.swipe}},{assertCurrent})
   return result(chat,await head(id))
  }
  async function write(id,stored,next,changes,assertCurrent,worldSelection){
@@ -525,10 +547,14 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   let sceneFrom=from
   for(const [position,mutations] of grouped)if(mutations.some(change=>!change.path.length||['role','turn','greeting','text','sourceText','swipeId','swipes'].includes(change.path[0])))sceneFrom=Math.min(sceneFrom,position)
   let sceneIndexRef=view.state.sceneIndexRef
+  // Older writers know image keys but not display metadata. Never bless their
+  // retained display state on a variable-only write; a body rebuild repairs it.
+  let displayIndexCurrent=view.state.displayIndexRevision===view.state.chatRevision
   if(!sceneIndexRef||view.state.sceneIndexRevision!==view.state.chatRevision||Number.isFinite(sceneFrom)){
    const encoded=new Map([...edits.map(edit=>[edit.position,edit.message]),...append.map((row,i)=>[retained+i,row])])
    const sources=new Map([...encoded.keys()].map(index=>[index,next.messages[index]]))
-   sceneIndexRef=await updateSceneIndex(id,view,encoded,next.messages.length,Math.min(sceneFrom,next.messages.length),t,sources)
+   sceneIndexRef=await updateSceneIndex(id,view,encoded,next.messages.length,displayIndexCurrent?Math.min(sceneFrom,next.messages.length):0,t,sources)
+   displayIndexCurrent=true
    edits.length=0;append.length=0
    for(const [position,message] of [...encoded].sort(([a],[b])=>a-b)){
     if(position<retained)edits.push({position,message});else append.push(message)
@@ -551,7 +577,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   worldChanges??=diffJson(old.world,selected.world)
   const worldRef=await mutate(t,view.state.worldRef,worldChanges,selected.world)
   const chatHeaderRef=await mutate(t,view.state.chatHeaderRef,headChanges,header(next))
-  const state={...view.state,sceneIndexRevision:next._storageRevision,sceneIndexRef,chatHeaderRef,chatRevision:next._storageRevision,worldRef,
+  const state={...view.state,displayIndexRevision:displayIndexCurrent?next._storageRevision:view.state.displayIndexRevision,sceneIndexRevision:next._storageRevision,sceneIndexRef,chatHeaderRef,chatRevision:next._storageRevision,worldRef,
    worldMessage:selected.position,worldSwipe:selected.swipe,
    storyRevision:view.state.storyRevision+(append.length||changedMessageIndices.length||retained<view.messageCount?1:0),
    worldRevision:view.state.worldRevision+(worldRef!==view.state.worldRef?1:0)}

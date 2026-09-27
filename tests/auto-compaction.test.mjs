@@ -235,3 +235,32 @@ test('idle automatic checks use detached session metadata without reading full s
   await h.run({manual:true})
   assert.ok(reads>0,'actual compression must still load authoritative history')
 })
+
+test('manual policy bypasses summary history but enabled policies and running recovery retain it',async()=>{
+  const h=fixture()
+  h.deps.readMetadata=async()=>({id:'chat',sessionId:'front',mode:'story',contextCompaction:h.chat.contextCompaction})
+  let reads=0
+  const read=h.deps.readState
+  h.deps.readState=async(...args)=>{reads++;return read(...args)}
+  await h.run()
+  assert.equal(reads,0)
+  h.policy={mode:'rounds',rounds:2}
+  await h.run()
+  assert.equal(reads,1)
+  await h.run({manual:true})
+  assert.ok(reads>1)
+  const beforeRecovery=reads
+  h.policy={mode:'manual'}
+  // Reuse a real operation shape and re-enter durable recovery on the manual policy.
+  h.chat.contextCompaction.operation.status='running'
+  await h.run()
+  assert.ok(reads>beforeRecovery)
+})
+
+test('metadata preflight retains the normal persisted policy-error path',async()=>{
+ const h=fixture()
+ h.deps.readMetadata=async()=>({id:'chat',sessionId:'front',mode:'story'})
+ h.policy={mode:'invalid'}
+ await assert.rejects(h.run(),/请选择有效的上下文压缩模式/)
+ assert.match(h.chat.contextCompaction.warning,/请选择有效的上下文压缩模式/)
+})

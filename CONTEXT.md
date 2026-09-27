@@ -213,3 +213,9 @@ _Avoid_: 人物方案、一次性完整提示词
 Tavern 启动时通过 `host-projection-replay.js` 适配宿主未发布的批量历史重放：contextBreakdown v4 / turnOutline v2 保留原生计算，仅对批次私有累计数组原位追加，消除 O(N²) 复制。buildCell / restore 每批独立，首次修改复制输入，原生 schema / 序列校验 / 检查点格式 / 实时 apply 与通知保持原样；未知版本回退。该层依赖宿主私有接口，升级需跑原生差分测试，不直接修改已安装 DSH。
 
 万轮严格 E2E run-mQUIoR 状态栏就绪 4.960 秒（上轮 13.734 秒），正文 1.965 秒；重新结算 5.042 秒、MVU 完成到落盘 1.085 秒。仍有 O(N) 宿主事件重放，整体打开尚未达到轮数无关。测试与兼容基线见 `docs/verification/host-projection-replay-20260928.md`。
+
+## Opening Metadata Reads
+
+Task State reader 为候选同步、活动与启动恢复检查提供只读头部字段；Skill 列表与身份判断、空闲 manual 压缩检查不再读取全历史摘要。真正的任务恢复、开启的压缩与旧版未完成正文迁移保留完整读取。显示诊断在楼层语义一致时复用 scene 索引点查询；新增 displayIndexRevision 防止旧写入器留下的过期元数据被误用，旧索引 / 推断轮号不一致则回退。
+
+最终万轮 E2E run-rZVvyd：状态栏 3.005 秒，正文 1.637 秒，重新结算 4.464 秒，MVU 完成到落盘 0.954 秒；首屏及后续空闲诊断全历史摘要遍历为 0。严格检查用 `TAVERN_PERF_REQUIRE_BOUNDED_STATE=1`，测试与剩余边界见 `docs/verification/current-header-opening-20260928.md`。宿主事件恢复等工作仍随历史增长，不能宣称整体 O(1)。

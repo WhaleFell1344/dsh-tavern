@@ -144,6 +144,8 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     if(reopening){
       const openingEvents=[...readLog().matchAll(/\[settlement-perf\](\{[^\n]+\})/g)].map(match=>JSON.parse(match[1])).filter(event=>event.at>=reopening.openStarted)
       const reads=openingEvents.filter(event=>event.stage==='scene-point-read')
+      size.summaryHistoryReads=openingEvents.filter(event=>event.stage==='summary-history-read').length
+      if(process.env.TAVERN_PERF_REQUIRE_BOUNDED_STATE==='1')assert.equal(size.summaryHistoryReads,0,'opening metadata checks must not scan every history summary')
       size.sceneStatusPointReads=reads.length
       size.sceneStatusFullReads=openingEvents.filter(event=>event.stage==='scene-full-read').length
       if(process.env.TAVERN_PERF_REQUIRE_SCENE_INDEX==='1'){
@@ -190,6 +192,10 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     }
     // Exclude cold initialization and allow snapshot maintenance to settle.
     await page.waitForTimeout(3000)
+    if(process.env.TAVERN_PERF_REQUIRE_BOUNDED_STATE==='1') {
+      const coldLog=readLog().split('dsh web:').at(-1)
+      assert.doesNotMatch(coldLog, /"stage":"summary-history-read"/, 'opening and idle display diagnostics must not scan complete summary history')
+    }
     if(process.argv.includes('--opening-only')) {
       const coldLog=readLog().split('dsh web:').at(-1)
       assert.doesNotMatch(coldLog, /"stage":"full-read-miss"/, 'native initialization must not materialize the complete Chat')
