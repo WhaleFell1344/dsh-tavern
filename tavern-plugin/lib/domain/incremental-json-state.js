@@ -172,6 +172,13 @@ export function createIncrementalJsonState({read,write}){
   await queue
   return {baseRoot:root,nextRoot:current,changes}
  }
+ async function size(root,path=''){
+  const s=session(),link=await locate(s,{ref:root},pathParts(path))
+  if(!link?.ref)throw fail('Expected container')
+  const node=await s.get(link.ref)
+  if(!['array','object'].includes(node.type))throw fail('Expected container')
+  return node.size
+ }
  async function type(root,path=''){
   const s=session(),link=await locate(s,{ref:root},pathParts(path))
   if(!link)return undefined
@@ -215,5 +222,5 @@ export function createIncrementalJsonState({read,write}){
   if(result.nextRoot!==delta.nextRoot)throw fail('State delta result mismatch')
   return result.nextRoot
  }
- return Object.freeze({create,get,type,apply,calculate,receive,exportSnapshot,importSnapshot})
+ return Object.freeze({create,get,type,size,apply,calculate,receive,exportSnapshot,importSnapshot})
 }

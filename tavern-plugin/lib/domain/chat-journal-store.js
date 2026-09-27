@@ -1,3 +1,4 @@
+import { createLegacyCompatibleStorage } from './legacy-compatible-storage.js'
 import { createSessionMessageIndex } from './session-message-index.js'
 import { copyLazyHistoryHeader } from './lazy-history-read.js'
 import { Worker } from 'node:worker_threads'
@@ -61,6 +62,7 @@ async function readJson(target) {
 export function createChatJournalStore(options = {}) {
   const dataRoot = path.resolve(String(options.dataRoot || ''))
   const chatsRoot = path.join(dataRoot, 'chats')
+  const compatible = options.compatibleStorage === false ? null : createLegacyCompatibleStorage({dataRoot,onIO:options.onCompatibilityIO})
   const legacyData = options.legacyData
   const logger = options.logger || console
   const now = typeof options.now === 'function' ? options.now : Date.now
@@ -221,7 +223,7 @@ export function createChatJournalStore(options = {}) {
   function serialize(chatId, operation) {
     const id = safeChatId(chatId)
     const previous = mutationTails.get(id) || Promise.resolve()
-    const current = previous.catch(function () {}).then(operation)
+    const current = previous.catch(function () {}).then(() => compatible ? compatible.lock(id,operation) : operation())
     mutationTails.set(id, current)
     return current.finally(function () { if (mutationTails.get(id) === current) mutationTails.delete(id) })
   }
@@ -347,6 +349,9 @@ export function createChatJournalStore(options = {}) {
   }
 
   async function materialize(chatId, targetRevision = Number.POSITIVE_INFINITY) {
+    return await compatible?.read(chatId,targetRevision) || materializeLegacy(chatId,targetRevision)
+  }
+  async function materializeLegacy(chatId, targetRevision = Number.POSITIVE_INFINITY) {
     const paths = layout(chatId)
     if (await exists(paths.root)) return await materializeDirectory(paths, targetRevision)
     const chat = await legacyRead(paths)
@@ -477,6 +482,7 @@ export function createChatJournalStore(options = {}) {
     return load.promise
   }
   async function read(chatId) {
+    if(options.migrateLegacy === true && compatible && !mutationTails.has(safeChatId(chatId)))await migrateCompatibility(chatId)
     const state = await cachedState(chatId)
     return state ? copyJsonTree(state.chat) : undefined
   }
@@ -662,6 +668,12 @@ export function createChatJournalStore(options = {}) {
       changes = normalized
       const next=applyIndexedChanges(state.chat,changes)
       if(next.id!==chatId || revisionOf(next)!==expectedRevision+1)throw new Error('Invalid journal patch revision')
+      if(state.compatible){
+        const recent=knownChanges(chatId,state)
+        const saved=await compatible.write(chatId,state,next,changes,metadata.assertCurrent)
+        rememberState(chatId,await version(chatId),saved,rememberChanges(recent,saved.revision,changes))
+        return slice(next,[],metadata.returnProjection).chat
+      }
       if(state.legacy)await migrateLegacy(paths,state.chat)
       if(state.open && state.openInvalidLine>0)await truncate(state.open.path,state.openValidBytes)
       const frame={schemaVersion:1,chatId,baseRevision:expectedRevision,revision:expectedRevision+1,timestamp:now(),source:String(metadata.source||'unknown'),changes}
@@ -712,6 +724,12 @@ export function createChatJournalStore(options = {}) {
       if (revision !== baseRevision + 1) throw new Error('Chat Journal 写入 revision 非连续，期望 ' + (baseRevision + 1) + '，实际 ' + revision)
       const changes = diffJson(current, next)
       if (changes.length === 0) return copyJsonTree(current)
+      if(currentState.compatible){
+        const recent=knownChanges(chatId,currentState)
+        const saved=await compatible.write(chatId,currentState,next,changes,metadata.assertCurrent)
+        rememberState(chatId,await version(chatId),saved,rememberChanges(recent,saved.revision,changes))
+        return copyJsonTree(next)
+      }
       if (currentState.legacy) await migrateLegacy(paths, current)
       if (currentState.open !== null && currentState.openInvalidLine > 0) {
         await truncate(currentState.open.path, currentState.openValidBytes)
@@ -742,7 +760,8 @@ export function createChatJournalStore(options = {}) {
     })
   }
 
-  async function version(chatId) {
+  async function version(chatId) {return await compatible?.version(chatId) || legacyVersion(chatId)}
+  async function legacyVersion(chatId) {
     const paths = layout(chatId)
     if (!(await exists(paths.root))) {
       if (legacyData && typeof legacyData.version === 'function') return await legacyData.version(paths.legacyRelative)
@@ -772,12 +791,88 @@ export function createChatJournalStore(options = {}) {
     return ['journal', latestSnapshot?.name || '', ...stamps, legacyStamp].join(':')
   }
 
+  const migrationFailures=new Map()
+  async function migrateCompatibility(chatId,{force=false}={}){
+    if(!compatible)throw new Error('Compatible storage is disabled')
+    const current=await compatible.status(chatId)
+    if(current?.mode==='legacy'&&!force)return {status:'legacy',reason:'explicit-restore'}
+    if(current?.mode==='compatible'){await compatible.version(chatId);return {status:'compatible',alreadyActive:true}}
+    const before=await legacyVersion(chatId)
+    if(!force&&migrationFailures.get(chatId)?.version===before)return migrationFailures.get(chatId).result
+    try{
+      const result=await serialize(chatId,async()=>{
+        if((await compatible.status(chatId))?.mode==='compatible')return {status:'compatible',alreadyActive:true}
+        const paths=layout(chatId)
+        await mkdir(paths.root,{recursive:true})
+        const captured=await legacyVersion(chatId),state=await materializeLegacy(chatId)
+        if(!state)return {status:'missing'}
+        const result=await compatible.migrate(chatId,state.chat,captured,async()=>{
+          if(await legacyVersion(chatId)!==captured)throw new Error('Source changed during migration')
+        })
+        forgetState(chatId);migrationFailures.delete(chatId)
+        return result
+      })
+      return result
+    }catch(error){
+      // Publication may have succeeded even if acknowledgement was lost. Never
+      // call that a legacy fallback or hide a damaged active target.
+      if((await compatible.status(chatId))?.mode==='compatible')throw error
+      const result={status:'legacy',reason:error.message}
+      migrationFailures.set(chatId,{version:await legacyVersion(chatId),result})
+      if(migrationFailures.size>128)migrationFailures.delete(migrationFailures.keys().next().value)
+      logger?.warn?.('dsh-tavern: 旧档转换未完成，继续使用原存档:',chatId,error.message)
+      return result
+    }
+  }
+  async function restoreLegacy(chatId){
+    if(!compatible)throw new Error('Compatible storage is disabled')
+    await flushMaintenance()
+    return serialize(chatId,async()=>{
+      const state=await compatible.read(chatId)
+      if(!state)return {status:await materializeLegacy(chatId)?'legacy':'missing',alreadyActive:true}
+      const paths=layout(chatId)
+      await mkdir(paths.journals,{recursive:true})
+      const legacy=await materializeLegacy(chatId)
+      if(!legacy||legacy.revision>state.revision)throw new Error('Legacy restore source diverged')
+      if(legacy.legacy)await writeSnapshot(paths,legacy.chat,legacy.revision)
+      let previous=legacy.chat,openJournal=legacy.open
+      if(openJournal&&legacy.openInvalidLine>0)await truncate(openJournal.path,legacy.openValidBytes)
+      // Export every post-cutover revision, not only the newest snapshot: an
+      // older release must retain rollback points created after migration.
+      for(let revision=legacy.revision+1;revision<=state.revision;revision++){
+        const historical=await compatible.read(chatId,revision)
+        if(!historical)throw new Error('Missing compatible revision during restore')
+        let changes=diffJson(previous,historical.chat)
+        if(JSON.stringify(applyJsonChangesShared(previous,changes))!==JSON.stringify(historical.chat))changes=[{op:'set',path:[],value:historical.chat}]
+        openJournal=await appendFrame(paths,{schemaVersion:1,chatId,baseRevision:revision-1,revision,timestamp:now(),source:'compatible-restore',changes},openJournal)
+        previous=historical.chat
+      }
+      if(openJournal){
+        const handle=await open(openJournal.path,'r+')
+        try{await handle.sync()}finally{await handle.close()}
+        if(process.platform!=='win32'){
+          const directory=await open(paths.journals,'r')
+          try{await directory.sync()}catch(error){if(!['EINVAL','ENOTSUP','EISDIR'].includes(error.code))throw error}finally{await directory.close()}
+        }
+      }
+      await writeSnapshot(paths,state.chat,state.revision)
+      const restored=await materializeLegacy(chatId)
+      if(JSON.stringify(restored.chat)!==JSON.stringify(state.chat))throw new Error('Legacy restore verification failed')
+      await compatible.deactivate(chatId)
+      forgetState(chatId)
+      // Explicit restore must not be immediately undone by auto migration.
+      migrationFailures.set(chatId,{version:await legacyVersion(chatId),result:{status:'legacy',reason:'explicit-restore'}})
+      return {status:'legacy',revision:state.revision}
+    })
+  }
+
   async function remove(chatId) {
     await flushMaintenance()
     await serialize(chatId, async function () {
       const paths = layout(chatId)
       forgetState(chatId)
       sessionMessages.forget(chatId)
+      await compatible?.remove(chatId)
       await rm(paths.root, { recursive: true, force: true })
       if (legacyData && typeof legacyData.remove === 'function') await legacyData.remove(paths.legacyRelative)
       else await rm(paths.legacy, { force: true })
@@ -791,5 +886,5 @@ export function createChatJournalStore(options = {}) {
 
   // update() owns both boundaries: updater drafts and returned values are
   // detached from cached state and from each other, including aborted writes.
-  return Object.freeze({ detachedUpdate: true, read, readSessionState, readSceneImageState, readSettlementCheckpoint, readBackgroundConfig, readDisplayRuntimeState, flushMaintenance, prepareSnapshot, readSlice, readSettlementBase, readChangedSlice, readChangedIndices, readViewDelta, patch, readRevision, update, version, remove })
+  return Object.freeze({ detachedUpdate: true, migrateCompatibility, restoreLegacy, read, readSessionState, readSceneImageState, readSettlementCheckpoint, readBackgroundConfig, readDisplayRuntimeState, flushMaintenance, prepareSnapshot, readSlice, readSettlementBase, readChangedSlice, readChangedIndices, readViewDelta, patch, readRevision, update, version, remove })
 }
