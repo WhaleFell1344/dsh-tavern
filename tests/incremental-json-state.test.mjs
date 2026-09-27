@@ -108,3 +108,23 @@ test('resynchronization transfers exact immutable roots after history-dependent 
  const bad=structuredClone(snapshot);bad.blocks[0][1].size=999
  await assert.rejects(replica.tree.importSnapshot(bad),/checksum/)
 })
+
+test('bounded decoded reuse skips repeated tree walks without sharing mutable results',async()=>{
+ const {adapter,io}=fixture()
+ const tree=createIncrementalJsonState({...adapter,decodedCacheBytes:4096})
+ const source={schema:{properties:{gold:{type:'number'}}},values:[1,2]}
+ const root=await tree.create(source)
+ const first=await tree.get(root)
+ io.length=0
+ const second=await tree.get(root)
+ assert.equal(io.length,0,'a repeated immutable subtree must not be walked again')
+ first.schema.properties.gold.type='changed'
+ second.values.push(3)
+ assert.deepEqual(await tree.get(root),source)
+ const next=await tree.apply(root,[{op:'set',path:'/values/0',value:9}])
+ assert.deepEqual((await tree.get(next.nextRoot)).values,[9,2])
+ assert.deepEqual(await tree.get(root),source)
+ const huge=await tree.create('x'.repeat(2000))
+ await tree.get(huge);io.length=0;await tree.get(huge)
+ assert.ok(io.length>0,'oversized decoded values are not retained')
+})

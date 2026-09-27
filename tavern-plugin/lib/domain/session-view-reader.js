@@ -1,4 +1,4 @@
-import { helperMessagesComplete } from './tavern-helper-context.js'
+import { helperMessagesComplete, completeTavernHelperContext } from './tavern-helper-context.js'
 import { projectSceneImageState, projectChatBackgroundConfig } from './chat-session-state.js'
 function identity(chat) {
   const mode = chat.mode || 'story'
@@ -29,6 +29,7 @@ function canProjectDirty(previous, chat, indices) {
 export function createSessionViewReader({ readState, readChat, readChanges, readViewDelta, project, activity,
   trace, foregroundRunning, synchronize, resourceVersion = async () => '' }) {
   const cache = new Map()
+  const helperWindows = new Map()
   const pending = new Map()
   async function changes(chat, revision) {
     const target = Number(chat._storageRevision) || 0
@@ -49,7 +50,10 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
   async function loadSnapshot(sessionId, options, state, resources) {
     const selected = await trace.stage('readChat', async () => {
       if (state === undefined) return { chat: undefined }
-      const cached = cache.get(state.id), next = {...identity(state), resourceVersion: resources}
+      const next = {...identity(state), resourceVersion: resources}
+      const window = options.windowHelperMessages && helperWindows.get(state.id)
+      const stored = cache.get(state.id)
+      const cached = matches(window,next) && window.revision===next.revision && !(matches(stored,next) && stored.revision===next.revision) ? window : stored
       if (matches(cached, next) && cached.revision === next.revision) return { chat: state, cached, resourceVersion: resources }
       let verifiedDelta
       if (matches(cached, next) && cached.revision < next.revision && readViewDelta) {
@@ -84,6 +88,11 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
         view = await project.full(chat, {...options,inputChanges:matches(cached,next) && dirty ? {baseRevision:cached.revision,indices:dirty,changedHeaderFields:selected.changedHeaderFields,runtimeInputChanges:selected.runtimeInputChanges} : undefined})
         rebuild = 'full'
       }
+      if (view?.tavernHelper?.messagesPending && options.windowHelperMessages) {
+        const latest = helperWindows.get(chat.id)
+        if (!latest || latest.revision <= next.revision) helperWindows.set(chat.id, {...next, sessionId:String(sessionId), view})
+        while (helperWindows.size > 8) helperWindows.delete(helperWindows.keys().next().value)
+      }
       if (!view?.tavernHelper?.messagesPending) {
         const latest = cache.get(chat.id)
         // A slower old projection cannot evict an already completed newer one.
@@ -108,7 +117,19 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
       && Number.isSafeInteger(previous.revision) ? await changes(result.chat, previous.revision) : null
     return synchronize(String(sessionId), result.view, args.viewCursor, { revision: result.revision, dirtyMessageIndices, receiptSync:args.receiptSync })
   }
-  return Object.freeze({ read, response })
+  function acceptHelperMessages(sessionId, chatId, revision, payload) {
+    const pending = helperWindows.get(chatId)
+    if (!pending || pending.sessionId !== String(sessionId) || pending.revision !== revision) return false
+    const helper = completeTavernHelperContext(pending.view?.tavernHelper,payload)
+    if (!helper) return false
+    const current = cache.get(chatId)
+    if (current && current.revision >= revision) return false
+    cache.set(chatId,{...pending,view:{...pending.view,tavernHelper:helper}})
+    helperWindows.delete(chatId)
+    while (cache.size > 8) cache.delete(cache.keys().next().value)
+    return true
+  }
+  return Object.freeze({ read, response, acceptHelperMessages })
 }
 
 /** Partial state is never handed to a migration that can persist a Chat. */

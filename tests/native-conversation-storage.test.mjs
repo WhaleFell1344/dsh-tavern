@@ -9,7 +9,7 @@ import {createChatJournalStore} from '../tavern-plugin/lib/domain/chat-journal-s
 import {createChatPersistence} from '../tavern-plugin/lib/domain/chat-persistence.js'
 import {createConversationPageStore} from '../tavern-plugin/lib/domain/conversation-page-store.js'
 import {createConversationState} from '../tavern-plugin/lib/domain/conversation-state.js'
-import {projectChatSessionState,projectChatBackgroundConfig} from '../tavern-plugin/lib/domain/chat-session-state.js'
+import {projectChatSessionState,projectChatBackgroundConfig,projectSceneImageState} from '../tavern-plugin/lib/domain/chat-session-state.js'
 
 async function fixture(t){
  const root=await mkdtemp(join(tmpdir(),'native-chat-'))
@@ -198,4 +198,96 @@ test('legacy Helper reads keep the complete context and range fallback',async t=
  assert.deepEqual((await p.readHelperContext(chat.id)).context,projectTavernHelperContext(chat))
  const selected=await p.readHelperContext(chat.id,{from:1,to:1})
  assert.deepEqual({from:selected.from,to:selected.to,messages:selected.context.messages},hydrateTavernHelperMessages(chat,1,1))
+})
+
+test('cold native delta eligibility checks never hydrate a Chat that has no cached change coverage',async t=>{
+ const {root,persistence}=await fixture(t)
+ const historical=row(1)
+ historical.displayRuntime={frames:['must-not-read'.repeat(20000)]}
+ const chat=await persistence.write({id:'delta',messages:[historical,row(2)]})
+ const io=[]
+ const cold=createChatJournalStore({dataRoot:root,cacheMaxBytes:1,onNativeIO:e=>io.push(e)})
+ assert.deepEqual(await cold.readChangedIndices('delta',chat._storageRevision),{indices:[],baseRevision:chat._storageRevision,revision:chat._storageRevision})
+ assert.equal(await cold.readChangedIndices('delta',0),undefined)
+ assert.equal(await cold.readChangedSlice('delta',0),undefined)
+ assert.equal(await cold.readViewDelta('delta',0),undefined)
+ assert.ok(io.every(e=>e.type!=='page'&&e.bytes<65536),'checking missing delta coverage must only read the head')
+})
+
+test('a cold native point patch reads only its target and keeps current world and revisions atomic',async t=>{
+ const {root,persistence,domain}=await fixture(t)
+ const historical={...row(1),displayRuntime:{frames:['unrelated-history'.repeat(20000)]}}
+ const chat=await persistence.write({id:'cold-patch',messages:[historical,row(2),{role:'user',text:'next'}],posture:'before'})
+ const io=[]
+ const cold=createChatPersistence({store:createChatJournalStore({dataRoot:root,cacheMaxBytes:1,onNativeIO:e=>io.push(e)})})
+ assert.equal(await cold.patch(chat.id,0,[{op:'set',path:['posture'],value:'stale'}]),undefined)
+ const saved=await cold.patch(chat.id,chat._storageRevision,[
+  {op:'set',path:['messages',1,'variables',0,'stat_data','gold'],value:3},
+  {op:'set',path:['posture'],value:'after'}])
+ assert.equal(saved._storageRevision,2)
+ assert.ok(io.every(e=>e.bytes<65536),'point patch must not read unrelated historical payloads')
+ assert.deepEqual((await domain.readWorld(chat.id)),{variables:{stat_data:{gold:3},schema:{}},posture:'after'})
+ const full=await cold.read(chat.id)
+ assert.deepEqual(full.messages[0],historical)
+ assert.deepEqual((await cold.readRevision(chat.id,1)).messages,chat.messages)
+ await cold.patch(chat.id,2,[{op:'set',path:['messages',2,'variables'],value:[{stat_data:{gold:4}}]}])
+ assert.equal((await domain.readWorld(chat.id)).variables.stat_data.gold,4)
+ await cold.patch(chat.id,3,[{op:'delete',path:['messages',2,'variables']}])
+ assert.equal((await domain.readWorld(chat.id)).variables.stat_data.gold,3,'removing current variables must reselect the earlier world')
+})
+
+test('cold native patches match warm JSON semantics and reject invalid or cancelled writes',async t=>{
+ const {root,persistence}=await fixture(t)
+ const initial={messages:[{...row(1),swipes:['a','b'],swipeId:0,variables:[{gold:1},{gold:2}],tavernPluginData:{old:true}},{role:'user',text:'next'}],variables:{chat:true},tavernHelperScriptVariables:{a:{value:1}}}
+ await persistence.write({id:'warm',...structuredClone(initial)})
+ await persistence.write({id:'cold',...structuredClone(initial)})
+ const cold=createChatPersistence({store:createChatJournalStore({dataRoot:root,cacheMaxBytes:1})})
+ const frames=[
+  [{op:'set',path:['messages',0,'swipeId'],value:1}],
+  [{op:'set',path:['messages',0,'tavernPluginData','old'],value:undefined},{op:'set',path:['messages',0,'variables',0],value:undefined}],
+  [{op:'splice',path:['messages',0,'swipes'],index:0,deleteCount:1,items:['c','d']}],
+  [{op:'set',path:['messages',1,'variables'],value:[{gold:4}]}],
+  [{op:'set',path:['messages',0,'variables',0],value:{gold:8}}],
+  [{op:'set',path:['variables','chat'],value:false},{op:'set',path:['tavernHelperScriptVariables','a','value'],value:3}],
+  [{op:'delete',path:['messages',1,'variables']}]
+ ]
+ for(let index=0;index<frames.length;index++){
+  await persistence.patch('warm',index+1,frames[index],{touchUpdatedAt:false})
+  await cold.patch('cold',index+1,frames[index],{touchUpdatedAt:false})
+  const {id:a,updatedAt:b,...warm}=await persistence.read('warm')
+  const {id:c,updatedAt:d,...actual}=await cold.read('cold')
+  assert.deepEqual(actual,warm)
+ }
+ const before=await cold.read('cold'),revision=before._storageRevision
+ await assert.rejects(cold.patch('cold',revision,[{op:'set',path:['messages',0,'text'],value:'late'}],{assertCurrent(){throw Error('cancelled')}}),/cancelled/)
+ await assert.rejects(cold.patch('cold',revision,[{op:'set',path:['messages',0,'missing','child'],value:1}]),/Missing mutation parent/)
+ assert.deepEqual(await cold.read('cold'),before)
+ let guards=0
+ await assert.rejects(cold.patch('cold',revision,[{op:'set',path:['messages',0,'text'],value:'prepared'}],{assertCurrent(){if(++guards===2)throw Error('cancelled before head')}}),/cancelled before head/)
+ assert.equal(guards,2)
+ assert.deepEqual(await cold.read('cold'),before)
+})
+
+
+test('Helper hydration is pinned to the view revision across concurrent edits and rollback',async t=>{
+ const {root,persistence}=await fixture(t)
+ const before=await persistence.write({id:'hydration',messages:[row(1),row(2)]})
+ await persistence.patch(before.id,1,[{op:'set',path:['messages',0,'variables',0,'stat_data','gold'],value:99}])
+ await persistence.patch(before.id,2,[{op:'splice',path:['messages'],index:1,deleteCount:1,items:[]}])
+ const cold=createChatPersistence({store:createChatJournalStore({dataRoot:root})})
+ const selected=await cold.readHelperContext(before.id,{from:0,to:1,revision:1})
+ assert.equal(selected.chat._storageRevision,1)
+ assert.deepEqual(selected.context.messages,projectTavernHelperContext(before).messages)
+ assert.equal((await cold.readHelperContext(before.id)).context.messages.length,1)
+ await assert.rejects(cold.readHelperContext(before.id,{revision:999}),{code:'DSH_TAVERN_REVISION_NOT_FOUND'})
+})
+
+
+test('native scene polling does not materialize historical variables or display diagnostics',async t=>{
+ const {root,persistence}=await fixture(t)
+ const message={...row(1),swipes:['inactive','active'],swipeId:1,variables:[{archive:'unused'.repeat(40000)}],displayRuntime:{frames:['diagnostic'.repeat(30000)]}}
+ const chat=await persistence.write({id:'scene',mode:'story',messages:[message,{role:'user',text:'next'},row(2)]})
+ const io=[],cold=createChatJournalStore({dataRoot:root,onNativeIO:e=>io.push(e)})
+ assert.deepEqual(await cold.readSceneImageState('scene'),projectSceneImageState(chat))
+ assert.ok(io.every(e=>e.bytes<65536))
 })

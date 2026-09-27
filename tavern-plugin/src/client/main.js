@@ -347,6 +347,8 @@ window.__ModuleLoader__.load({
 			const pending = view && view.tavernHelper && view.tavernHelper.messagesPending;
 			if (!pending) return view;
 			const payload = await rpc("hydrateTavernHelperMessages", {
+                chatId: view.tavernHelper.chatId,
+                revision: view.tavernHelper.stateRevision,
 				from: pending.from,
 				to: pending.to
 			}, sessionId);

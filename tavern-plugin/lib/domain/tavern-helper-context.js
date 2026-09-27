@@ -182,6 +182,24 @@ export function projectTavernHelperContext(chat, options = {}) {
   return result
 }
 
+/** Complete one immutable cold projection only with its entire advertised range. */
+export function completeTavernHelperContext(context, payload) {
+  const pending = context?.messagesPending, source = context?.messages
+  if (!pending || !Array.isArray(source) || !Array.isArray(payload?.messages)
+    || payload.from !== pending.from || payload.to !== pending.to
+    || payload.messages.length !== pending.to - pending.from + 1) return null
+  const entries = []
+  for (let offset = 0; offset < payload.messages.length; offset++) {
+    const row = payload.messages[offset], id = pending.from + offset
+    if (!row || row.message_id !== id || row.stub || id < 0 || id >= source.length) return null
+    entries.push([id, freezeJson(structuredClone(row))])
+  }
+  const messages = helperIndex.update(helperIndex.info(source) ? source : helperIndex.from(source.map(freezeJson)), entries, source.length)
+  if (!helperMessagesComplete(messages)) return null
+  const {messagesPending, ...previous} = context
+  return {...previous, messages}
+}
+
 /** Replace stub floors with full projections for a closed index range. */
 export function hydrateTavernHelperMessages(chat, from, to) {
   const sources = Array.isArray(chat && chat.messages) ? chat.messages : []

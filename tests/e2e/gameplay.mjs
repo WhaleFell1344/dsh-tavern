@@ -40,7 +40,7 @@ const profile = join(root, 'profiles/tavern'), data = join(root, 'profile-data/t
 const timeout = Number(process.env.TAVERN_E2E_TIMEOUT_MS) || 30000
 const report = { status: 'running', scope: 'real isolated DSH + Tavern + Chromium; fixed model only', steps: [] }
 const started = Date.now(), errors = []
-let log = '', browser, context, child, page, restartServer
+let log = '', browser, context, child, page, restartServer, cpuProfiler
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 async function step(name, action) {
   const start = Date.now()
@@ -285,6 +285,12 @@ try {
     await page.screenshot({ path: join(output, 'after-reload.png'), fullPage: true })
   })
   if (process.argv.includes('--settlement-performance')) {
+    if(process.env.TAVERN_PERF_PROFILE==='1'){
+      cpuProfiler=await context.newCDPSession(page)
+      await cpuProfiler.send('Profiler.enable')
+      await cpuProfiler.send('Profiler.setSamplingInterval',{interval:10000})
+      await cpuProfiler.send('Profiler.start')
+    }
     await settlementPerformanceChecks({page,step,savedChat,output,report,restartServer,root,data,readLog:()=>log})
   } else if (process.argv.includes('--mvu-incremental')) {
     await incrementalMvuChecks({page,step,savedChat,output,report,restartServer})
@@ -435,10 +441,24 @@ try {
 } catch (error) {
   report.status = 'failed'; report.error = error.stack; process.exitCode = 1
   if (page) {
+    if (process.argv.includes('--settlement-performance')) {
+      report.failureRuntime = await Promise.race([
+        Promise.all(page.frames().map(frame => frame.evaluate(() => ({
+          name:window.name, mvu:typeof window.Mvu, helper:typeof window.getVariables,
+          messages:window.SillyTavern?.chat?.length,
+          resources:performance.getEntriesByType('resource').filter(entry=>entry.name.includes('/api/dsh-tavern/')).slice(-20).map(entry=>({method:entry.name.split('/').at(-1),durationMs:Math.round(entry.duration),bytes:entry.decodedBodySize}))
+        })).catch(error=>({error:String(error.message).slice(0,150)})))),
+        pause(5000).then(()=>({timeout:true}))
+      ])
+    }
     await page.screenshot({ path: join(output, 'failure.png'), fullPage: true }).catch(() => {})
     await writeFile(join(output, 'failure.txt'), await page.locator('body').innerText().catch(() => 'Page unavailable')).catch(() => {})
   }
 } finally {
+  if(cpuProfiler){
+    const captured=await Promise.race([cpuProfiler.send('Profiler.stop').catch(()=>null),pause(10000).then(()=>null)])
+    if(captured?.profile)await writeFile(join(output,'browser.cpuprofile'),JSON.stringify(captured.profile))
+  }
   // Read-only evidence, independent of the status iframe and its UI assertions.
   const chat = process.argv.includes('--settlement-performance') ? null : await savedChat().catch(error => { report.savedStateError = String(error.message || error); return null })
   if (chat) await writeFile(join(output, 'saved-state.json'), JSON.stringify({ id: chat.id, posture: chat.posture, contextCompaction: chat.contextCompaction, timeline: chat.timeline,

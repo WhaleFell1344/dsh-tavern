@@ -1,12 +1,12 @@
 import {projectTavernHelperContext,projectTavernHelperMessage} from './tavern-helper-context.js'
-import {projectSessionMessage,projectChatSessionState} from './chat-session-state.js'
+import {projectSessionMessage,projectChatSessionState,projectSceneImageState} from './chat-session-state.js'
 import {createScopedMessages} from './scoped-messages.js'
 import {createBufferedJsonRecords} from './buffered-json-records.js'
 import path from 'node:path'
 import {createConversationPageStore} from './conversation-page-store.js'
 import {createConversationState} from './conversation-state.js'
 import {createIncrementalJsonState} from './incremental-json-state.js'
-import {diffJson} from './json-mutation.js'
+import {diffJson,applyJsonChangesShared} from './json-mutation.js'
 
 const pointer=parts=>parts.length?'/'+parts.map(part=>String(part).replace(/~/g,'~0').replace(/\//g,'~1')).join('/'):''
 const failure=(code,message)=>Object.assign(new Error(message),{code})
@@ -25,7 +25,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
  // values, but shared historical snapshots are not fetched from disk per row.
  function tree(id){
   const cache=new Map();let bytes=0
-  return createIncrementalJsonState({async read(ref){
+  return createIncrementalJsonState({decodedCacheBytes:8*1024*1024,async read(ref){
    let entry=cache.get(ref)
    if(entry){cache.delete(ref);cache.set(ref,entry)}
    else {
@@ -45,8 +45,13 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   return view
  }
  async function version(id){const view=await head(id);return view?'native:'+view.snapshotCursor.snapshotId:null}
+ async function readRevisionMetadata(id){
+  const view=await head(id)
+  return view?{revision:view.state.chatRevision,messageCount:view.messageCount,stamp:'native:'+view.snapshotCursor.snapshotId}:null
+ }
  function result(chat,view){return {chat,revision:chat._storageRevision,native:{view},legacy:false,snapshot:null,open:null,openFrameCount:0,openInvalidLine:0}}
- async function read(id,revision=Infinity){
+ async function headAtRevision(id,revision=Infinity){
+  if(revision!==Infinity&&(!Number.isSafeInteger(revision)||revision<1))throw failure('DSH_TAVERN_REVISION_NOT_FOUND','Invalid native Chat revision')
   let view=await head(id)
   if(!view)return null
   if(revision!==Infinity&&revision!==view.state.chatRevision){
@@ -54,6 +59,11 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    if(!ref)throw failure('DSH_TAVERN_REVISION_NOT_FOUND','Native Chat revision not found: '+revision)
    view=await head(id,ref)
   }
+  return view
+ }
+ async function read(id,revision=Infinity){
+  const view=await headAtRevision(id,revision)
+  if(!view)return null
   const t=tree(id),chat=await t.get(view.state.chatHeaderRef)
   const messages=new Array(view.messageCount)
   let cursor=view.snapshotCursor
@@ -108,7 +118,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
  // Helper owns a read projection, not an editable runtime Chat. Bind header
  // and every page to one immutable head, even while another writer appends.
  async function readHelperContext(id,range){
-  const view=await head(id)
+  const view=await headAtRevision(id,range?.revision??Infinity)
   if(!view)return null
   const chat=await selectedHeader(id,view,range?['id','sessionId','_storageRevision','backgroundConfigVersion','conversationFeaturesVersion']:'settlement'),t=tree(id)
   const from=range?Math.max(0,Number(range.from)||0):0
@@ -132,6 +142,32 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   }
   const context={...projectTavernHelperContext({...chat,messages:[]}),messages,turnMessageIds}
   return {chat,context,from,to}
+ }
+ async function readSceneImageState(id){
+  const view=await head(id)
+  if(!view)return null
+  const chat=await selectedHeader(id,view,['id','sessionId','mode','backgroundConfigVersion','conversationFeaturesVersion','sceneImagesEnabled'])
+  const t=tree(id),messages=new Array(view.messageCount)
+  let cursor=view.snapshotCursor
+  while(cursor){
+   const page=await pages.readHistoryPage(id,{cursor,limit:500})
+   for(const {position,message} of page.messages){
+    const row={}
+    for(const field of ['role','turn','greeting','text','sourceText','swipeId']){
+     const value=await t.get(message.runtimeRef,'/'+field)
+     if(value!==undefined)row[field]=value
+    }
+    const count=await t.type(message.runtimeRef,'/swipes')==='array'?await t.size(message.runtimeRef,'/swipes'):null
+    if(count!==null){
+     row.swipes=new Array(count).fill(null)
+     const selected=Math.max(0,Number(row.swipeId)||0)
+     if(Number.isInteger(selected)&&selected<count)row.swipes[selected]=await t.get(message.runtimeRef,'/swipes/'+selected)
+    }
+    messages[position]=row
+   }
+   cursor=page.previousCursor
+  }
+  return projectSceneImageState({...chat,messages})
  }
  async function readSessionState(id,options={}){
   const view=await head(id)
@@ -199,6 +235,57 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    return t.create(next)
   }
  }
+ // Point mutations can be validated against just the header and touched rows.
+ // Structural edits and removal of the latest world retain the full fallback.
+ async function patch(id,revision,changes,assertCurrent){
+  const view=await head(id)
+  if(!view)return null
+  if(view.state.chatRevision!==revision)return undefined
+  if(changes.some(change=>!change.path?.length || change.path[0]==='messages' &&
+    (change.path.length<3 || !Number.isSafeInteger(change.path[1]) || change.path[1]<0 || change.path[1]>=view.messageCount)))return null
+  const t=tree(id),originalHeader=await t.get(view.state.chatHeaderRef),rows=new Map()
+  for(const change of changes){
+   if(change.path[0]!=='messages'||rows.has(change.path[1]))continue
+   const position=change.path[1]
+   const page=await pages.readHistoryPage(id,{cursor:{snapshotId:view.snapshotCursor.snapshotId,before:position+1},limit:1})
+   rows.set(position,await t.get(page.messages[0].message.runtimeRef))
+  }
+  let nextHeader=originalHeader
+  const normalized=[]
+  for(const raw of changes){
+   const isMessage=raw.path[0]==='messages',position=raw.path[1]
+   const base=isMessage?rows.get(position):nextHeader,relative=isMessage?raw.path.slice(2):raw.path
+   let change=JSON.parse(JSON.stringify(raw))
+   if(raw.op==='set'&&raw.value===undefined){
+    let parent=base
+    for(const key of relative.slice(0,-1))parent=parent?.[key]
+    if(!parent||typeof parent!=='object')throw Error('Missing mutation parent')
+    if(Array.isArray(parent))change.value=null
+    else if(Object.hasOwn(parent,relative.at(-1)))change={op:'delete',path:raw.path}
+    else continue
+   }
+   const next=applyJsonChangesShared(base,[{...change,path:relative}])
+   if(isMessage)rows.set(position,next);else nextHeader=next
+   normalized.push(change)
+  }
+  if(nextHeader.id!==id||nextHeader._storageRevision!==revision+(changes.length?1:0))throw Error('Invalid journal patch revision')
+  if(!changes.length){assertCurrent?.();return result({...nextHeader,messages:[]},view)}
+  const old={position:view.state.worldMessage,swipe:view.state.worldSwipe,world:await t.get(view.state.worldRef)}
+  let selected={...old,world:{variables:old.world.variables,...(nextHeader.posture!==undefined?{posture:nextHeader.posture}:{})}}
+  // A changed newer floor may introduce a new active variable snapshot.
+  const candidates=[...rows].filter(([position])=>old.position===null||position>=old.position).sort(([a],[b])=>b-a)
+  for(const [position,row] of candidates){
+   const swipe=Math.max(0,Number(row.swipeId)||0),variables=row.variables?.[swipe]
+   if(variables&&typeof variables==='object'&&!Array.isArray(variables)){
+    selected={position,swipe,world:{variables,...(nextHeader.posture!==undefined?{posture:nextHeader.posture}:{})}}
+    break
+   }
+   if(position===old.position)return null // needs an earlier world lookup
+  }
+  const next={...nextHeader,messages:createScopedMessages(view.messageCount,rows)}
+  const saved=await write(id,result({...originalHeader,messages:[]},view),next,normalized,assertCurrent,{old,selected})
+  return {...saved,chat:{...nextHeader,messages:[]}}
+ }
  async function create(id,chat,assertCurrent){
   const batch=createBufferedJsonRecords({read:ref=>pages.readRecord(id,ref),writeMany:values=>pages.writeRecords(id,values)})
   const t=batch.tree,rows=[]
@@ -210,7 +297,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   await domain.create(id,{world:selected.world,messages:rows,metadata:{runtimeLayout:1},runtimeState:{chatHeaderRef,chatRevision:chat._storageRevision,worldMessage: selected.position,worldSwipe:selected.swipe}},{assertCurrent})
   return result(chat,await head(id))
  }
- async function write(id,stored,next,changes,assertCurrent){
+ async function write(id,stored,next,changes,assertCurrent,worldSelection){
   const batch=createBufferedJsonRecords({read:ref=>pages.readRecord(id,ref),writeMany:values=>pages.writeRecords(id,values)})
   const view=stored.native.view,t=batch.tree,grouped=new Map(),headChanges=[]
   let from=Infinity
@@ -230,7 +317,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    edits.push({position,message:await encode(id,next.messages[position],previous,mutations,t)})
   }
   for(let position=retained;position<next.messages.length;position++)append.push(await encode(id,next.messages[position],undefined,undefined,t))
-  const selected=currentWorld(next),old=currentWorld(stored.chat)
+  const selected=worldSelection?.selected??currentWorld(next),old=worldSelection?.old??currentWorld(stored.chat)
   // Reuse the exact received leaf changes on the common settlement hot path.
   // Switching swipes/rollback selects another world and explicitly diffs it.
   let worldChanges
@@ -257,5 +344,5 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    records:[['chat-revision:'+stored.revision,view.snapshotCursor.snapshotId]]},{assertCurrent})
   return result(next,await head(id))
  }
- return Object.freeze({read,readHelperContext,readSlice,readSessionState,version,create,write})
+ return Object.freeze({patch,read,readRevisionMetadata,readHelperContext,readSlice,readSessionState,readSceneImageState,version,create,write})
 }

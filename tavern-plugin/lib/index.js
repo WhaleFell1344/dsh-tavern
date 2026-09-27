@@ -3493,9 +3493,12 @@ export async function apply(ctx) {
       case 'hydrateTavernHelperMessages': {
         const sessionId = args && args.sessionId
         const chatId = (await readSessionMap())[sessionId]
-        const selected = chatId && await chatPersistence.readHelperContext(chatId, {from:args?.from,to:args?.to})
+        if (args?.chatId && args.chatId !== chatId) throw new Error('聊天已切换，请重新读取历史')
+        const selected = chatId && await chatPersistence.readHelperContext(chatId, {from:args?.from,to:args?.to,revision:args?.revision})
         if (selected && selected.chat.sessionId === sessionId && selected.chat.backgroundConfigVersion === 1 && selected.chat.conversationFeaturesVersion === 1) {
-          return {from:selected.from,to:selected.to,messages:selected.context.messages}
+          const payload = {from:selected.from,to:selected.to,messages:selected.context.messages}
+          sessionViews.acceptHelperMessages(sessionId,chatId,selected.chat._storageRevision,payload)
+          return payload
         }
         const chat = await chatForSession(sessionId)
         if (!chat) throw new Error('请先打开游玩会话')

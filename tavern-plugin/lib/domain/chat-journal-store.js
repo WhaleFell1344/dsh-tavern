@@ -492,7 +492,7 @@ export function createChatJournalStore(options = {}) {
   async function readHelperContext(chatId, range) {
     const selected = await native.readHelperContext(chatId, range)
     if (selected !== null) return selected
-    const chat = await read(chatId)
+    const chat = range?.revision === undefined ? await read(chatId) : await readRevision(chatId,range.revision)
     if (!chat) return undefined
     const context = projectTavernHelperContext(range ? {...chat,messages:[]} : chat)
     if (!range) return {chat,context}
@@ -515,6 +515,11 @@ export function createChatJournalStore(options = {}) {
     return state ? projectSettlementCheckpoint(state.chat, messageId, operationId) : undefined
   }
   async function readSceneImageState(chatId) {
+    const cached=readCache.get(chatId)
+    if(!cached||cached.stamp!==await version(chatId)){
+      const selected=await native.readSceneImageState(chatId)
+      if(selected!==null)return selected
+    }
     const state = await cachedState(chatId)
     return state ? projectSceneImageState(state.chat) : undefined
   }
@@ -631,10 +636,20 @@ export function createChatJournalStore(options = {}) {
     const sorted = [...indices].sort((a,b) => a-b)
     return {indices:sorted,baseRevision:revision,revision:state.revision}
   }
+  // Native change coverage lives with the full cache entry. A cache miss has
+  // no delta to offer; reading the entire archive cannot recover that coverage.
+  async function missingNativeCoverage(chatId) {
+    const metadata = await native.readRevisionMetadata(chatId)
+    if (!metadata) return null
+    return readCache.get(chatId)?.stamp === metadata.stamp ? null : metadata
+  }
   async function readChangedIndices(chatId, revision) {
+    const metadata = await missingNativeCoverage(chatId)
+    if (metadata) return revision === metadata.revision ? {indices:[],baseRevision:revision,revision} : undefined
     return changedIndices(chatId, await cachedState(chatId), revision)
   }
   async function readChangedSlice(chatId, revision, fields) {
+    if (await missingNativeCoverage(chatId)) return undefined
     const state = await cachedState(chatId)
     if (revision === state?.revision) return undefined
     const changed = changedIndices(chatId,state,revision)
@@ -644,6 +659,7 @@ export function createChatJournalStore(options = {}) {
   /** Detached display input: unchanged Helper variables come from the cached view.
    * Never use this projection as a writable Chat or for a full Helper rebuild. */
   async function readViewDelta(chatId, revision) {
+    if (await missingNativeCoverage(chatId)) return undefined
     const state = await cachedState(chatId)
     const changed = changedIndices(chatId, state, revision)
     if (!changed || revision === state.revision
@@ -673,6 +689,10 @@ export function createChatJournalStore(options = {}) {
   /** Exact-version internal commit; stale callers must use their existing merge path. */
   async function patch(chatId, expectedRevision, changes, metadata={}) {
     return serialize(chatId,async()=>{
+      if (!readCache.has(chatId)) {
+        const saved = await native.patch(chatId,expectedRevision,changes,metadata.assertCurrent)
+        if (saved !== null) return saved ? slice(saved.chat,[],metadata.returnProjection).chat : undefined
+      }
       const state=await cachedState(chatId)
       if(!state || state.revision!==expectedRevision)return undefined
       // An acknowledged no-op is not a story edit: keep undo points valid.

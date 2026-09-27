@@ -55,9 +55,17 @@ try{
   for(let i=0;i<20;i++)assert.equal(result.messages.at(-1).variables[0].stat_data['field'+i],i+1)
   assert.equal(result.messages[1].variables[0].stat_data.field0,0)
  })
+ if(process.argv.includes('--cold-patch'))await measure('cold-update-20-fields',async()=>{
+  const cold=createChatPersistence({store:createChatJournalStore({dataRoot:root,cacheMaxBytes:1,onNativeIO:onIO})})
+  const selected=await cold.readSlice('scale',[],['_storageRevision'])
+  const result=await cold.patch('scale',selected.chat._storageRevision,Array.from({length:20},(_,i)=>({op:'set',path:['messages',messages.length-1,'variables',0,'stat_data','field'+i],value:i+2})))
+  assert.equal(result._storageRevision,selected.chat._storageRevision+1)
+  assert.ok(io.pages<=6,'cold point writes must not read all history pages')
+  assert.equal((await cold.readSlice('scale',[messages.length-1],[])).chat.messages[0].variables[0].stat_data.field0,2)
+ })
  report.status='passed'
 }catch(error){report.status='failed';report.error=error.stack;process.exitCode=1;console.error(error)}
 finally{
- await writeFile(join(output,'scale-'+(process.argv.includes('--helper')?'helper-':'')+rounds+'.json'),JSON.stringify(report,null,2)+'\n')
+ await writeFile(join(output,'scale-'+(process.argv.includes('--cold-patch')?'cold-patch-':process.argv.includes('--helper')?'helper-':'')+rounds+'.json'),JSON.stringify(report,null,2)+'\n')
  await rm(root,{recursive:true,force:true})
 }

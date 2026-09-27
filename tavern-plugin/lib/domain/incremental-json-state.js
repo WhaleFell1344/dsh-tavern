@@ -26,7 +26,18 @@ function indexOf(key,length,append=false){
  * Scalar changes read/write their ancestor paths, never diff a whole snapshot.
  * read/write store immutable JSON records; hashes are opaque to this module.
  */
-export function createIncrementalJsonState({read,write}){
+export function createIncrementalJsonState({read,write,decodedCacheBytes=0}){
+ // Optional request-local reuse for immutable shared snapshots. Cache-owned
+ // values never escape; every public read still receives independent objects.
+ const decoded=new Map();let decodedBytes=0
+ function rememberDecoded(ref,value){
+  if(!(decodedCacheBytes>0))return
+  const size=JSON.stringify(value).length*4+256
+  if(size>decodedCacheBytes)return
+  if(decoded.has(ref)){decodedBytes-=decoded.get(ref).size;decoded.delete(ref)}
+  while(decoded.size&&decodedBytes+size>decodedCacheBytes){const key=decoded.keys().next().value;decodedBytes-=decoded.get(key).size;decoded.delete(key)}
+  decoded.set(ref,{value:structuredClone(value),size});decodedBytes+=size
+ }
  function session(){
   const cache=new Map()
   return {get:async ref=>{if(!cache.has(ref))cache.set(ref,await read(ref));return cache.get(ref)},
@@ -80,13 +91,16 @@ export function createIncrementalJsonState({read,write}){
  }
  async function decode(s,link){
   if(own(link,'value'))return link.value
+  const previous=decoded.get(link.ref)
+  if(previous){decoded.delete(link.ref);decoded.set(link.ref,previous);return structuredClone(previous.value)}
   const node=await s.get(link.ref)
-  if(node.type==='scalar')return node.value
+  if(node.type==='scalar'){rememberDecoded(link.ref,node.value);return node.value}
   if(!['object','array'].includes(node.type))throw fail('Corrupt state value')
   const value=node.type==='array'?[]:{}
   for(const [key,child] of (await entries(s,node.entries)).sort((a,b)=>a[2]-b[2])){
    Object.defineProperty(value,key,{value:await decode(s,child),enumerable:true,writable:true,configurable:true})
   }
+  rememberDecoded(link.ref,value)
   return value
  }
  async function locate(s,link,parts){

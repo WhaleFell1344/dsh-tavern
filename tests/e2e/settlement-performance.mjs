@@ -5,6 +5,16 @@ import { createChatJournalStore } from '../../tavern-plugin/lib/domain/chat-jour
 import { createChatPersistence } from '../../tavern-plugin/lib/domain/chat-persistence.js'
 import { encodeMigratedSessionLog, parseSessionLog } from '../../tavern-plugin/lib/domain/legacy-session-migration.js'
 
+// Avoid Playwright's iframe element preview: a srcdoc containing a complete
+// compatibility context can be hundreds of MB and preview formatting dominates
+// the very performance this probe measures. Still inspect the real status DOM.
+async function statusFrame(page) {
+  const handle = await page.waitForFunction(() => document.querySelector('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame'), null, {timeout:120000})
+  const frame = await handle.asElement().contentFrame(); await handle.dispose()
+  assert.ok(frame, 'the mounted status frame must exist')
+  return frame
+}
+
 export function settlementPerformanceInitialVariables() {
   const state = { gold: 0 }
   for (let i = 0; i < Number(process.env.TAVERN_PERF_FIELDS || 20); i++) state['perfField' + i] = { value: i, label: '合成长档状态'.repeat(6), enabled: true }
@@ -82,7 +92,7 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
       }
       assert.ok(found, 'synthetic Chat and native Session must have matching turn coordinates')
     })
-    await page.frameLocator('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame').locator('#e2e-gold').filter({ hasText: /^金币：10$/ }).waitFor({ timeout: 120000 })
+    await (await statusFrame(page)).locator('#e2e-gold').filter({ hasText: /^金币：10$/ }).waitFor({ timeout: 120000 })
     if (reopening) {
       size.runtimeBootMs = reopening.bootMs
       size.coldOpenToStatusMs = Date.now() - reopening.openStarted
@@ -124,13 +134,13 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     await page.getByPlaceholder('例如：这轮还没有交付物品，不要扣除库存。').fill('性能测试：本次金币更新为 ' + gold)
     await page.getByRole('button', { name: '重新结算', exact: true }).click()
     }
-    const statusFrame = await (await page.locator('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame').elementHandle()).contentFrame()
-    const visiblePromise = statusFrame.evaluate(gold => new Promise(resolve => {
+    const frame = await statusFrame(page)
+    const visiblePromise = frame.evaluate(gold => new Promise(resolve => {
       const node = document.querySelector('#e2e-gold')
       const check = () => { if (node.textContent === '金币：' + gold) { observer.disconnect(); requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.timeOrigin + performance.now()))) } }
       const observer = new MutationObserver(check); observer.observe(node, { subtree: true, characterData: true, childList: true }); check()
     }), gold).then(value => ({ value }), error => ({ error }))
-    await page.frameLocator('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame').locator('#e2e-gold').filter({ hasText: new RegExp('^金币：' + gold + '$') }).waitFor({ timeout: 120000 })
+    await frame.locator('#e2e-gold').filter({ hasText: new RegExp('^金币：' + gold + '$') }).waitFor({ timeout: 120000 })
     const observation = await visiblePromise
     if (observation.error) throw observation.error
     const visibleAt = observation.value

@@ -82,3 +82,28 @@ test('concurrent cold consumers share a full read and projection at the same rev
  assert.equal(f.calls.full,1)
  assert.ok(results.every(view=>view.tavernHelper.messages[0].text==='one'))
 })
+
+test('an initial Helper window survives a timed-out consumer and hydration promotes that exact revision',async()=>{
+ const f=fixture()
+ f.deps.project.full=async value=>{f.calls.full++;return {chatId:value.id,tavernHelper:{chatId:value.id,stateRevision:value._storageRevision,messages:[{message_id:0,stub:true}],messagesPending:{from:0,to:0}}}}
+ await f.reader.read('s',{windowHelperMessages:true})
+ await f.reader.read('s',{windowHelperMessages:true})
+ assert.equal(f.calls.fullRead,1,'a timed-out cold client must not rebuild the same complete archive')
+ assert.equal(f.reader.acceptHelperMessages('s','c',1,{from:0,to:0,messages:[{message_id:0,role:'assistant',message:'one'}]}),true)
+ const view=await f.reader.read('s')
+ assert.equal(f.calls.fullRead,1)
+ assert.equal(view.tavernHelper.messagesPending,undefined)
+ assert.equal(view.tavernHelper.messages[0].message,'one')
+})
+
+test('Helper hydration cannot promote incomplete ranges, another session or an obsolete revision',async()=>{
+ const f=fixture()
+ f.deps.project.full=async value=>({chatId:value.id,tavernHelper:{chatId:value.id,stateRevision:value._storageRevision,messages:[{message_id:0,stub:true}],messagesPending:{from:0,to:0}}})
+ await f.reader.read('s',{windowHelperMessages:true})
+ for(const [session,revision,payload] of [['other',1,{from:0,to:0,messages:[{message_id:0}]}],['s',2,{from:0,to:0,messages:[{message_id:0}]}],['s',1,{from:0,to:0,messages:[]}],['s',1,{from:0,to:0,messages:[{message_id:1}]}]]){
+  assert.equal(f.reader.acceptHelperMessages(session,'c',revision,payload),false)
+ }
+ f.chat={...f.chat,_storageRevision:2}
+ await f.reader.read('s',{windowHelperMessages:true})
+ assert.equal(f.reader.acceptHelperMessages('s','c',1,{from:0,to:0,messages:[{message_id:0}]}),false)
+})

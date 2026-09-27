@@ -4,7 +4,10 @@ export async function load(url, context, next) {
   if (!url.includes('/tavern-plugin/lib/domain/')) return result
   let source = String(result.source)
   const replace = (from, to) => { if (!source.includes(from)) throw Error('Performance probe seam changed: ' + url + ' ' + from); source = source.replace(from, to) }
-  if (url.endsWith('/mvu-background-settlement.js')) {
+  if (url.endsWith('/request-performance.js')) {
+    replace("['getSession', 'syncSession', 'getCardOpenings'", "['getSession', 'syncSession', 'hydrateTavernHelperMessages', 'getTavernHelperContext', 'getFullPromptTemplateState', 'saveFullPromptTemplateState', 'getCardOpenings'")
+    replace('        append(recent, row, 120)', "        console.log('[settlement-perf]'+JSON.stringify({stage:'view-request',...row}));\n        append(recent, row, 120)")
+  } else if (url.endsWith('/mvu-background-settlement.js')) {
     replace("      await record('submitted', { operations: submission.operations })", mark('submitted') + "\n      await record('submitted', { operations: submission.operations })")
     replace('    const applied = await options.runtime.settleMvuUpdate({', mark('runtime-start') + '\n    const applied = await options.runtime.settleMvuUpdate({')
     replace('    if (applied.deferred === true || applied.stale === true)', mark('runtime-return') + '\n    if (applied.deferred === true || applied.stale === true)')
@@ -18,6 +21,9 @@ export async function load(url, context, next) {
     replace('      async commit(input = {}) {', '      async commit(input = {}) {\n' + mark('commit-start') + '\ntry {')
     replace('      },\n      async fail(trace)', '} finally {' + mark('commit-return') + '}\n      },\n      async fail(trace)')
   } else if (url.endsWith('/chat-journal-store.js')) {
+    replace('  async function cachedState(chatId) {', "  async function cachedState(chatId) {\nconst perfCaller=new Error().stack.split('\\n').slice(2,7).map(line=>line.replace(/file:.*?\\/tavern-plugin\\//,'tavern-plugin/'));")
+    replace('    const load = { stamp }', "    console.log('[settlement-perf]'+JSON.stringify({stage:'full-read-miss',at:performance.timeOrigin+performance.now(),caller:perfCaller}));\n    const load = { stamp }")
+    replace('        const saved = await native.patch(chatId,expectedRevision,changes,metadata.assertCurrent)', "        const saved = await native.patch(chatId,expectedRevision,changes,metadata.assertCurrent)\nif(saved)console.log('[settlement-perf]'+JSON.stringify({stage:'native-head-published',at:performance.timeOrigin+performance.now(),source:metadata.source,revision:saved.revision}));")
     for (const state of ['state','currentState']) {
       const seam=`        const saved=await native.write(chatId,${state},next,changes,metadata.assertCurrent)`
       replace(seam,seam+"\nconsole.log('[settlement-perf]'+JSON.stringify({stage:'native-head-published',at:performance.timeOrigin+performance.now(),source:metadata.source,revision:saved.revision}));")
