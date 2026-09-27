@@ -48,13 +48,19 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
   const chatId = fixture.id
   let size
   report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + active storage + React; synthetic history, fixed model; tracing disabled', requireCompact, size: { rounds, fields }, samples: [] }
-  let firstWindow
+  let firstWindow, historyAccess
+  let automaticFullReads=0, historyReads=0
+  page.on('request',request=>{
+    if(request.url().endsWith('/api/dsh-tavern/getSession')) {try{if(request.postDataJSON()?.fullView)automaticFullReads++}catch{}}
+    if(request.url().includes('/api/dsh-tavern/helper-history?'))historyReads++
+  })
   const observeWindow=async response=>{
     if(firstWindow||!response.url().endsWith('/api/dsh-tavern/getSession'))return
     const body=await response.text().catch(()=>null)
     if(!body)return
     let payload;try{payload=JSON.parse(body)}catch{return}
     if(!payload.view?.historyWindow)return
+    historyAccess=payload.view.tavernHelper?.historyAccess
     firstWindow={...payload.view.historyWindow,responseAt:Date.now(),bytes:Buffer.byteLength(body)}
     report.settlementPerformance.firstWindow=firstWindow
     await page.waitForFunction(()=>document.body?.innerText.includes('这是性能测试的合成剧情'),null,{timeout:15000}).then(()=>{firstWindow.bodyVisibleAt=Date.now()},()=>{})
@@ -118,18 +124,71 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
       }
       assert.ok(found, 'synthetic Chat and native Session must have matching turn coordinates')
     })
-    await (await statusFrame(page)).locator('#e2e-gold').filter({ hasText: /^金币：10$/ }).waitFor({ timeout: 120000 })
+    const statusDeadline=Date.now()+120000
+    while(true) {
+      const frame=await statusFrame(page)
+      try {
+        await frame.locator('#e2e-gold').filter({hasText:/^金币：10$/}).waitFor({timeout:Math.max(1,statusDeadline-Date.now())})
+        break
+      } catch(error) {
+        // The runtime replaces its loading iframe during initialization.
+        if(!frame.isDetached() || Date.now()>=statusDeadline)throw error
+      }
+    }
     if (reopening) {
       size.runtimeBootMs = reopening.bootMs
       if(firstWindow)firstWindow.sessionClickToBodyMs=firstWindow.bodyVisibleAt-reopening.openSessionStarted
       size.coldOpenToStatusMs = Date.now() - reopening.openStarted
       if(firstWindow){firstWindow.responseMs=firstWindow.responseAt-reopening.openStarted;firstWindow.bodyVisibleMs=firstWindow.bodyVisibleAt-reopening.openStarted}
     }
+    if(process.argv.includes('--history-demand')) {
+      assert.equal(automaticFullReads,0,'opening must not request complete compatibility history')
+      const priorReads=historyReads
+      const expected=await createChatJournalStore({dataRoot:data}).readHelperContext(chatId,{from:0,to:0,revision:firstWindow.revision})
+      let tested=false
+      for(const frame of page.frames()) {
+        if(!await frame.evaluate(()=>typeof window.getChatMessages==='function' && Boolean(window.SillyTavern?.chat)).catch(()=>false))continue
+        const actual=await frame.evaluate(()=>({helper:window.getChatMessages(0)[0],variables:window.getVariables({type:'message',message_id:0}),native:window.SillyTavern.chat[0].mes}))
+        assert.equal(actual.helper.message,expected.context.messages[0].message)
+        assert.deepEqual(actual.variables,expected.context.messages[0].variables)
+        assert.equal(actual.native,expected.context.messages[0].message)
+        if(process.argv.includes('--history-demand-write')) {
+          await frame.evaluate(async()=>{window.SillyTavern.chat[0].historyProbe={value:42};await window.SillyTavern.saveChat()})
+          const written=await createChatJournalStore({dataRoot:data}).readSlice(chatId,[0])
+          assert.deepEqual(written.chat.messages[0].tavernPluginData.historyProbe,{value:42})
+          await frame.evaluate(async()=>{delete window.SillyTavern.chat[0].historyProbe;await window.SillyTavern.saveChat()})
+        }
+        tested=true;break
+      }
+      assert.ok(tested,'must exercise the real shared script iframe')
+      const handle=await page.evaluateHandle(()=>{
+        const node=document.createElement('iframe');node.sandbox='allow-scripts';node.srcdoc='<!doctype html><body>history probe</body>';document.body.appendChild(node);return node
+      })
+      const sandbox=await handle.asElement().contentFrame()
+      await sandbox.waitForFunction(()=>document.body?.textContent==='history probe')
+      const probe=await sandbox.evaluate(cap=>{
+        function read(token){const url=new URL('/api/dsh-tavern/helper-history',document.baseURI);url.searchParams.set('cap',token);url.searchParams.set('from','0');url.searchParams.set('to','0');const xhr=new XMLHttpRequest();xhr.open('GET',url.href,false);xhr.send();return {status:xhr.status,body:JSON.parse(xhr.responseText)}}
+        return {origin:window.origin,denied:read('invalid').status,allowed:read(cap)}
+      },historyAccess.token)
+      assert.equal(probe.origin,'null')
+      assert.equal(probe.denied,403)
+      assert.equal(probe.allowed.status,200)
+      assert.deepEqual(probe.allowed.body.messages[0],expected.context.messages[0])
+      await handle.evaluate(node=>node.remove());await handle.dispose()
+
+      report.historyDemand={automaticFullReads,initialHistoryReads:priorReads,explicitHistoryReads:historyReads-priorReads}
+    }
     // Exclude cold initialization and allow snapshot maintenance to settle.
     await page.waitForTimeout(3000)
+    if(process.argv.includes('--opening-only')) {
+      const coldLog=readLog().split('dsh web:').at(-1)
+      assert.doesNotMatch(coldLog, /"stage":"full-read-miss"/, 'native initialization must not materialize the complete Chat')
+      assert.doesNotMatch(coldLog, /"stage":"helper-context-read"[^\n]*"full":true/, 'Helper recovery must remain bounded')
+    }
   })
   const samples = []
   report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + active storage + React; synthetic history, fixed model; tracing disabled', requireCompact, size, samples, firstWindow }
+  if(process.argv.includes('--opening-only')) {report.settlementPerformance.scope+='; opening only: settlement and second restart not exercised';return}
   for (let run = 0; run < runs; run++) await step(`长档结算采样 ${run + 1}/${runs}`, async () => {
     const gold = 100 + run
     await writeFile(join(output, 'performance-control.json'), JSON.stringify({ id: run, gold }))

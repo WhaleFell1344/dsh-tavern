@@ -1,5 +1,5 @@
 import {projectTavernHelperContext,projectTavernHelperMessage} from './tavern-helper-context.js'
-import {projectSessionMessage,projectChatSessionState,projectSceneImageState} from './chat-session-state.js'
+import {projectSessionMessage,projectChatSessionState,projectSceneImageState,projectDisplayRuntimeState} from './chat-session-state.js'
 import {createScopedMessages} from './scoped-messages.js'
 import {createBufferedJsonRecords} from './buffered-json-records.js'
 import path from 'node:path'
@@ -21,6 +21,38 @@ const header=({messages,...value})=>value
 export function createNativeConversationStorage({dataRoot,onIO}){
  const pages=createConversationPageStore({root:path.join(dataRoot,'chats'),onIO})
  const domain=createConversationState({store:pages})
+ const summaryCache=new Map(),summaryLoads=new Map()
+ let summaryBytes=0
+ async function sessionSummaries(id,view){
+  const key=JSON.stringify([id,view.snapshotCursor.snapshotId])
+  const cached=summaryCache.get(key)
+  if(cached){summaryCache.delete(key);summaryCache.set(key,cached);return cached}
+  if(summaryLoads.has(key))return summaryLoads.get(key)
+  const loading=(async()=>{
+   const messages=new Array(view.messageCount),t=tree(id)
+   let cursor=view.snapshotCursor,pending=null,bytes=messages.length*8
+   while(cursor){
+    const page=await pages.readHistoryPage(id,{cursor,limit:500})
+    for(const {position,message} of [...page.messages].reverse()){
+     const summary=message.session || sessionSummary(await t.get(message.runtimeRef))
+     messages[position]=projectSessionMessage(summary.message)
+     bytes+=48+JSON.stringify(messages[position]).length*2
+     if(pending===null&&summary.pending)pending=summary.pending
+    }
+    cursor=page.previousCursor
+   }
+   const value={messages,pending,bytes}
+   if(bytes<=8*1024*1024){
+    while(summaryCache.size && (summaryCache.size>=4 || summaryBytes+bytes>16*1024*1024)){
+     const oldest=summaryCache.keys().next().value;summaryBytes-=summaryCache.get(oldest).bytes;summaryCache.delete(oldest)
+    }
+    summaryCache.set(key,value);summaryBytes+=bytes
+   }
+   return value
+  })()
+  summaryLoads.set(key,loading)
+  try{return await loading}finally{summaryLoads.delete(key)}
+ }
  // Request-local, bounded block reuse. Full reads still return independent JSON
  // values, but shared historical snapshots are not fetched from disk per row.
  function tree(id){
@@ -183,6 +215,18 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   }
   return projectSceneImageState({...chat,messages})
  }
+ async function readDisplayRuntimeState(id,turn){
+  const view=await head(id)
+  if(!view)return null
+  const chat=await selectedHeader(id,view,['id','sessionId','_storageRevision','mode','backgroundConfigVersion','conversationFeaturesVersion','updatedAt','rollbackUndo'])
+  const {messages}=await sessionSummaries(id,view)
+  const result=projectDisplayRuntimeState({...chat,messages},turn)
+  if(result.messageIndex>=0){
+   const page=await pages.readHistoryPage(id,{cursor:{snapshotId:view.snapshotCursor.snapshotId,before:result.messageIndex+1},limit:1})
+   result.displayRuntime=await tree(id).get(page.messages[0].message.runtimeRef,'/displayRuntime')
+  }
+  return result
+ }
  async function readSessionState(id,options={}){
   const view=await head(id)
   if(!view)return null
@@ -191,20 +235,9 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    'cardName','requestMode','statusBarPlacement','webSearchEnabled','candidates','taskMailbox','regenInProgress','settleError','scriptState',
    'hiddenDshErrorTurns','suppressedDshTurns','regeneratedDshTurns','tavernHelperLifecycleRevision','importHistory','rollbackUndo','pendingMvuSettlement'])
   if(Object.values(chat.timeline?.operations??{}).some(op=>op?.kind==='body'&&op.status==='foreground-completed'))return projectChatSessionState((await read(id)).chat)
-  const messages=new Array(view.messageCount),t=tree(id)
-  let cursor=view.snapshotCursor,pending=null
-  while(cursor){
-   const page=await pages.readHistoryPage(id,{cursor,limit:500})
-   for(const {position,message} of [...page.messages].reverse()){
-    let summary=message.session
-    // Older native pages lack the optional compact projection. Preserve their
-    // contract with a per-row fallback; subsequent edits persist the summary.
-    if(!summary){const row=await t.get(message.runtimeRef);summary=sessionSummary(row)}
-    messages[position]=projectSessionMessage(summary.message)
-    if(pending===null&&summary.pending)pending=summary.pending
-   }
-   cursor=page.previousCursor
-  }
+  // Cached rows never leave this module: full projections detach them below,
+  // scoped projections clone each row on access. Snapshot identity pins validity.
+  const {messages,pending}=await sessionSummaries(id,view)
   chat.messages=messages
   return projectChatSessionState(chat,{pendingMvuSettlement:options.scoped!==true&&Object.hasOwn(chat,'pendingMvuSettlement')?chat.pendingMvuSettlement:pending,...(options.scoped===true?{messages:createScopedMessages(messages.length,[],position=>structuredClone(messages[position]))}:{})})
  }
@@ -358,5 +391,5 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    records:[['chat-revision:'+stored.revision,view.snapshotCursor.snapshotId]]},{assertCurrent})
   return result(next,await head(id))
  }
- return Object.freeze({patch,read,readWindow,readRevisionMetadata,readHelperContext,readSlice,readSessionState,readSceneImageState,version,create,write})
+ return Object.freeze({patch,read,readWindow,readRevisionMetadata,readHelperContext,readSlice,readSessionState,readDisplayRuntimeState,readSceneImageState,version,create,write})
 }

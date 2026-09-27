@@ -312,3 +312,37 @@ test('native opening window reads only tail pages and pins later paging to the s
  assert.equal(pinned.chat.messages.at(-1).text,'floor 529')
  assert.equal((await cold.readWindow('window',{before:482,limit:48})).to,481)
 })
+
+test('session summary reads share a bounded immutable-revision cache without exposing mutable rows',async t=>{
+ const {root,persistence}=await fixture(t)
+ const messages=Array.from({length:530},(_,i)=>({...row(i),turn:i+1}))
+ await persistence.write({id:'summary-cache',messages})
+ const io=[],cold=createChatJournalStore({dataRoot:root,onNativeIO:e=>io.push(e)})
+ const first=await cold.readSessionState('summary-cache',{scoped:true})
+ assert.ok(io.some(e=>e.type==='page'))
+ const firstPages=io.filter(e=>e.type==='page').length
+ first.messages[529].turn=999
+ io.length=0
+ const again=await cold.readSessionState('summary-cache',{scoped:true})
+ assert.equal(again.messages[529].turn,530)
+ assert.equal(io.filter(e=>e.type==='page').length,0,'same revision must not rescan all history pages')
+ const full=await cold.readSessionState('summary-cache')
+ full.messages[529].turn=888
+ assert.equal((await cold.readSessionState('summary-cache')).messages[529].turn,530)
+ const parallelIO=[],parallel=createChatJournalStore({dataRoot:root,onNativeIO:e=>parallelIO.push(e)})
+ await Promise.all(Array.from({length:4},()=>parallel.readSessionState('summary-cache',{scoped:true})))
+ assert.equal(parallelIO.filter(e=>e.type==='page').length,firstPages,'concurrent readers share the same immutable load')
+ await persistence.patch('summary-cache',1,[{op:'set',path:['messages',529,'turn'],value:600}])
+ assert.equal((await cold.readSessionState('summary-cache',{scoped:true})).messages[529].turn,600)
+})
+
+test('native display capture reads only target diagnostics at absolute coordinates',async t=>{
+ const {root,persistence}=await fixture(t)
+ const chat=await persistence.write({id:'display',sessionId:'s',mode:'story',backgroundConfigVersion:1,conversationFeaturesVersion:1,
+  rollbackUndo:{ready:true,storageRevision:1},messages:[{role:'assistant',greeting:true,text:'old'.repeat(50000),variables:[{huge:'vars'.repeat(50000)}]},
+   {role:'user',text:'next'},{role:'assistant',turn:2,text:'last',displayRuntime:{frames:[{dom:'target'}]}}]})
+ const {projectDisplayRuntimeState}=await import('../tavern-plugin/lib/domain/chat-session-state.js')
+ const io=[],fresh=createChatJournalStore({dataRoot:root,onNativeIO:event=>io.push(event)})
+ for(const turn of [1,2,9])assert.deepEqual(await fresh.readDisplayRuntimeState('display',turn),projectDisplayRuntimeState(chat,turn))
+ assert.ok(io.every(event=>event.bytes<65536),'display capture must skip body and variable blobs')
+})

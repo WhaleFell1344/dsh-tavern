@@ -1795,3 +1795,66 @@ test('opening wire window expands absolute Helper ids without mutating the trans
  assert.equal(view.tavernHelper.messages[0].message_id,0)
  assert.equal(client.expandTavernOpeningWindow({tavernHelper:null}).tavernHelper,null)
 })
+
+test('on-demand Helper reads preserve synchronous old-floor values without loading history on open',()=>{
+ const state={historyAccess:{token:'cap',revision:7},messages:[{message_id:0,stub:true},{message_id:1,message:'latest',variables:{hp:9}}]}
+ const calls=[]
+ const read=client.createTavernHistoryReader({context:()=>state,install:row=>{state.messages[row.message_id]=row},request:args=>{calls.push(args);return {revision:7,messages:[{message_id:0,message:'old',variables:{hp:4}}]}}})
+ assert.equal(calls.length,0)
+ assert.equal(read(1).variables.hp,9)
+ assert.equal(calls.length,0)
+ assert.equal(read(0).variables.hp,4)
+ assert.equal(read(0).message,'old')
+ assert.equal(calls.length,1)
+ assert.deepEqual(JSON.parse(JSON.stringify(calls[0])),{token:'cap',revision:7,from:0,to:0})
+})
+
+test('lazy native chat facade saves no placeholder data and keeps loaded edits across window refresh', async()=>{
+ let state={chatId:'a',lifecycleRevision:1,stateRevision:1,messages:[{message_id:0,stub:true},{message_id:1,message:'recent',role:'assistant',variables:{hp:1}}]}
+ let reads=0, saves=0
+ const facade=client.createTavernChatDataFacade({copy:structuredClone,context:()=>state,readMessage:id=>{reads++;const row={message_id:id,message:'old',role:'assistant',pluginData:{saved:1}};state.messages[id]=row;return row},request:async(_method,args)=>{saves++;return {context:state}}})
+ assert.equal(facade.chat().length,2)
+ await facade.save()
+ assert.equal(reads,0)
+ assert.equal(saves,0,'untouched placeholders are never plugin edits')
+ const old=facade.chat()[0]
+ old.local=2
+ state={...state,stateRevision:2,messages:[{message_id:0,stub:true},state.messages[1]]}
+ facade.sync(state)
+ assert.equal(facade.chat()[0],old)
+ assert.equal(old.local,2)
+ assert.equal(reads,2)
+ const held=facade.chat()
+ state={...state,chatId:'b',messages:[]}
+ facade.sync(state)
+ assert.notEqual(facade.chat(),held)
+ assert.equal(held[0],old,'an old held chat cannot resolve into a new session')
+})
+
+test('on-demand native chat remains a structured-cloneable array',()=>{
+ const state={chatId:'a',stateRevision:1,messages:[{message_id:0,stub:true}]}
+ const facade=client.createTavernChatDataFacade({context:()=>state,copy:structuredClone,request:async()=>({}),readMessage:()=>({message_id:0,role:'assistant',message:'old'})})
+ const copied=structuredClone(facade.chat())
+ assert.equal(copied[0].mes,'old')
+ assert.equal(Array.isArray(copied),true)
+})
+
+test('historical revision mismatch cannot install wrong variables',()=>{
+ let installed=false
+ const read=client.createTavernHistoryReader({context:()=>({historyAccess:{token:'cap',revision:7},messages:[{stub:true}]}),install:()=>{installed=true},request:()=>({revision:8,messages:[{message_id:0,variables:{hp:99}}]})})
+ assert.throws(()=>read(0),/版本不匹配/)
+ assert.equal(installed,false)
+})
+
+
+test('window refresh invalidates clean historical rows without eagerly fetching them',()=>{
+ let state={chatId:'a',stateRevision:1,messages:Array.from({length:100},(_,message_id)=>({message_id,role:'assistant',message:'old'}))}
+ let reads=0
+ const facade=client.createTavernChatDataFacade({context:()=>state,copy:structuredClone,request:async()=>({}),readMessage:id=>{reads++;return {message_id:id,role:'assistant',message:'fresh'}}})
+ facade.chat()
+ state={...state,stateRevision:2,messages:state.messages.map(({message_id})=>({message_id,stub:true}))}
+ facade.sync(state)
+ assert.equal(reads,0)
+ assert.equal(facade.chat()[7].mes,'fresh')
+ assert.equal(reads,1)
+})

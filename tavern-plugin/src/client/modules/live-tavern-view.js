@@ -159,7 +159,7 @@ function createLiveTavernViewModule(options) {
 			}
 			if (shouldPoll(view)) record.optimisticBusy = false;
 			publish(record, { phase: "ready", view: view, error: "", updatedAt: Date.now() }, result);
-			if (view && (view.historyWindow || view.tavernHelper && view.tavernHelper.messagesPending) && typeof options.hydrateHelperMessages === "function") {
+			if (view && !view.historyWindow?.onDemand && !view.tavernHelper?.historyAccess && (view.historyWindow || view.tavernHelper && view.tavernHelper.messagesPending) && typeof options.hydrateHelperMessages === "function") {
 				try {
 					view = await options.hydrateHelperMessages(record.id, view) || view;
 					if (records.get(record.id) !== record) return;

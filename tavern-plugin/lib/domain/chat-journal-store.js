@@ -536,6 +536,8 @@ export function createChatJournalStore(options = {}) {
     return state ? projectChatBackgroundConfig(state.chat) : undefined
   }
   async function readDisplayRuntimeState(chatId, turn) {
+    const selected = await native.readDisplayRuntimeState(chatId, turn)
+    if (selected !== null) return selected
     const state = await cachedState(chatId)
     return state ? projectDisplayRuntimeState(state.chat, turn) : undefined
   }

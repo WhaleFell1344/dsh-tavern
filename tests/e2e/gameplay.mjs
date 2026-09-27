@@ -201,6 +201,9 @@ try {
     const url = await launchServer()
     restartServer = async (whileStopped) => {
       const current = new URL(page.url())
+      // A cold restart closes the old page before shutting down its server;
+      // otherwise background polling races shutdown and reports spurious fetch errors.
+      await page.goto('about:blank')
       child.kill('SIGTERM')
       await Promise.race([new Promise(resolve => child.once('exit', resolve)), pause(5000)])
       assert.notEqual(child.exitCode, null, '旧服务必须退出后再重启')
@@ -227,6 +230,16 @@ try {
     context.setDefaultTimeout(timeout)
     if (!process.argv.includes('--settlement-performance')) await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
     page = await context.newPage()
+    if(process.argv.includes('--history-demand')) {
+      await page.addInitScript(()=>{
+        const open=XMLHttpRequest.prototype.open;let captured=0;
+        XMLHttpRequest.prototype.open=function(method,url,...args){
+          if(String(url).includes('/helper-history?') && captured++<3)console.info('[history-read-stack] '+new Error().stack);
+          return open.call(this,method,url,...args);
+        };
+      });
+      page.on('console',message=>{if(message.text().startsWith('[history-read-stack]'))log+=message.text()+'\n'});
+    }
     page.on('pageerror', error => errors.push(error.message))
     // Slot error boundaries catch React failures, so pageerror alone misses them.
     page.on('console', message => {
@@ -420,7 +433,7 @@ try {
   if (process.argv.includes('--card-update')) await cardUpdateChecks({page,step,savedChat,data,output,report})
   if (process.argv.includes('--sidebar') || process.argv.includes('--sidebar-only')) await sidebarUpgrade({ page, step, savedChat, output, report })
   }
-  if(process.argv.includes('--native-format'))await step('服务重启后打开同一原生存档并核对当前变量',async()=>{
+  if(process.argv.includes('--native-format') && !process.argv.includes('--opening-only'))await step('服务重启后打开同一原生存档并核对当前变量',async()=>{
     const before=await savedChat()
     await restartServer()
     const expected=[...before.messages].reverse().find(row=>row.variables?.[row.swipeId||0]).variables[0].stat_data.gold

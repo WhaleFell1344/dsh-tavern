@@ -1,3 +1,4 @@
+import { createHelperHistoryAccess } from './domain/helper-history-access.js'
 import { createInputFieldsProjection } from './domain/input-fields-projection.js'
 import { createScopedMessages } from './domain/scoped-messages.js'
 import {registerVariableReadTool} from './domain/read-variables.js'
@@ -9,7 +10,7 @@ import { projectCardSummary } from './domain/card-preparation.js'
 import { createCardSummaryCache } from './domain/card-summary-cache.js'
 import { openingPreviewPayload, openingInitializationPayload } from './domain/opening-transport.js'
 import { createLiveCardUpdate } from './domain/live-card-update.js'
-import { createSessionViewReader, createSessionChatReader } from './domain/session-view-reader.js'
+import { createSessionViewReader, createSessionChatReader, createSessionSliceReader } from './domain/session-view-reader.js'
 import { createSessionStateView, settlementTurn, pendingMvuSettlementState, projectDisplayRuntimeState } from './domain/chat-session-state.js'
 import { createSettlementJobs } from './domain/settlement-jobs.js'
 import { createMvuConversion } from './domain/mvu-conversion.js'
@@ -835,6 +836,16 @@ export async function apply(ctx) {
     return requestPerformance.stage('readSessionState', () => sessionChats.readState(sessionId))
   }
   function backgroundConfigForSession(sessionId) { return sessionChats.readBackgroundConfig(sessionId) }
+  async function chatHeaderForSession(sessionId, fields) {
+    const chatId = (await readSessionMap())[str(sessionId)]
+    const selected = chatId && await chatPersistence.readSlice(chatId, [], [
+      'id','sessionId','mode','backgroundConfigVersion','conversationFeaturesVersion', ...fields
+    ])
+    const chat = selected?.chat
+    // Alias recovery and configuration adoption still require the original reader.
+    if (chat?.sessionId === sessionId && chat.backgroundConfigVersion === 1 && chat.conversationFeaturesVersion === 1) return chat
+    return chatForSession(sessionId)
+  }
   const historyRecall = createHistoryRecall()
   const foregroundRecallScopes = new WeakMap()
   async function recallHistoryForSession(sessionId, args, scope, audience) {
@@ -1327,13 +1338,7 @@ export async function apply(ctx) {
       if (!selected || selected.chat.sessionId !== sessionId || selected.chat.backgroundConfigVersion !== 1 || selected.chat.conversationFeaturesVersion !== 1) return undefined
       return selected
     },
-    resolveChatSlice: async (sessionId,indices,fields) => {
-      const chatId=(await readSessionMap())[sessionId]
-      if(!chatId)return undefined
-      const selected=await chatPersistence.readSlice(chatId,indices,fields)
-      if(!selected || selected.chat.sessionId!==sessionId || selected.chat.backgroundConfigVersion!==1 || selected.chat.conversationFeaturesVersion!==1)return undefined
-      return selected
-    },
+    resolveChatSlice: createSessionSliceReader({links:readSessionMap, readSlice:chatPersistence.readSlice}),
     resolveChatMetadataSlice: async sessionId => {
       const chatId=(await readSessionMap())[sessionId]
       if(!chatId)return undefined
@@ -1744,6 +1749,7 @@ export async function apply(ctx) {
     if (mode === 'script') result.scriptPreview = await requestPerformance.stage('scriptPreview', () => scriptPreviewOf(chat))
     return result
   }
+  const helperHistoryAccess = createHelperHistoryAccess({read: (id,args) => chatPersistence.readHelperContext(id,args)})
   async function readOpeningWindow(sessionId) {
     const chatId = (await readSessionMap())[str(sessionId)]
     if (!chatId) return null
@@ -1760,7 +1766,7 @@ export async function apply(ctx) {
     const chat={...window.chat,_storageRevision:undefined}
     const card=await readChatCard(chat)
     const result=await view(chat,card,false,{openingWindow:true})
-    result.historyWindow={from:window.from,to:window.to,messageCount:window.messageCount,revision:window.revision}
+    result.historyWindow={onDemand:true,from:window.from,to:window.to,messageCount:window.messageCount,revision:window.revision}
     if(result.tavernHelper){
       const helper=result.tavernHelper
       // Transport only loaded rows; the client adapts absolute ids at the
@@ -1768,7 +1774,7 @@ export async function apply(ctx) {
       const messages=helper.messages.map((row,index)=>({...row,message_id:window.from+index}))
       result.tavernHelper={...helper,stateRevision:window.revision,messages,
         turnMessageIds:Object.fromEntries(Object.entries(helper.turnMessageIds).map(([turn,index])=>[turn,window.from+index])),
-        messagesPending:{from:0,to:window.from-1}}
+        historyAccess:helperHistoryAccess.issue({chatId:chat.id,revision:window.revision,messageCount:window.messageCount})}
     }
     return result
   }
@@ -3085,7 +3091,7 @@ export async function apply(ctx) {
         return { prepared: true }
       }
       case 'getUserPreferenceProfile': {
-        const chat = await chatForSession(args && args.sessionId)
+        const chat = await chatHeaderForSession(args && args.sessionId, ['userProfileEnabled','userProfileContextSnapshot','userProfileId','userProfileRevision'])
         return {
           userProfile: presentUserPreferenceProfile(await userPreferenceProfile.read()),
           currentConversation: chat && groupOfMode(chat.mode) === 'play' ? {
@@ -3391,13 +3397,13 @@ export async function apply(ctx) {
       case 'exportConversation': return await exportConversation(args && args.chatId, args && args.sessionId, args && args.title)
       case 'exportTavernLogs': return await exportTavernLogs(args && args.sessionId)
       case 'recordTavernCompatibilityCalls': {
-        const chat = await sessionStateForSession(str(args && args.sessionId))
+        const chat = await chatHeaderForSession(str(args && args.sessionId), [])
         if (!chat) throw new Error('当前 Session 没有绑定 Tavern 对话')
         await compatibilityDiagnostics.record(chat.sessionId, args && args.runtimeId, args && args.calls)
         return { recorded: true }
       }
       case 'recordMvuRuntimeDiagnostic': {
-        const chat = await sessionStateForSession(str(args && args.sessionId))
+        const chat = await chatHeaderForSession(str(args && args.sessionId), [])
         if (!chat) throw new Error('当前 Session 没有绑定 Tavern 对话')
         const diagnostic = args && args.diagnostic || {}
         if (diagnostic.kind === 'mvu-load') {
@@ -3423,7 +3429,16 @@ export async function apply(ctx) {
       }
       case 'attachPlayChatDebug': return { reference: await attachPlayChatDebug(args && args.targetSessionId, args && args.sourceSessionId, args && args.turn) }
       case 'captureDisplayRuntime': return await captureDisplayRuntime(args && args.sessionId, args && args.turn, args && args.partIndex, args && args.runtime)
-	      case 'getTavernHelperContext': return { context: args?.eventId ? await tavernScriptHostAdapter.transactionContext(args.sessionId,args.eventId) : await tavernScriptHostAdapter.context(args && args.sessionId) }
+	      case 'getTavernHelperContext': {
+        if (!args?.eventId && args?.openingWindow === 1) {
+          const window = await readOpeningWindow(args.sessionId)
+          if (window) {
+            const projected = await projectOpeningWindow(window)
+            return { contextWindow: {historyWindow:projected.historyWindow,tavernHelper:projected.tavernHelper} }
+          }
+        }
+        return { context: args?.eventId ? await tavernScriptHostAdapter.transactionContext(args.sessionId,args.eventId) : await tavernScriptHostAdapter.context(args && args.sessionId) }
+      }
 	      case 'updateTavernHelperPrompts': return await tavernScriptHostAdapter.updatePrompts(args && args.sessionId, args && args.operation, args && args.expectedLifecycleRevision, args && args.eventId)
 	      case 'updateTavernHelperVariables': return await tavernScriptHostAdapter.updateVariables(args && args.sessionId, args && args.option, args && args.variables, args && args.expectedLifecycleRevision, args && args.eventId, args && args.contextBaseline)
 	      case 'updateTavernHelperMessages': return await tavernScriptHostAdapter.updateMessages(args && args.sessionId, args && args.messages, args && args.expectedLifecycleRevision, args && args.eventId)
@@ -3698,6 +3713,15 @@ export async function apply(ctx) {
         const readsRuntimeAsset = req.method === 'GET' && pathname.startsWith(TAVERN_RUNTIME_ASSET_PREFIX)
         const readsClientAsset = req.method === 'GET' && pathname.startsWith(TAVERN_CLIENT_ASSET_PREFIX)
         const origin = req.headers.origin
+        if (pathname === '/api/dsh-tavern/helper-history' && req.method === 'GET') {
+          const target = new URL(req.url, 'http://localhost')
+          const headers = {'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Access-Control-Allow-Origin':'*','X-Content-Type-Options':'nosniff'}
+          try {
+            const result = await helperHistoryAccess.read(target.searchParams.get('cap'), Number(target.searchParams.get('from')), Number(target.searchParams.get('to')))
+            res.writeHead(200,headers); res.end(JSON.stringify(result))
+          } catch (_) { res.writeHead(403,headers); res.end(JSON.stringify({error:'History unavailable; refresh the session'})) }
+          return
+        }
         const gameplayRoute = pathname.startsWith('/api/dsh-tavern/gameplay.')
         if (gameplayRoute && origin && origin !== 'http://' + req.headers.host && origin !== 'https://' + req.headers.host) {
           res.writeHead(403); res.end('forbidden'); return

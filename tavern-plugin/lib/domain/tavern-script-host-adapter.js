@@ -220,10 +220,17 @@ export function createTavernScriptHostAdapter(options = {}) {
 
   async function updateVariablesNow(sessionId, option, variables, expectedLifecycleRevision, eventId, contextBaseline, allowSlice = true, fallbackChat) {
     const scoped = allowSlice ? await variableMutationSlice(sessionId, option, expectedLifecycleRevision, eventId, contextBaseline) : null
-    const chat = scoped?.chat || fallbackChat || await mutationChat(sessionId, eventId)
+    // Global/card variables live outside Chat history. Validate the same
+    // lifecycle and script permissions from the header, without decoding messages.
+    let resourceHeader
+    if (['global','character'].includes(option?.type) && !settlementTransactions.has(str(sessionId))) {
+      assertTransactionEvent(undefined, eventId)
+      resourceHeader = await options.resolveChatSlice?.(str(sessionId), [], 'settlement')
+    }
+    const chat = scoped?.chat || resourceHeader?.chat || fallbackChat || await mutationChat(sessionId, eventId)
     await assertScriptEnabled(chat)
     if (scoped && settlementTransactions.has(str(sessionId))) return updateVariablesNow(sessionId, option, variables, expectedLifecycleRevision, eventId, contextBaseline, false)
-    if (!mutationIsCurrent(chat, expectedLifecycleRevision)) return staleMutation(chat)
+    if (!mutationIsCurrent(chat, expectedLifecycleRevision)) return staleMutation(resourceHeader ? await resolveChat(sessionId) : chat)
     if (option && option.type === 'global') {
       if (!options.globalVariables || typeof options.globalVariables.save !== 'function') throw new Error('全局变量存储未连接')
       const transaction = settlementTransactions.get(str(sessionId))
@@ -371,8 +378,9 @@ export function createTavernScriptHostAdapter(options = {}) {
     return { updated: true, targets: created, context: projectTavernHelperContext(chat) }
   }
 
-  async function worldbookRecord(sessionId, requestedName, template = false, suppliedChat) {
-    const chat = suppliedChat || await resolveChat(sessionId)
+  async function worldbookRecord(sessionId, requestedName, template = false, suppliedChat, readOnly = false) {
+    const selected = readOnly && !suppliedChat && await options.resolveChatSlice?.(sessionId, [], 'settlement')
+    const chat = suppliedChat || selected?.chat || await resolveChat(sessionId)
     if (template) assertTemplateChat(chat); else await assertScriptEnabled(chat)
     const card = await options.readCard(chat)
     const record = await options.worldBooks.bound(chat.cardPath, card, chat)
@@ -394,7 +402,7 @@ export function createTavernScriptHostAdapter(options = {}) {
   }
 
   async function getWorldbook(sessionId, name, template = false) {
-    const resolved = await worldbookRecord(sessionId, name, template)
+    const resolved = await worldbookRecord(sessionId, name, template, undefined, true)
     return { worldbook: projectTavernHelperWorldbook(resolved.record.view) }
   }
 
@@ -452,7 +460,7 @@ export function createTavernScriptHostAdapter(options = {}) {
   }
 
   async function loadWorldInfo(sessionId, name) {
-    const resolved = await worldbookRecord(sessionId, name)
+    const resolved = await worldbookRecord(sessionId, name, false, undefined, true)
     return { worldInfo: await exportBoundWorldbook(resolved.record) }
   }
 
@@ -543,7 +551,7 @@ export function createTavernScriptHostAdapter(options = {}) {
   }
 
   async function saveFullPromptTemplateGlobals(sessionId, variables, expectedVariables) {
-    assertTemplateChat(await resolveChat(sessionId))
+    assertTemplateChat(await resourcePermissionChat(sessionId))
     if (!expectedVariables || typeof expectedVariables !== 'object' || Array.isArray(expectedVariables)) throw new Error('缺少全局变量读取版本')
     if (!options.globalVariables) throw new Error('全局变量存储未连接')
     const saved = await options.globalVariables.save(variables, expectedVariables)
@@ -556,7 +564,7 @@ export function createTavernScriptHostAdapter(options = {}) {
   }
 
   async function saveFullPromptTemplateSettings(sessionId, settings, expectedSettings) {
-    assertTemplateChat(await resolveChat(sessionId))
+    assertTemplateChat(await resourcePermissionChat(sessionId))
     return saveGlobalPromptTemplateSettings(settings, expectedSettings)
   }
 
@@ -625,8 +633,12 @@ export function createTavernScriptHostAdapter(options = {}) {
     return patch ? {updated:true,statePatch:diffJson(request,state)} : {updated:true,state}
   }
 
+  async function resourcePermissionChat(sessionId) {
+    return (await options.resolveChatSlice?.(str(sessionId), [], 'settlement'))?.chat || await resolveChat(sessionId)
+  }
+
   async function saveExtensionSettings(sessionId, settings, expectedSettings) {
-    await assertScriptEnabled(await resolveChat(sessionId))
+    await assertScriptEnabled(await resourcePermissionChat(sessionId))
     if (!options.extensionSettings) throw new Error('插件设置存储未连接')
     const extensionSettings = await observeResourceSave(resourceSaveSummary('regex', 'global', expectedSettings?.regex, settings?.regex, true), () => options.extensionSettings.save(settings, expectedSettings), summary => options.recordResourceSave?.(sessionId, summary))
     if (typeof options.extensionSettingsChanged === 'function') await options.extensionSettingsChanged(str(sessionId))

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createSessionViewReader } from '../tavern-plugin/lib/domain/session-view-reader.js'
+import { createSessionViewReader, createSessionSliceReader } from '../tavern-plugin/lib/domain/session-view-reader.js'
 const gate=()=>{let resolve;const promise=new Promise(done=>{resolve=done});return {promise,resolve}}
 function fixture() {
   let chat={id:'c',sessionId:'s',mode:'story',cardPath:'card',_storageRevision:1,messages:[{role:'assistant',text:'one'}]}
@@ -122,6 +122,8 @@ test('cold native opening uses a bounded window before any full state or history
  assert.equal(result.revision,9)
  assert.equal(result.view.historyWindow.from,19951)
  assert.equal(windowReads,1)
+ await reader.response({sessionId:'s',viewSync:1,openingWindow:1,viewCursor:'previous-window'})
+ assert.equal(windowReads,2,'refresh must not fall back to the complete view')
  assert.equal(fullReads,0)
 })
 
@@ -129,4 +131,21 @@ for(const request of [{viewSync:1},{viewSync:1,openingWindow:1,fullView:true}])t
  const reader=createSessionViewReader({readOpeningWindow:()=>{throw Error('must keep complete contract')},readState:async()=>undefined,
   project:{opening:()=>{throw Error('unexpected')}},trace:{stage:(_name,fn)=>fn()},synchronize:(_id,view)=>({view})})
  assert.equal((await reader.response({sessionId:'s',...request})).view,null)
+})
+
+
+test('narrow variable slices retain routing fields and legacy adoption fallback', async()=>{
+ const stored={id:'c',sessionId:'s',backgroundConfigVersion:1,conversationFeaturesVersion:1,mvu:{enabled:true}}
+ let received
+ const read=createSessionSliceReader({links:async()=>({s:'c',alias:'c'}),readSlice:async(id,indices,fields)=>{
+  received={id,indices,fields};return {chat:Object.fromEntries(fields.map(key=>[key,stored[key]])),messageCount:20000,denseMessages:true}
+ }})
+ const selected=await read('s',[19999],['mvu'])
+ assert.equal(selected.chat.backgroundConfigVersion,1)
+ assert.equal(selected.messageCount,20000)
+ assert.deepEqual(received.indices,[19999])
+ assert.ok(!received.fields.includes('messages'))
+ assert.equal(await read('alias',[],['mvu']),undefined)
+ stored.conversationFeaturesVersion=0
+ assert.equal(await read('s',[],['mvu']),undefined)
 })

@@ -29,6 +29,29 @@ test('宿主 MVU 不提示或执行旧变量清理，即使旧设置已开启；
     await vm.runInContext('checkAndCleanupLegacyChat()', context)
     vm.runInContext('cleanupMessageVariables(1, 29, 50)', context)
     assert.equal(JSON.stringify(chat), before)
+    const util = await readFile(join(dir, 'src/util.ts'), 'utf8')
+    const lookup = util.slice(util.indexOf('export function getLastValidMessageId'),util.indexOf('export function getLastValidVariable'))
+    context.isMvuData = value => Boolean(value?.stat_data && value?.schema)
+    vm.runInContext(stripTypeScriptTypes(lookup.replace('export ', '')),context)
+    for(const end of [0,1,39,40,41,-1,-100,NaN,3.8]) {
+      context.end=end
+      assert.equal(vm.runInContext('getLastValidMessageId(end)',context),vm.runInContext('_(SillyTavern.chat).slice(0,end).findLastIndex(row=>isMvuData(row.variables[0]))',context))
+    }
+    let reads=0
+    context.SillyTavern.chat=new Proxy(Array.from({length:20000},()=>chat[0]),{get(target,key,receiver){if(/^\d+$/.test(String(key)))reads++;return Reflect.get(target,key,receiver)}})
+    assert.equal(vm.runInContext('getLastValidMessageId(19999)',context),19998)
+    assert.equal(reads,1,'prior snapshot lookup must not copy the complete prefix')
+    const restore=await readFile(join(dir,'src/function/cleanup/restore_variables.ts'),'utf8')
+    const eligibility=restore.slice(restore.indexOf('    const last_message_id'),restore.indexOf('    if (last_10th_message_id >'))
+    context.useDataStore=()=>({settings:{自动清理变量:{触发恢复变量的最近楼层数:10}}})
+    const probe=stripTypeScriptTypes('(function(){'+eligibility+';return last_not_has_variable_message_id;})()')
+    reads=0
+    assert.equal(vm.runInContext(probe,context),-1)
+    assert.equal(reads,11,'restoration eligibility must stop at the recent threshold')
+    context.SillyTavern.chat[19997]={variables:[{}]}
+    reads=0
+    assert.equal(vm.runInContext(probe,context),19997)
+    assert.equal(reads,3,'recent missing snapshots still trigger restoration')
     const cleanup = await readFile(join(dir, 'src/function/cleanup/index.ts'), 'utf8')
     assert.match(cleanup, /debounce\(restoreVariables, 2000\)/)
     const panel = await readFile(join(dir, 'src/panel/Cleanup.vue'), 'utf8')

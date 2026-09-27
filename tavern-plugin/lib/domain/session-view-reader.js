@@ -108,9 +108,9 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
   async function read(sessionId, options) { return (await load(sessionId, options)).view }
   async function response(args = {}) {
     const sessionId = args.sessionId
-    // An explicit first-paint projection has its own contract and never enters
-    // the complete view cache. Full/script consumers keep the existing path.
-    if (args.openingWindow === 1 && args.viewSync === 1 && !args.viewCursor && args.fullView !== true && readOpeningWindow && project.opening) {
+    // Bounded views have their own contract and never enter the complete view
+    // cache. Explicit full reads retain the existing compatibility path.
+    if (args.openingWindow === 1 && args.viewSync === 1 && args.fullView !== true && readOpeningWindow && project.opening) {
       const window = await trace.stage('readOpeningWindow', () => readOpeningWindow(sessionId))
       if (window) {
         const view = await trace.stage('projectOpeningWindow', () => project.opening(window))
@@ -165,4 +165,20 @@ export function createSessionChatReader({ registry, needsAdoption, adopt }) {
     return adopted ? projectChatBackgroundConfig(adopted) : undefined
   }
   return Object.freeze({ read, readState, readSceneImageState, readBackgroundConfig })
+}
+
+// Narrow caller fields still need the identity/adoption fields used by routing.
+// An ineligible projection returns undefined so the caller can use the complete
+// reader (which owns alias recovery and legacy configuration adoption).
+export function createSessionSliceReader({ links, readSlice }) {
+  return async function (sessionId, indices, fields) {
+    const chatId = (await links())[sessionId]
+    if (!chatId) return undefined
+    const selectedFields = Array.isArray(fields)
+      ? [...new Set([...fields, 'id', 'sessionId', 'backgroundConfigVersion', 'conversationFeaturesVersion'])] : fields
+    const selected = await readSlice(chatId, indices, selectedFields)
+    const chat = selected?.chat
+    if (!chat || chat.sessionId !== sessionId || chat.backgroundConfigVersion !== 1 || chat.conversationFeaturesVersion !== 1) return undefined
+    return selected
+  }
 }
