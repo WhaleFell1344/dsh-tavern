@@ -1,0 +1,1181 @@
+{
+  "note": "Diagnostic CPU sample on isolated ten-thousand-round run; not an unprofiled timing benchmark",
+  "profileMs": 5475.96,
+  "hotspots": [
+    {
+      "selfMs": 726.53,
+      "stack": [
+        {
+          "function": "(garbage collector)",
+          "file": "",
+          "line": 0
+        },
+        {
+          "function": "(root)",
+          "file": "",
+          "line": 0
+        }
+      ]
+    },
+    {
+      "selfMs": 490.04,
+      "stack": [
+        {
+          "function": "jsonClone",
+          "file": "chat-journal-store.js",
+          "line": 33
+        },
+        {
+          "function": "",
+          "file": "chat-journal-store.js",
+          "line": 692
+        },
+        {
+          "function": "(root)",
+          "file": "",
+          "line": 0
+        }
+      ]
+    },
+    {
+      "selfMs": 470.33,
+      "stack": [
+        {
+          "function": "copyJsonTree",
+          "file": "copy-json-tree.js",
+          "line": 5
+        },
+        {
+          "function": "copyJsonTree",
+          "file": "copy-json-tree.js",
+          "line": 5
+        },
+        {
+          "function": "copyJsonTree",
+          "file": "copy-json-tree.js",
+          "line": 5
+        },
+        {
+          "function": "copyJsonTree",
+          "file": "copy-json-tree.js",
+          "line": 5
+        },
+        {
+          "function": "copyJsonTree",
+          "file": "copy-json-tree.js",
+          "line": 5
+        },
+        {
+          "function": "readRevision",
+          "file": "chat-journal-store.js",
+          "line": 683
+        },
+        {
+          "function": "(root)",
+          "file": "",
+          "line": 0
+        }
+      ]
+    },
+    {
+      "selfMs": 354.12,
+      "stack": [
+        {
+          "function": "structuredClone",
+          "file": "js_transferable",
+          "line": 112
+        },
+        {
+          "function": "clone",
+          "file": "chat-persistence.js",
+          "line": 7
+        },
+        {
+          "function": "write",
+          "file": "chat-persistence.js",
+          "line": 182
+        },
+        {
+          "function": "rawWriteChat",
+          "file": "index.js",
+          "line": 735
+        },
+        {
+          "function": "writeChat",
+          "file": "index.js",
+          "line": 750
+        },
+        {
+          "function": "prepare",
+          "file": "turn-orchestration.js",
+          "line": 244
+        },
+        {
+          "function": "(root)",
+          "file": "",
+          "line": 0
+        }
+      ]
+    },
+    {
+      "selfMs": 301.12,
+      "stack": [
+        {
+          "function": "freezeJson",
+          "file": "freeze-json.js",
+          "line": 7
+        },
+        {
+          "function": "freezeJson",
+          "file": "freeze-json.js",
+          "line": 7
+        },
+        {
+          "function": "freezeJson",
+          "file": "freeze-json.js",
+          "line": 7
+        },
+        {
+          "function": "rowOf",
+          "file": "mvu-receipt-index.js",
+          "line": 6
+        },
+        {
+          "function": "project",
+          "file": "mvu-receipt-index.js",
+          "line": 38
+        },
+        {
+          "function": "mvuReceiptsOf",
+          "file": "chat-session-state.js",
+          "line": 101
+        },
+        {
+          "function": "volatileSessionViewFields",
+          "file": "chat-session-state.js",
+          "line": 154
+        },
+        {
+          "function": "volatileSessionViewFields",
+          "file": "index.js",
+          "line": 1654
+        },
+        {
+          "function": "projectDirtySessionView",
+          "file": "index.js",
+          "line": 1669
+        },
+        {
+          "function": "(root)",
+          "file": "",
+          "line": 0
+        }
+      ]
+    },
+    {
+      "selfMs": 277.25,
+      "stack": [
+        {
+          "function": "structuredClone",
+          "file": "js_transferable",
+          "line": 112
+        },
+        {
+          "function": "clone",
+          "file": "chat-persistence.js",
+          "line": 7
+        },
+        {
+          "function": "refreshDraft",
+          "file": "chat-persistence.js",
+          "line": 99
+        },
+        {
+          "function": "write",
+          "file": "chat-persistence.js",
+          "line": 182
+        },
+        {
+          "function": "(root)",
+          "file": "",
+          "line": 0
+        }
+      ]
+    },
+    {
+      "selfMs": 246.5,
+      "stack": [
+        {
+          "function": "structuredClone",
+          "file": "js_transferable",
+          "line": 112
+        },
+        {
+          "function": "clone",
+          "file": "chat-persistence.js",
+          "line": 7
+        },
+        {
+          "function": "mergeValue",
+          "file": "chat-persistence.js",
+          "line": 71
+        },
+        {
+          "function": "mergeValue",
+          "file": "chat-persistence.js",
+          "line": 71
+        },
+        {
+          "function": "",
+          "file": "chat-persistence.js",
+          "line": 189
+        },
+        {
+          "function": "(root)",
+          "file": "",
+          "line": 0
+        }
+      ]
+    },
+    {
+      "selfMs": 180.71,
+      "stack": [
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffJson",
+          "file": "json-mutation.js",
+          "line": 49
+        },
+        {
+          "function": "",
+          "file": "chat-journal-store.js",
+          "line": 692
+        },
+        {
+          "function": "(root)",
+          "file": "",
+          "line": 0
+        }
+      ]
+    },
+    {
+      "selfMs": 153.3,
+      "stack": [
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffJson",
+          "file": "json-mutation.js",
+          "line": 49
+        },
+        {
+          "function": "",
+          "file": "chat-journal-store.js",
+          "line": 692
+        },
+        {
+          "function": "(root)",
+          "file": "",
+          "line": 0
+        }
+      ]
+    },
+    {
+      "selfMs": 134.71,
+      "stack": [
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffJson",
+          "file": "json-mutation.js",
+          "line": 49
+        },
+        {
+          "function": "",
+          "file": "chat-journal-store.js",
+          "line": 692
+        },
+        {
+          "function": "(root)",
+          "file": "",
+          "line": 0
+        }
+      ]
+    },
+    {
+      "selfMs": 130.17,
+      "stack": [
+        {
+          "function": "estimateBytes",
+          "file": "chat-journal-store.js",
+          "line": 173
+        },
+        {
+          "function": "estimateBytes",
+          "file": "chat-journal-store.js",
+          "line": 173
+        },
+        {
+          "function": "estimateBytes",
+          "file": "chat-journal-store.js",
+          "line": 173
+        },
+        {
+          "function": "measure",
+          "file": "chat-journal-store.js",
+          "line": 143
+        },
+        {
+          "function": "leaf",
+          "file": "indexed-array.js",
+          "line": 69
+        },
+        {
+          "function": "from",
+          "file": "indexed-array.js",
+          "line": 70
+        },
+        {
+          "function": "indexChat",
+          "file": "chat-journal-store.js",
+          "line": 152
+        },
+        {
+          "function": "rememberState",
+          "file": "chat-journal-store.js",
+          "line": 189
+        },
+        {
+          "function": "",
+          "file": "chat-journal-store.js",
+          "line": 692
+        },
+        {
+          "function": "(root)",
+          "file": "",
+          "line": 0
+        }
+      ]
+    },
+    {
+      "selfMs": 116.34,
+      "stack": [
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffValue",
+          "file": "json-mutation.js",
+          "line": 22
+        },
+        {
+          "function": "diffJson",
+          "file": "json-mutation.js",
+          "line": 49
+        },
+        {
+          "function": "",
+          "file": "chat-journal-store.js",
+          "line": 692
+        },
+        {
+          "function": "(root)",
+          "file": "",
+          "line": 0
+        }
+      ]
+    }
+  ],
+  "attempts": [
+    {
+      "artifact": "output/e2e-gameplay/run-Bo5EdE",
+      "status": "failed",
+      "size": {
+        "rounds": 10000,
+        "bodyRepeats": 10,
+        "messages": 19999,
+        "variableFields": 3,
+        "bytes": 84711419,
+        "snapshotBytes": 1405
+      },
+      "steps": [
+        {
+          "name": "准备独立运行环境",
+          "ms": 120
+        },
+        {
+          "name": "启动真实 DSH 与酒馆",
+          "ms": 9645
+        },
+        {
+          "name": "通过界面选择角色卡并新开一局",
+          "ms": 1618
+        },
+        {
+          "name": "玩一轮，确认正文、金币与人物姿势",
+          "ms": 3022
+        },
+        {
+          "name": "刷新后确认同一局、正文和状态均保留",
+          "ms": 944
+        },
+        {
+          "name": "构造 10000 轮隔离长档并重新打开",
+          "ms": 55898
+        }
+      ],
+      "error": "locator.waitFor: Timeout 120000ms exceeded.",
+      "lastSettlementEvents": []
+    },
+    {
+      "artifact": "output/e2e-gameplay/run-EYxsgI",
+      "status": "failed",
+      "size": {
+        "rounds": 10000,
+        "bodyRepeats": 10,
+        "messages": 19999,
+        "variableFields": 3,
+        "bytes": 84712180,
+        "snapshotBytes": 1405
+      },
+      "steps": [
+        {
+          "name": "准备独立运行环境",
+          "ms": 464
+        },
+        {
+          "name": "启动真实 DSH 与酒馆",
+          "ms": 13541
+        },
+        {
+          "name": "通过界面选择角色卡并新开一局",
+          "ms": 2454
+        },
+        {
+          "name": "玩一轮，确认正文、金币与人物姿势",
+          "ms": 2846
+        },
+        {
+          "name": "刷新后确认同一局、正文和状态均保留",
+          "ms": 1059
+        },
+        {
+          "name": "构造 10000 轮隔离长档并重新打开",
+          "ms": 53765
+        }
+      ],
+      "error": "locator.waitFor: Timeout 120000ms exceeded.",
+      "lastSettlementEvents": []
+    },
+    {
+      "artifact": "output/e2e-gameplay/run-b34Pui",
+      "status": "failed",
+      "size": {
+        "rounds": 10000,
+        "bodyRepeats": 10,
+        "messages": 19999,
+        "variableFields": 3,
+        "bytes": 84711419,
+        "snapshotBytes": 1405
+      },
+      "steps": [
+        {
+          "name": "准备独立运行环境",
+          "ms": 186
+        },
+        {
+          "name": "启动真实 DSH 与酒馆",
+          "ms": 8851
+        },
+        {
+          "name": "通过界面选择角色卡并新开一局",
+          "ms": 1824
+        },
+        {
+          "name": "玩一轮，确认正文、金币与人物姿势",
+          "ms": 2916
+        },
+        {
+          "name": "刷新后确认同一局、正文和状态均保留",
+          "ms": 980
+        },
+        {
+          "name": "构造 10000 轮隔离长档并重新打开",
+          "ms": 60546
+        }
+      ],
+      "error": "locator.waitFor: Timeout 120000ms exceeded.",
+      "lastSettlementEvents": []
+    },
+    {
+      "artifact": "output/e2e-gameplay/run-HWwtaZ",
+      "status": "failed",
+      "size": {
+        "rounds": 10000,
+        "bodyRepeats": 10,
+        "messages": 19999,
+        "variableFields": 1,
+        "bytes": 51352629,
+        "snapshotBytes": 293,
+        "approximateChatBytes": 141294986
+      },
+      "steps": [
+        {
+          "name": "准备独立运行环境",
+          "ms": 184
+        },
+        {
+          "name": "启动真实 DSH 与酒馆",
+          "ms": 8876
+        },
+        {
+          "name": "通过界面选择角色卡并新开一局",
+          "ms": 1749
+        },
+        {
+          "name": "玩一轮，确认正文、金币与人物姿势",
+          "ms": 2770
+        },
+        {
+          "name": "刷新后确认同一局、正文和状态均保留",
+          "ms": 1002
+        },
+        {
+          "name": "构造 10000 轮隔离长档并重新打开",
+          "ms": 43494
+        }
+      ],
+      "error": "AssertionError [ERR_ASSERTION]: warm append settlement must keep a bounded context without full recovery",
+      "lastSettlementEvents": [
+        {
+          "stage": "submitted",
+          "at": 1790491976067.7632
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790491976415.2195,
+          "source": "background.settlement.checkpoint",
+          "revision": 34
+        },
+        {
+          "stage": "runtime-start",
+          "at": 1790491976432.1235
+        },
+        {
+          "stage": "dispatch-start",
+          "at": 1790491976525.1804,
+          "eventId": "mvu-work:bf752d1f-bcd1-4d32-adc5-2eea69081f0a"
+        },
+        {
+          "stage": "context-baseline",
+          "at": 1790491979054.5125,
+          "baseline": {
+            "workContextVersion": 1,
+            "appendContextVersion": 1,
+            "chatId": "chat-mujgmucz-eq19le",
+            "stateRevision": 33,
+            "lifecycleRevision": 0,
+            "messageCount": 20001,
+            "complete": true
+          },
+          "currentRevision": 34,
+          "currentMessages": 20001
+        },
+        {
+          "stage": "context-changes",
+          "at": 1790491979055.5745,
+          "available": false
+        },
+        {
+          "stage": "execution-context",
+          "at": 1790491979420.387,
+          "compact": false,
+          "messages": 20001,
+          "total": 20001
+        },
+        {
+          "stage": "runtime-return",
+          "at": 1790491989226.2234
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790491989231.851,
+          "source": "background.settlement.checkpoint",
+          "revision": 35
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790491989593.1753,
+          "source": "background.settlement.checkpoint",
+          "revision": 36
+        },
+        {
+          "stage": "settlement-return",
+          "at": 1790491989626.2383
+        },
+        {
+          "stage": "commit-start",
+          "at": 1790491989626.5334
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790491989719.8254,
+          "source": "background.settlement.commit",
+          "revision": 37
+        },
+        {
+          "stage": "commit-return",
+          "at": 1790491989761.0286
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790491996991.6094,
+          "source": "prompt-template.state",
+          "revision": 38
+        }
+      ]
+    }
+  ],
+  "unprofiledRun": {
+    "artifact": "output/e2e-gameplay/run-PeIG1X",
+    "status": "failed",
+    "requireCompact": false,
+    "size": {
+      "rounds": 10000,
+      "bodyRepeats": 10,
+      "messages": 19999,
+      "variableFields": 1,
+      "bytes": 51352629,
+      "snapshotBytes": 293,
+      "approximateChatBytes": 141294986
+    },
+    "samples": [
+      {
+        "run": 0,
+        "append": true,
+        "gold": 100,
+        "clickedAt": 1790492474054,
+        "submittedAt": 1790492523392.8647,
+        "runtimeReturnedAt": 1790492527627.619,
+        "commitStartedAt": 1790492527997.3904,
+        "journalAppendedAt": 1790492528083.532,
+        "commitAt": 1790492528115.1394,
+        "visibleAt": 1790492536866.5,
+        "receiptAt": 1790492535128.0999,
+        "browserCompleteAt": 1790492527265.4,
+        "browserToJournalMs": 818.1,
+        "browserToCommitMs": 849.7,
+        "browserToVisibleMs": 9601.1,
+        "inputToSubmitMs": 49338.9,
+        "inputToVisibleMs": 62812.5,
+        "submitToCommitMs": 4722.3,
+        "submitToVisibleMs": 13473.6,
+        "runtimeToCommitMs": 487.5,
+        "runtimeToVisibleMs": 9238.9,
+        "commitMs": 117.7,
+        "commitToVisibleMs": 8751.4,
+        "diskReadMs": 475.8,
+        "events": [
+          {
+            "stage": "journal-appended",
+            "at": 1790492474263.5999,
+            "source": "prompt-template.state",
+            "revision": 23
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492481666.35,
+            "source": "prompt-template.state",
+            "revision": 24
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492486418.6626,
+            "source": "prompt-template.state",
+            "revision": 25
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492493240.1726,
+            "source": "prompt-template.input",
+            "revision": 26
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492495471.1636,
+            "source": "foreground.prepare-worldbook",
+            "revision": 27
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492497702.4727,
+            "source": "foreground.prepare",
+            "revision": 28
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492509273.4631,
+            "source": "foreground.commit",
+            "revision": 29
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492511901.387,
+            "source": "worldbook.projection",
+            "revision": 30
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492514254.3105,
+            "source": "background.settlement.begin",
+            "revision": 31
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492516919.059,
+            "source": "background.settlement.checkpoint",
+            "revision": 32
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492517608.7446,
+            "source": "background.settlement.bind",
+            "revision": 33
+          },
+          {
+            "stage": "submitted",
+            "at": 1790492523392.8647
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492523394.1936,
+            "source": "background.settlement.checkpoint",
+            "revision": 34
+          },
+          {
+            "stage": "runtime-start",
+            "at": 1790492523412.4053
+          },
+          {
+            "stage": "dispatch-start",
+            "at": 1790492523418.187,
+            "eventId": "mvu-work:3b7483ae-7ff2-4cb5-8a9d-386c021dd4dc"
+          },
+          {
+            "stage": "context-baseline",
+            "at": 1790492524696.2124,
+            "baseline": {
+              "workContextVersion": 1,
+              "appendContextVersion": 1,
+              "chatId": "chat-mujgyjwr-hcd9t3",
+              "stateRevision": 33,
+              "lifecycleRevision": 0,
+              "messageCount": 20001,
+              "complete": true
+            },
+            "currentRevision": 34,
+            "currentMessages": 20001
+          },
+          {
+            "stage": "context-changes",
+            "at": 1790492525359.1548,
+            "available": true,
+            "layoutChanged": false,
+            "layoutFrom": null,
+            "count": 1,
+            "baseRevision": 33,
+            "revision": 34
+          },
+          {
+            "stage": "execution-context",
+            "at": 1790492525360.0803,
+            "compact": true,
+            "messages": 2,
+            "total": 20001
+          },
+          {
+            "stage": "runtime-return",
+            "at": 1790492527627.619
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492527631.1436,
+            "source": "background.settlement.checkpoint",
+            "revision": 35
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492527964.6997,
+            "source": "background.settlement.checkpoint",
+            "revision": 36
+          },
+          {
+            "stage": "settlement-return",
+            "at": 1790492527997.0994
+          },
+          {
+            "stage": "commit-start",
+            "at": 1790492527997.3904
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492528083.532,
+            "source": "background.settlement.commit",
+            "revision": 37
+          },
+          {
+            "stage": "commit-return",
+            "at": 1790492528115.1394
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492534913.2185,
+            "source": "prompt-template.state",
+            "revision": 38
+          },
+          {
+            "stage": "journal-appended",
+            "at": 1790492539095.3743,
+            "source": "prompt-template.state",
+            "revision": 39
+          }
+        ],
+        "browserEvents": [
+          {
+            "stage": "browser-event-complete",
+            "eventId": "mvu-work:3b7483ae-7ff2-4cb5-8a9d-386c021dd4dc",
+            "at": 1790492527265.4
+          }
+        ]
+      }
+    ],
+    "failedSample": {
+      "run": 1,
+      "clickedAt": 1790492539899,
+      "inputToSubmitMs": 109850.9,
+      "submitToCommitMs": 6485.4,
+      "inputToCommitMs": 116336.3,
+      "events": [
+        {
+          "stage": "journal-appended",
+          "at": 1790492543976.6182,
+          "source": "prompt-template.state",
+          "revision": 40
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492548793.3008,
+          "source": "prompt-template.state",
+          "revision": 41
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492555533.609,
+          "source": "prompt-template.state",
+          "revision": 42
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492561739.8481,
+          "source": "prompt-template.state",
+          "revision": 43
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492566723.855,
+          "source": "prompt-template.state",
+          "revision": 44
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492573133.7122,
+          "source": "prompt-template.state",
+          "revision": 45
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492577868.3984,
+          "source": "prompt-template.state",
+          "revision": 46
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492581885.7437,
+          "source": "prompt-template.state",
+          "revision": 47
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492586196.6736,
+          "source": "prompt-template.state",
+          "revision": 48
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492591523.625,
+          "source": "compaction.server",
+          "revision": 49
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492592897.0608,
+          "source": "compaction.server",
+          "revision": 50
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492601815.5957,
+          "source": "prompt-template.state",
+          "revision": 51
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492611768.6926,
+          "source": "prompt-template.input",
+          "revision": 52
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492614791.1365,
+          "source": "foreground.prepare-worldbook",
+          "revision": 53
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492617413.7166,
+          "source": "foreground.prepare",
+          "revision": 54
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492631760.934,
+          "source": "foreground.commit",
+          "revision": 55
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492635117.567,
+          "source": "worldbook.projection",
+          "revision": 56
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492637967.8525,
+          "source": "background.settlement.begin",
+          "revision": 57
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492638933.0122,
+          "source": "background.settlement.checkpoint",
+          "revision": 58
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492639377.9602,
+          "source": "background.settlement.bind",
+          "revision": 59
+        },
+        {
+          "stage": "submitted",
+          "at": 1790492649749.8574
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492649751.23,
+          "source": "background.settlement.checkpoint",
+          "revision": 60
+        },
+        {
+          "stage": "runtime-start",
+          "at": 1790492649771.9807
+        },
+        {
+          "stage": "dispatch-start",
+          "at": 1790492649774.1023,
+          "eventId": "mvu-work:64f29249-1c66-4fb3-bf00-04696637bd1d"
+        },
+        {
+          "stage": "context-baseline",
+          "at": 1790492649971.685,
+          "baseline": {
+            "workContextVersion": 1,
+            "appendContextVersion": 1,
+            "chatId": "chat-mujgyjwr-hcd9t3",
+            "stateRevision": 59,
+            "lifecycleRevision": 0,
+            "messageCount": 20003,
+            "complete": true
+          },
+          "currentRevision": 60,
+          "currentMessages": 20003
+        },
+        {
+          "stage": "context-changes",
+          "at": 1790492650189.9797,
+          "available": true,
+          "layoutChanged": false,
+          "layoutFrom": null,
+          "count": 1,
+          "baseRevision": 59,
+          "revision": 60
+        },
+        {
+          "stage": "execution-context",
+          "at": 1790492650191.4165,
+          "compact": true,
+          "messages": 2,
+          "total": 20003
+        },
+        {
+          "stage": "runtime-return",
+          "at": 1790492655779.1116
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492655780.6987,
+          "source": "background.settlement.checkpoint",
+          "revision": 61
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492656064.9172,
+          "source": "background.settlement.checkpoint",
+          "revision": 62
+        },
+        {
+          "stage": "settlement-return",
+          "at": 1790492656095.464
+        },
+        {
+          "stage": "commit-start",
+          "at": 1790492656096.0066
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492656200.516,
+          "source": "background.settlement.commit",
+          "revision": 63
+        },
+        {
+          "stage": "commit-return",
+          "at": 1790492656235.305
+        },
+        {
+          "stage": "journal-appended",
+          "at": 1790492664333.8162,
+          "source": "prompt-template.state",
+          "revision": 64
+        }
+      ],
+      "error": "locator.waitFor: Timeout 120000ms exceeded."
+    },
+    "steps": [
+      {
+        "name": "准备独立运行环境",
+        "ms": 178
+      },
+      {
+        "name": "启动真实 DSH 与酒馆",
+        "ms": 9597
+      },
+      {
+        "name": "通过界面选择角色卡并新开一局",
+        "ms": 1852
+      },
+      {
+        "name": "玩一轮，确认正文、金币与人物姿势",
+        "ms": 2392
+      },
+      {
+        "name": "刷新后确认同一局、正文和状态均保留",
+        "ms": 945
+      },
+      {
+        "name": "构造 10000 轮隔离长档并重新打开",
+        "ms": 46525
+      },
+      {
+        "name": "长档结算采样 1/2",
+        "ms": 65845
+      }
+    ]
+  }
+}

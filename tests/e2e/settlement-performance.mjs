@@ -16,19 +16,22 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
   const fields = Number(process.env.TAVERN_PERF_FIELDS || 20)
   const runs = Number(process.env.TAVERN_PERF_RUNS || 5)
   const append = process.env.TAVERN_PERF_APPEND === '1'
-  assert.ok(Number.isInteger(rounds) && rounds >= 2 && rounds <= 5000)
+  const requireCompact = process.env.TAVERN_PERF_REQUIRE_COMPACT !== '0'
+  const bodyRepeats = Number(process.env.TAVERN_PERF_BODY_REPEATS || 60)
+  assert.ok(Number.isInteger(bodyRepeats) && bodyRepeats >= 1 && bodyRepeats <= 1000)
+  assert.ok(Number.isInteger(rounds) && rounds >= 2 && rounds <= 10000)
   assert.ok(Number.isInteger(fields) && fields >= 0 && fields <= 2000)
   assert.ok(Number.isInteger(runs) && runs >= 1 && runs <= 100)
   const fixture = await savedChat()
   const chatId = fixture.id
   let size
-  report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + journal + React; synthetic history, fixed model; tracing disabled', size: { rounds, fields }, samples: [] }
+  report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + journal + React; synthetic history, fixed model; tracing disabled', requireCompact, size: { rounds, fields }, samples: [] }
   await step(`构造 ${rounds} 轮隔离长档并重新打开`, async () => {
     await restartServer(async () => {
       const next = structuredClone(fixture), greeting = next.messages[0], user = next.messages.find(m => m.role === 'user'), assistant = next.messages.at(-1)
       const state = structuredClone(assistant.variables[0])
       assert.equal(Object.keys(state.stat_data).length, fields + 1, 'large variable schema must come from real card initialization')
-      const body = '这是性能测试的合成剧情，不对应真实存档。'.repeat(60) + '\n\n<StatusPlaceHolderImpl/>'
+      const body = '这是性能测试的合成剧情，不对应真实存档。'.repeat(bodyRepeats) + '\n\n<StatusPlaceHolderImpl/>'
       next.messages = [{ ...greeting, variables: [structuredClone(state)] }]
       const rows = []
       const event = (type, d, surfaceOp) => rows.push({ seq: rows.length, time: 1, type, data: d, ...(surfaceOp ? { surfaceOp } : {}) })
@@ -44,8 +47,15 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
         event('assistant/message', { turn, step: 1, message: { id: 'perf-a-' + turn, role: 'assistant', content: [{ type: 'text', text: turn === 1 ? greeting.text : body }], source: { kind: 'model', provider: 'tavern-e2e', model: 'fixed' } } }, 'append')
         event('step/end', { turn, step: 1 }); event('turn/end', { turn, reason: { kind: 'completed' } })
       }
-      size = { rounds, messages: next.messages.length, variableFields: fields + 1, bytes: Buffer.byteLength(JSON.stringify(next)), snapshotBytes: Buffer.byteLength(JSON.stringify(state)) }
+      size = { rounds, bodyRepeats, messages: next.messages.length, variableFields: fields + 1, bytes: Buffer.byteLength(JSON.stringify(next)), snapshotBytes: Buffer.byteLength(JSON.stringify(state)) }
       report.settlementPerformance.size = size
+      const estimate = value => {
+        if (typeof value === 'string') return 24 + value.length * 2
+        if (!value || typeof value !== 'object') return 8
+        return 64 + Object.keys(value).reduce((sum, key) => sum + 24 + key.length * 2 + estimate(value[key]), 0)
+      }
+      size.approximateChatBytes = estimate(next)
+      console.log('Long archive fixture: ' + JSON.stringify(size))
       const persistence = createChatPersistence({ store: createChatJournalStore({ dataRoot: data }) })
       await persistence.write(next)
       const sessions = join(root, 'profile-data/tavern/sessions')
@@ -65,12 +75,13 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     await page.waitForTimeout(3000)
   })
   const samples = []
-  report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + journal + React; synthetic history, fixed model; tracing disabled', size, samples }
+  report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + journal + React; synthetic history, fixed model; tracing disabled', requireCompact, size, samples }
   for (let run = 0; run < runs; run++) await step(`长档结算采样 ${run + 1}/${runs}`, async () => {
     const gold = 100 + run
     await writeFile(join(output, 'performance-control.json'), JSON.stringify({ id: run, gold }))
     const offset = readLog().length
     const clickedAt = Date.now()
+    report.settlementPerformance.activeSample = {run, clickedAt, requireCompact}
     await page.evaluate(() => {
       window.__perfSettlementObserver?.disconnect()
       window.__perfSettlement = { events: [] }
@@ -121,11 +132,6 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     assert.equal(saved.mvu.pending, false)
     const diskReadMs = performance.now() - readStart
     const events = [...readLog().slice(offset).matchAll(/\[settlement-perf\](\{[^\n]+\})/g)].map(match => JSON.parse(match[1]))
-    if (append) {
-      const contexts = events.filter(event => event.stage === 'execution-context')
-      assert.ok(contexts.length > 0 && contexts.every(event => event.compact && event.messages <= 5),
-        'warm append settlement must keep a bounded context without full recovery')
-    }
     const at = stage => events.find(x => x.stage === stage)?.at
     const submitted = at('submitted'), runtime = at('runtime-return')
     const commitStart = events.find(x=>x.stage==='commit-start' && x.at>=runtime)?.at
@@ -140,12 +146,19 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     const round = n => Math.round(n * 10) / 10
     const sample = { run, append, gold, clickedAt, submittedAt: submitted, runtimeReturnedAt: runtime, commitStartedAt: commitStart, journalAppendedAt: journal, commitAt, visibleAt, receiptAt, browserCompleteAt,
       browserToJournalMs: round(journal - browserCompleteAt), browserToCommitMs: round(commitAt - browserCompleteAt), browserToVisibleMs: round(visibleAt - browserCompleteAt),
+      inputToSubmitMs: round(submitted - clickedAt), inputToVisibleMs: round(visibleAt - clickedAt),
       submitToCommitMs: round(commitAt - submitted), submitToVisibleMs: round(visibleAt - submitted), runtimeToCommitMs: round(commitAt - runtime),
       runtimeToVisibleMs: round(visibleAt - runtime), commitMs: round(commitAt - commitStart), commitToVisibleMs: round(visibleAt - commitAt),
       diskReadMs: round(diskReadMs), events, browserEvents }
     samples.push(sample)
+    delete report.settlementPerformance.activeSample
     console.log('PERF ' + JSON.stringify({ ...size, ...Object.fromEntries(Object.entries(sample).filter(([key]) => key.endsWith('Ms'))) }))
     await writeFile(join(output, 'settlement-performance.json'), JSON.stringify(report.settlementPerformance, null, 2))
+    if (append && requireCompact) {
+      const contexts = events.filter(event => event.stage === 'execution-context')
+      assert.ok(contexts.length > 0 && contexts.every(event => event.compact && event.messages <= 5),
+        'warm append settlement must keep a bounded context without full recovery')
+    }
     await page.waitForTimeout(500)
   })
   await page.screenshot({ path: join(output, 'long-archive-settled.png') })
