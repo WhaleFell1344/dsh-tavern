@@ -1,3 +1,4 @@
+import { installHostProjectionReplay } from './domain/host-projection-replay.js'
 import { readSettlementInput } from './domain/settlement-input.js'
 import { createHelperHistoryAccess } from './domain/helper-history-access.js'
 import { createInputFieldsProjection } from './domain/input-fields-projection.js'
@@ -213,6 +214,7 @@ export async function apply(ctx) {
   const agentRegistry = ctx.get('agents')
   const sessionStore = ctx.get('sessions')
   ctx.effect(() => installTavernTokenMeter(ctx.get('tokenMeter')))
+  ctx.effect(() => installHostProjectionReplay(ctx.get('sessionProjections')))
   if (llm === undefined || agentRegistry === undefined || sessionStore === undefined) {
     console.error('dsh-tavern: 缺少 llm、agents 或 sessions 服务')
     return

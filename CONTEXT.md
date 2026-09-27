@@ -207,3 +207,9 @@ _Avoid_: 人物方案、一次性完整提示词
 ## Scene Status Index
 
 原生存档的图片状态读取以 sceneIndexRef 定位指定轮次，索引与消息通过同一 head CAS 发布，sceneIndexRevision 必须与 Chat 版本一致。消息页持久化既有图片 key 的 SHA-256 前缀续算状态，因此普通追加无需重读前文，变量更新复用索引，改写早期正文重建受影响后缀。旧图片 key 算法保持不变。缺失或失效索引保留完整兼容读取，后续写入补建；此首次补建成本不属于常规点查询。状态查询的参考图端点读取也固定同一存档版本，不能借用其他分支的图片。
+
+## Host Projection Replay
+
+Tavern 启动时通过 `host-projection-replay.js` 适配宿主未发布的批量历史重放：contextBreakdown v4 / turnOutline v2 保留原生计算，仅对批次私有累计数组原位追加，消除 O(N²) 复制。buildCell / restore 每批独立，首次修改复制输入，原生 schema / 序列校验 / 检查点格式 / 实时 apply 与通知保持原样；未知版本回退。该层依赖宿主私有接口，升级需跑原生差分测试，不直接修改已安装 DSH。
+
+万轮严格 E2E run-mQUIoR 状态栏就绪 4.960 秒（上轮 13.734 秒），正文 1.965 秒；重新结算 5.042 秒、MVU 完成到落盘 1.085 秒。仍有 O(N) 宿主事件重放，整体打开尚未达到轮数无关。测试与兼容基线见 `docs/verification/host-projection-replay-20260928.md`。
