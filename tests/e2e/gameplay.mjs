@@ -413,7 +413,18 @@ try {
     await restartServer()
     const expected=[...before.messages].reverse().find(row=>row.variables?.[row.swipeId||0]).variables[0].stat_data.gold
     await page.frameLocator('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame').locator('#e2e-gold').filter({hasText:new RegExp('^金币：'+expected+'$')}).waitFor()
-    assert.deepEqual((await savedChat()).messages,before.messages)
+    // The long-archive fixture deliberately starts with unfinished historical
+    // display derivation. Restart may finish those four derived fields; story,
+    // variables, receipts and every other extension field must remain identical.
+    const persistentMessages=messages=>messages.map(message=>{
+      const copy=structuredClone(message)
+      if(process.argv.includes('--settlement-performance')&&copy.tavernPluginData){
+        for(const field of ['variables_initialized','is_ejs_processed','template_display','template_rendered'])delete copy.tavernPluginData[field]
+        if(!Object.keys(copy.tavernPluginData).length)delete copy.tavernPluginData
+      }
+      return copy
+    })
+    assert.deepEqual(persistentMessages((await savedChat()).messages),persistentMessages(before.messages))
     await assertNativeStorage()
     report.nativeFormat.restart=true
   })

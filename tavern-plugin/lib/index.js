@@ -2717,54 +2717,66 @@ export async function apply(ctx) {
   }
 
   async function retrySettlement(sessionId, turn, guidance) {
-    const chat = await chatForSession(sessionId)
-    if (chat === undefined) throw new Error('当前会话没有绑定人物卡')
-    const activity = backgroundTasks.activity(chat)
-    if (activity.busy) throw new Error('后台 Agent 正在运行，请稍候')
-    if (Object.values(storyTimeline.inspect({ chat }).operations || {}).some(operation => operation.kind === 'body' && operation.status === 'running')) {
-      throw new Error('正文正在生成，请等待完成后再重新结算')
-    }
-    const messages = Array.isArray(chat.messages) ? chat.messages : []
-    let target = null
-    for (let messageId = messages.length - 1; messageId >= 0; messageId--) {
-      const message = messages[messageId]
-      if (!message || message.role !== 'assistant' || message.greeting === true) continue
-      target = { messageId, message }
-      break
-    }
-    if (target === null || Math.max(0, Number(target.message.turn) || 0) !== Math.max(0, Number(turn) || 0)) {
-      throw new Error('只能重试当前最新正文的后台结算')
-    }
-    const officialMvu = chat.mvu && chat.mvu.enabled === true && chat.mvu.owner === 'official'
-    if (officialMvu) {
-      if (!target.message.mvu) throw new Error('当前最新正文没有可重试的变量结算')
-      if (target.message.mvu.receipt?.status === 'pending') {
-        if (str(guidance).trim()) throw new Error('等待中的任务只能重新投递，不能追加指导意见重新生成变量计划')
-        if (!target.message.mvu.pendingSubmission && !target.message.mvu.delivery?.prepared) throw new Error('当前任务尚未保存可重新投递的变量操作，请等待或停止后台任务')
-        if (activity.phase !== 'pending') throw new Error('等待中的结算状态已经变化，请刷新后重试')
-        // Reuse the durable submission/effect and the existing per-chat job.
-        // Never reset MVU state or request another model plan on redelivery.
-        void queueSettlement(chat.id).catch(error => console.error('dsh-tavern: 重新投递变量结算失败', str(error?.message || error)))
-        return await view(chat, await readChatCard(chat))
+    for (let attempt=0;attempt<5;attempt++) {
+      const chat = await chatForSession(sessionId)
+      if (chat === undefined) throw new Error('当前会话没有绑定人物卡')
+      const activity = backgroundTasks.activity(chat)
+      if (activity.busy) throw new Error('后台 Agent 正在运行，请稍候')
+      if (Object.values(storyTimeline.inspect({ chat }).operations || {}).some(operation => operation.kind === 'body' && operation.status === 'running')) {
+        throw new Error('正文正在生成，请等待完成后再重新结算')
       }
-      const swipeId = Math.max(0, Number(target.message.swipeId) || 0)
-      if (!target.message.mvuBaseline || target.message.mvuBaseline.swipeId !== swipeId) {
-        if (['updated', 'unchanged', 'partial'].includes(target.message.mvu.receipt?.status)) {
-          throw new Error('这轮旧记录没有结算前快照，无法安全重新结算变量')
+      const messages = Array.isArray(chat.messages) ? chat.messages : []
+      let target = null
+      for (let messageId = messages.length - 1; messageId >= 0; messageId--) {
+        const message = messages[messageId]
+        if (!message || message.role !== 'assistant' || message.greeting === true) continue
+        target = { messageId, message }
+        break
+      }
+      if (target === null || Math.max(0, Number(target.message.turn) || 0) !== Math.max(0, Number(turn) || 0)) {
+        throw new Error('只能重试当前最新正文的后台结算')
+      }
+      const officialMvu = chat.mvu && chat.mvu.enabled === true && chat.mvu.owner === 'official'
+      if (officialMvu) {
+        if (!target.message.mvu) throw new Error('当前最新正文没有可重试的变量结算')
+        if (target.message.mvu.receipt?.status === 'pending') {
+          if (str(guidance).trim()) throw new Error('等待中的任务只能重新投递，不能追加指导意见重新生成变量计划')
+          if (!target.message.mvu.pendingSubmission && !target.message.mvu.delivery?.prepared) throw new Error('当前任务尚未保存可重新投递的变量操作，请等待或停止后台任务')
+          if (activity.phase !== 'pending') throw new Error('等待中的结算状态已经变化，请刷新后重试')
+          // Reuse the durable submission/effect and the existing per-chat job.
+          // Never reset MVU state or request another model plan on redelivery.
+          void queueSettlement(chat.id).catch(error => console.error('dsh-tavern: 重新投递变量结算失败', str(error?.message || error)))
+          return await view(chat, await readChatCard(chat))
         }
+        const swipeId = Math.max(0, Number(target.message.swipeId) || 0)
+        if (!target.message.mvuBaseline || target.message.mvuBaseline.swipeId !== swipeId) {
+          if (['updated', 'unchanged', 'partial'].includes(target.message.mvu.receipt?.status)) {
+            throw new Error('这轮旧记录没有结算前快照，无法安全重新结算变量')
+          }
+        }
+        target.message.mvu = { pending: true, variableRetry: true, guidance: guidance === undefined ? str(target.message.mvu?.guidance).trim() : str(guidance).trim(), modified: false, diagnostics: [], events: [] }
+      } else if (activity.phase !== 'failed' || activity.role !== 'settlement') {
+        throw new Error('当前最新正文没有失败的后台结算')
       }
-      target.message.mvu = { pending: true, variableRetry: true, guidance: guidance === undefined ? str(target.message.mvu?.guidance).trim() : str(guidance).trim(), modified: false, diagnostics: [], events: [] }
-    } else if (activity.phase !== 'failed' || activity.role !== 'settlement') {
-      throw new Error('当前最新正文没有失败的后台结算')
+      chat.settleStatus = 'pending'
+      chat.settleError = null
+      chat.updatedAt = Date.now()
+      // Historical display backfill must not turn a retry into a full-history
+      // merge. CAS the requested fields; on conflict re-read and revalidate the
+      // latest body, activity and MVU baseline before trying again.
+      const saved = await patchChat(chat.id, chat._storageRevision, [
+        ...(officialMvu ? [{op:'set',path:['messages',target.messageId,'mvu'],value:target.message.mvu}] : []),
+        {op:'set',path:['settleStatus'],value:'pending'}, {op:'set',path:['settleError'],value:null}
+      ], { source: 'settlement.retry' })
+      if (!saved) continue
+      chat._storageRevision = saved._storageRevision
+      chat.updatedAt = saved.updatedAt
+      void queueSettlement(chat.id).catch(function (error) {
+        console.error('dsh-tavern: 重试后台结算失败', str(error && error.message || error))
+      })
+      return await view(chat, await readChatCard(chat))
     }
-    chat.settleStatus = 'pending'
-    chat.settleError = null
-    chat.updatedAt = Date.now()
-    await writeChat(chat, { source: 'settlement.retry' })
-    void queueSettlement(chat.id).catch(function (error) {
-      console.error('dsh-tavern: 重试后台结算失败', str(error && error.message || error))
-    })
-    return await view(chat, await readChatCard(chat))
+    throw new Error('对话正在被其他操作更新，请稍后重新结算')
   }
   async function pullBackgroundCycle(sessionId) {
     let chat = await chatForSession(sessionId)

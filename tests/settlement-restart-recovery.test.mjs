@@ -1,3 +1,4 @@
+import {applyJsonChanges} from '../tavern-plugin/lib/domain/json-mutation.js'
 import { createSettlementJobs } from '../tavern-plugin/lib/domain/settlement-jobs.js'
 import { createSessionStateView, projectChatSessionState, pendingMvuSettlementState } from '../tavern-plugin/lib/domain/chat-session-state.js'
 import { collectMvuHelperContext, createMvuSettlementModule } from '../tavern-plugin/lib/domain/mvu-background-settlement.js'
@@ -48,6 +49,13 @@ async function harness({ beginRunning = true, mvu = true } = {}) {
     str: value => value == null ? '' : String(value),
     backgroundTasks: tasks, storyTimeline: timeline,
     readChat: store.readChat, chatForSession: store.readChat, writeChat: store.writeChat,
+    patchChat: async (_id,revision,changes)=>{
+      if(current._storageRevision!==revision)return undefined
+      current=applyJsonChanges(current,changes)
+      current._storageRevision=(current._storageRevision||0)+1
+      current.updatedAt=Date.now()
+      return {...structuredClone(current),messages:[]}
+    },
     sessionStateForSession: async () => projectChatSessionState(await store.readChat()),
     prepareNextWorldBookContext: async chat => chat, readChatCard: async () => ({}),
     view: async chat => chat, settlementTurn: () => 2,
@@ -624,4 +632,34 @@ for (const stage of ['read', 'prepare']) test(`销毁期间结束的 ${stage} �
   await pending.catch(error => { assert.equal(error.name, 'AbortError') })
   assert.equal(begins, 0)
   run.reconciler.dispose()
+})
+
+for(const storyChanged of [false,true])test(`retry CAS revalidates concurrent ${storyChanged?'body change':'display backfill'}`,async()=>{
+ const run=await harness({beginRunning:false})
+ const chat=run.get()
+ chat._storageRevision=1
+ await run.store.writeChat(chat)
+ let attempts=0,queued=0
+ const patch=run.sandbox.patchChat
+ run.sandbox.patchChat=async(...args)=>{
+  if(++attempts===1){
+   await run.store.updateChat('chat',current=>{
+    current._storageRevision++
+    current.messages[0].tavernPluginData={template_rendered:true}
+    if(storyChanged)current.messages[1].turn=3
+    return current
+   })
+  }
+  return patch(...args)
+ }
+ run.sandbox.queueSettlement=async()=>{queued++}
+ if(storyChanged){
+  await assert.rejects(run.sandbox.retrySettlement('session',2),/只能重试当前最新正文/)
+  assert.equal(queued,0)
+ }else{
+  await run.sandbox.retrySettlement('session',2)
+  assert.equal(attempts,2);assert.equal(queued,1)
+  assert.equal(run.get().messages[0].tavernPluginData.template_rendered,true)
+  assert.equal(run.get().messages[1].mvu.variableRetry,true)
+ }
 })
