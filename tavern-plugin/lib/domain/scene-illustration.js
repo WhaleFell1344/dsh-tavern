@@ -37,6 +37,10 @@ export function sceneTarget(chat, turn) {
   turn = Number(turn)
   if (!Number.isSafeInteger(turn) || turn < 1) throw new Error('正文轮次不合法')
   if (!chat || !['story', 'script'].includes(chat.mode || 'story')) throw new Error('请先打开游玩对话')
+  if(chat.sceneTargets){
+    if(chat.sceneTargets[turn])return {...chat.sceneTargets[turn]}
+    throw Object.assign(new Error('这段正文已不存在'),{code:'SCENE_TARGET_UNAVAILABLE'})
+  }
   const index = (chat.messages || []).findIndex(message => message?.role === 'assistant' && Number(message.turn || (message.greeting ? 1 : 0)) === Number(turn))
   if (index < 0) throw Object.assign(new Error('这段正文已不存在'), { code: 'SCENE_TARGET_UNAVAILABLE' })
   const message = chat.messages[index]
@@ -132,15 +136,20 @@ export function createSceneIllustrations(deps) {
   const pathFor = (chatId, key) => 'scene-images/' + hash(String(chatId)) + '/' + key + '.json'
   // Coalesce simultaneous display reads; never cache across completed reads or mutations.
   const statusReads = new Map()
-  function readStatusChat(sessionId) {
+  async function readStatusChat(sessionId, turn) {
     if (!statusReads.has(sessionId)) {
-      const pending = Promise.resolve().then(() => (deps.sceneStateForSession || deps.chatForSession)(sessionId)).finally(() => statusReads.delete(sessionId))
-      statusReads.set(sessionId, pending)
+      const entry={turn}
+      entry.promise=Promise.resolve().then(() => (deps.sceneStateForSession || deps.chatForSession)(sessionId,{turns:[Number(turn)]})).finally(() => statusReads.delete(sessionId))
+      statusReads.set(sessionId,entry)
     }
-    return statusReads.get(sessionId)
+    const entry=statusReads.get(sessionId),chat=await entry.promise
+    // Full legacy projections can still coalesce across turns. Native point
+    // projections are bounded; request other targets at the same pinned head.
+    return chat?.sceneTargets && Number(entry.turn)!==Number(turn)
+      ? deps.sceneStateForSession(sessionId,{turns:[Number(turn)],revision:chat._storageRevision}) : chat
   }
   async function resolve(sessionId, turn, readChat = id => deps.chatForSession(id)) {
-    const chat = await readChat(sessionId)
+    const chat = await readChat(sessionId, turn)
     const target = sceneTarget(chat, turn)
     return { chat, target, path: pathFor(chat.id, target.key) }
   }
@@ -172,7 +181,11 @@ export function createSceneIllustrations(deps) {
     const { chat, target, path } = resolved
     const current = await config()
     const last = [...chat.messages].reverse().find(item => item.role === 'assistant')
-    const reference = await imageReferences.select({ chatId: chat.id, lineage: turns => sceneLineage(chat, { turn: Number(last.turn || 1) }, turns), config: current })
+    const reference = await imageReferences.select({ chatId: chat.id, lineage: async turns => {
+      if(!chat.sceneTargets)return sceneLineage(chat,{turn:Number(last.turn||1)},turns)
+      const selected=await deps.sceneStateForSession(sessionId,{turns:[...turns].filter(turn=>turn<=chat.sceneLatestTurn),revision:chat._storageRevision})
+      return Object.values(selected.sceneTargets)
+    }, config: current })
     return { ...present(target, await readRecord(path)), enabled: typeof chat.sceneImagesEnabled === 'boolean' ? chat.sceneImagesEnabled : current.enabled, profile: imageExpressionProfile(current),
       reference: { ...reference.capability, warning: reference.warning,
         bindings: reference.active.filter(record => record.source.key === target.key).map(record => ({ versionId: record.source.versionId, personId: record.person.id, name: record.person.name })),

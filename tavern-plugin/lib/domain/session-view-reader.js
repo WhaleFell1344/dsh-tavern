@@ -152,8 +152,8 @@ export function createSessionChatReader({ registry, needsAdoption, adopt }) {
     const state = await registry.resolveState(sessionId)
     return state && needsAdoption(state) ? read(sessionId) : state
   }
-  async function readSceneImageState(sessionId) {
-    const state = await registry.resolveSceneImageState(sessionId)
+  async function readSceneImageState(sessionId, options) {
+    const state = await registry.resolveSceneImageState(sessionId, options)
     if (!state || !needsAdoption(state)) return state
     const adopted = await read(sessionId)
     return adopted ? projectSceneImageState(adopted) : undefined

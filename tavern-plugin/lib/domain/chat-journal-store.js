@@ -525,10 +525,14 @@ export function createChatJournalStore(options = {}) {
     const state = await cachedState(chatId)
     return state ? projectSettlementCheckpoint(state.chat, messageId, operationId) : undefined
   }
-  async function readSceneImageState(chatId) {
+  async function readSceneImageState(chatId, options) {
+    if(Array.isArray(options?.turns)){
+      const selected=await native.readSceneImageState(chatId,options)
+      if(selected!==null)return selected
+    }
     const cached=readCache.get(chatId)
     if(!cached||cached.stamp!==await version(chatId)){
-      const selected=await native.readSceneImageState(chatId)
+      const selected=await native.readSceneImageState(chatId, options)
       if(selected!==null)return selected
     }
     const state = await cachedState(chatId)

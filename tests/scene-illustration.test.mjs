@@ -1431,3 +1431,23 @@ test('关闭本局生图时生成入口在完整读档之前拒绝', async t => 
   await assert.rejects(fx.service.start('parent', 2, 'unused'), /本局设置/)
   assert.equal(fx.imageCalls(), 0)
 })
+
+test('native point status finds existing legacy images, including disabled generation and restored branches',async t=>{
+  const fx=await fixture(t),original=structuredClone(fx.chat()),key=sceneTarget(original,2).key
+  await fx.service.start('parent',2,key)
+  const done=await until(async()=>{const state=await fx.service.status('parent',2);return state.status==='succeeded'&&state})
+  const root=await mkdtemp(join(tmpdir(),'scene-native-images-'));t.after(()=>rm(root,{recursive:true,force:true}))
+  const db=createChatPersistence({store:createChatJournalStore({dataRoot:root,newConversations:true})})
+  await db.write({...original,sceneImagesEnabled:false})
+  fx.deps.sceneStateForSession=(_session,options)=>db.readSceneImageState(original.id,options)
+  fx.deps.chatForSession=()=>assert.fail('image status must use point projection')
+  const status=await fx.service.status('parent',2)
+  assert.equal(status.enabled,false);assert.equal(status.key,key);assert.deepEqual(status.versions,done.versions)
+  await fx.store.writeJson(imagePath+'references.json',{version:1,records:[{id:'existing-reference',source:{key,turn:2,versionId:done.versions[0].id},activation:{key,turn:2},person:{id:'person',name:'人物'},enabled:true}]})
+  assert.equal((await fx.service.status('parent',2)).reference.bindings[0].versionId,done.versions[0].id)
+  await db.update(original.id,chat=>{chat.messages[0].text='另一条分支';return chat})
+  assert.deepEqual((await fx.service.status('parent',2)).versions,[])
+  assert.deepEqual((await fx.service.status('parent',2)).reference.bindings,[])
+  await db.update(original.id,chat=>{chat.messages[0].text=original.messages[0].text;return chat})
+  assert.deepEqual((await fx.service.status('parent',2)).versions,done.versions)
+})

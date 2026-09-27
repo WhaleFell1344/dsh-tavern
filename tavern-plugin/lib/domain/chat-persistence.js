@@ -306,8 +306,8 @@ export function createChatPersistence(options = {}) {
   async function readSettlementCheckpoint(chatId, messageId, operationId) {
     return records.readSettlementCheckpoint?.(chatId, messageId, operationId)
   }
-  async function readSceneImageState(chatId) {
-    if (records.readSceneImageState) return records.readSceneImageState(chatId)
+  async function readSceneImageState(chatId, options) {
+    if (records.readSceneImageState) return records.readSceneImageState(chatId, options)
     const chat = await read(chatId)
     return chat ? projectSceneImageState(chat) : undefined
   }

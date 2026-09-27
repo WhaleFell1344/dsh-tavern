@@ -53,9 +53,9 @@ export function createTavernConversationRegistry(options = {}) {
     return resolveUsing(sessionId, id => typeof store.readChatState === 'function' ? store.readChatState(id) : store.readChat(id))
   }
 
-  async function resolveSceneImageState(sessionId) {
+  async function resolveSceneImageState(sessionId, options) {
     return resolveUsing(sessionId, async id => {
-      if (store.readSceneImageState) return store.readSceneImageState(id)
+      if (store.readSceneImageState) return store.readSceneImageState(id, options)
       const chat = await store.readChat(id)
       return chat ? projectSceneImageState(chat) : undefined
     })

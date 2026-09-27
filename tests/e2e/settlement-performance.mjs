@@ -141,6 +141,16 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
       size.coldOpenToStatusMs = Date.now() - reopening.openStarted
       if(firstWindow){firstWindow.responseMs=firstWindow.responseAt-reopening.openStarted;firstWindow.bodyVisibleMs=firstWindow.bodyVisibleAt-reopening.openStarted}
     }
+    if(reopening){
+      const openingEvents=[...readLog().matchAll(/\[settlement-perf\](\{[^\n]+\})/g)].map(match=>JSON.parse(match[1])).filter(event=>event.at>=reopening.openStarted)
+      const reads=openingEvents.filter(event=>event.stage==='scene-point-read')
+      size.sceneStatusPointReads=reads.length
+      size.sceneStatusFullReads=openingEvents.filter(event=>event.stage==='scene-full-read').length
+      if(process.env.TAVERN_PERF_REQUIRE_SCENE_INDEX==='1'){
+        assert.equal(size.sceneStatusFullReads,0,'opening image status must not scan complete history')
+        assert.ok(reads.length>0&&reads.every(event=>event.count<=2),'exercise bounded image status reads')
+      }
+    }
     if(process.argv.includes('--history-demand')) {
       assert.equal(automaticFullReads,0,'opening must not request complete compatibility history')
       const priorReads=historyReads

@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto'
+import {ScenePrefixHash} from './scene-prefix-hash.js'
 import {projectTavernHelperContext,projectTavernHelperMessage} from './tavern-helper-context.js'
 import {projectSessionMessage,projectChatSessionState,projectSceneImageState,projectDisplayRuntimeState} from './chat-session-state.js'
 import {createScopedMessages} from './scoped-messages.js'
@@ -263,8 +265,86 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   const context={...projectTavernHelperContext({...chat,messages:[]}),messages,turnMessageIds}
   return {chat,context,from,to}
  }
- async function readSceneImageState(id){
-  const view=await head(id)
+ async function selectedSceneSwipe(t,ref,swipe){
+  const type=await t.type(ref,'/swipes')
+  if(type==='array'&&(!Number.isInteger(swipe)||swipe<0||swipe>=await t.size(ref,'/swipes')))return undefined
+  return type==='array'||type==='object'?t.get(ref,'/swipes/'+swipe):undefined
+ }
+ // Persist the exact legacy scene-key prefix and a turn lookup. Only explicit
+ // body/history edits rebuild a suffix; variable-only writes reuse this index.
+ async function updateSceneIndex(id,view,encoded,count,start,t,sources=new Map()){
+  const oldRows=new Map()
+  async function oldRow(index){
+   if(!oldRows.has(index)){
+    const end=Math.min(view.messageCount,Math.floor(index/64)*64+64)
+    const page=await pages.readHistoryPage(id,{cursor:{snapshotId:view.snapshotCursor.snapshotId,before:end},limit:end-Math.floor(index/64)*64})
+    for(const row of page.messages)oldRows.set(row.position,row.message)
+   }
+   return oldRows.get(index)
+  }
+  const valid=view?.state.sceneIndexRef&&view.state.sceneIndexRevision===view.state.chatRevision
+  if(!valid)start=0
+  let root=valid?view.state.sceneIndexRef:undefined,latest=-1
+  let prefix=new ScenePrefixHash().update('['+JSON.stringify(id)+',[')
+  if(start>0){const previous=await oldRow(start-1);prefix=new ScenePrefixHash(previous.scene.hash);latest=previous.scene.latest}
+  const turns={}
+  if(root)for(let index=start;index<view.messageCount;index++){
+   const old=await oldRow(index),turn=old.scene?.target?.turn
+   if(turn!==undefined&&await t.get(root,'/turns/'+turn)===index)root=(await t.apply(root,[{op:'remove',path:'/turns/'+turn}])).nextRoot
+  }
+  for(let index=start;index<count;index++){
+   const reference=encoded.get(index)??await oldRow(index)
+   let row=sources.get(index)
+   if(!row){
+    row={}
+    for(const field of ['role','turn','greeting','text','sourceText','swipeId'])row[field]=await t.get(reference.runtimeRef,'/'+field)
+    const swipe=Math.max(0,Number(row.swipeId)||0)
+    const selected=await selectedSceneSwipe(t,reference.runtimeRef,swipe)
+    if(selected!==undefined)row.swipes={[swipe]:selected}
+   }
+   const turn=Number(row.turn||(row.greeting?1:0)),swipeId=Math.max(0,Number(row.swipeId)||0)
+   let target
+   if(row.role==='assistant'&&Number.isSafeInteger(turn)&&turn>=1){
+    const source=String(row.swipes?.[swipeId]??row.sourceText??row.text??''),sourceDigest=createHash('sha256').update(source).digest('hex')
+    target={turn,swipeId,sourceDigest,key:prefix.digest('],'+JSON.stringify([index,turn,swipeId,sourceDigest]).slice(1))}
+    latest=index
+    if(root){if(await t.get(root,'/turns/'+turn)===undefined)root=(await t.apply(root,[{op:'set',path:'/turns/'+turn,value:index}])).nextRoot}
+    else if(turns[turn]===undefined)turns[turn]=index
+   }
+   if(index)prefix.update(',')
+   prefix.update(JSON.stringify([row.role,row.turn,row.sourceText??row.text]))
+   encoded.set(index,{...reference,scene:{hash:prefix.state(),latest,...(target?{target}:{})}})
+  }
+  if(!root)return t.create({turns,latest})
+  return (await t.apply(root,[{op:'set',path:'/latest',value:latest}])).nextRoot
+ }
+ async function readIndexedSceneState(id,options){
+  const view=await headAtRevision(id,options.revision??Infinity)
+  if(!view)return null
+  if(!view.state.sceneIndexRef||view.state.sceneIndexRevision!==view.state.chatRevision)return undefined
+  const chat=await selectedHeader(id,view,['id','sessionId','_storageRevision','mode','backgroundConfigVersion','conversationFeaturesVersion','sceneImagesEnabled'])
+  const t=tree(id),targets={},root=view.state.sceneIndexRef
+  for(const turn of new Set(options.turns)){
+   if(!Number.isSafeInteger(turn)||turn<1)continue
+   const index=await t.get(root,'/turns/'+turn)
+   if(index===undefined||index>=view.messageCount)continue
+   const page=await pages.readHistoryPage(id,{cursor:{snapshotId:view.snapshotCursor.snapshotId,before:index+1},limit:1})
+   const reference=page.messages[0].message,target=reference.scene?.target
+   if(!target||target.turn!==turn)throw Error('Invalid scene index')
+   const source=await selectedSceneSwipe(t,reference.runtimeRef,target.swipeId)??await t.get(reference.runtimeRef,'/sourceText')??await t.get(reference.runtimeRef,'/text')??''
+   targets[turn]={...target,source:String(source)}
+  }
+  const latest=await t.get(root,'/latest')
+  let latestTurn=0
+  if(latest>=0){const page=await pages.readHistoryPage(id,{cursor:{snapshotId:view.snapshotCursor.snapshotId,before:latest+1},limit:1});latestTurn=page.messages[0].message.scene.target.turn}
+  return {...chat,messages:[],sceneTargets:targets,sceneLatestTurn:latestTurn}
+ }
+ async function readSceneImageState(id,options){
+  if(Array.isArray(options?.turns)){
+   const selected=await readIndexedSceneState(id,options)
+   if(selected!==undefined)return selected
+  }
+  const view=await headAtRevision(id,options?.revision??Infinity)
   if(!view)return null
   const chat=await selectedHeader(id,view,['id','sessionId','mode','backgroundConfigVersion','conversationFeaturesVersion','sceneImagesEnabled'])
   const t=tree(id),messages=new Array(view.messageCount)
@@ -329,7 +409,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   const runtimeRef=previous?await mutate(t,previous.runtimeRef,changes,row):await t.create(row)
   // Pages contain identity + references only; large variables/body/extension
   // payloads live in the incremental tree and share unchanged hashed blocks.
-  return {runtimeRef,session:sessionSummary(row),...(row.id!==undefined?{id:row.id}:{}),...(row.role!==undefined?{role:row.role}:{})}
+  return {runtimeRef,...(previous?.scene?{scene:previous.scene}:{}),session:sessionSummary(row),...(row.id!==undefined?{id:row.id}:{}),...(row.role!==undefined?{role:row.role}:{})}
  }
  async function mutate(t,root,changes,next){
   try{
@@ -411,11 +491,14 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   const batch=createBufferedJsonRecords({read:ref=>pages.readRecord(id,ref),writeMany:values=>pages.writeRecords(id,values)})
   const t=batch.tree,rows=[]
   for(const row of chat.messages??[])rows.push(await encode(id,row,undefined,undefined,t))
+  const encoded=new Map(rows.map((row,i)=>[i,row]))
+  const sceneIndexRef=await updateSceneIndex(id,null,encoded,rows.length,0,t,new Map((chat.messages??[]).map((row,i)=>[i,row])))
+  for(const [index,row] of encoded)rows[index]=row
   const chatHeaderRef=await t.create(header(chat)),selected=currentWorld(chat)
   assertCurrent?.()
-  await batch.flush([chatHeaderRef,...rows.map(row=>row.runtimeRef)])
+  await batch.flush([sceneIndexRef,chatHeaderRef,...rows.map(row=>row.runtimeRef)])
   // The initial head is published atomically, including runtime references.
-  await domain.create(id,{world:selected.world,messages:rows,metadata:{runtimeLayout:1},runtimeState:{chatHeaderRef,chatRevision:chat._storageRevision,worldMessage: selected.position,worldSwipe:selected.swipe}},{assertCurrent})
+  await domain.create(id,{world:selected.world,messages:rows,metadata:{runtimeLayout:1},runtimeState:{sceneIndexRevision:chat._storageRevision,sceneIndexRef,chatHeaderRef,chatRevision:chat._storageRevision,worldMessage: selected.position,worldSwipe:selected.swipe}},{assertCurrent})
   return result(chat,await head(id))
  }
  async function write(id,stored,next,changes,assertCurrent,worldSelection){
@@ -438,6 +521,19 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    edits.push({position,message:await encode(id,next.messages[position],previous,mutations,t)})
   }
   for(let position=retained;position<next.messages.length;position++)append.push(await encode(id,next.messages[position],undefined,undefined,t))
+  const changedMessageIndices=edits.map(edit=>edit.position)
+  let sceneFrom=from
+  for(const [position,mutations] of grouped)if(mutations.some(change=>!change.path.length||['role','turn','greeting','text','sourceText','swipeId','swipes'].includes(change.path[0])))sceneFrom=Math.min(sceneFrom,position)
+  let sceneIndexRef=view.state.sceneIndexRef
+  if(!sceneIndexRef||view.state.sceneIndexRevision!==view.state.chatRevision||Number.isFinite(sceneFrom)){
+   const encoded=new Map([...edits.map(edit=>[edit.position,edit.message]),...append.map((row,i)=>[retained+i,row])])
+   const sources=new Map([...encoded.keys()].map(index=>[index,next.messages[index]]))
+   sceneIndexRef=await updateSceneIndex(id,view,encoded,next.messages.length,Math.min(sceneFrom,next.messages.length),t,sources)
+   edits.length=0;append.length=0
+   for(const [position,message] of [...encoded].sort(([a],[b])=>a-b)){
+    if(position<retained)edits.push({position,message});else append.push(message)
+   }
+  }
   const selected=worldSelection?.selected??currentWorld(next),old=worldSelection?.old??currentWorld(stored.chat)
   // Reuse the exact received leaf changes on the common settlement hot path.
   // Switching swipes/rollback selects another world and explicitly diffs it.
@@ -455,16 +551,16 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   worldChanges??=diffJson(old.world,selected.world)
   const worldRef=await mutate(t,view.state.worldRef,worldChanges,selected.world)
   const chatHeaderRef=await mutate(t,view.state.chatHeaderRef,headChanges,header(next))
-  const state={...view.state,chatHeaderRef,chatRevision:next._storageRevision,worldRef,
+  const state={...view.state,sceneIndexRevision:next._storageRevision,sceneIndexRef,chatHeaderRef,chatRevision:next._storageRevision,worldRef,
    worldMessage:selected.position,worldSwipe:selected.swipe,
-   storyRevision:view.state.storyRevision+(append.length||edits.length||retained<view.messageCount?1:0),
+   storyRevision:view.state.storyRevision+(append.length||changedMessageIndices.length||retained<view.messageCount?1:0),
    worldRevision:view.state.worldRevision+(worldRef!==view.state.worldRef?1:0)}
   assertCurrent?.()
-  await batch.flush([worldRef,chatHeaderRef,...edits.map(edit=>edit.message.runtimeRef),...append.map(row=>row.runtimeRef)])
+  await batch.flush([sceneIndexRef,worldRef,chatHeaderRef,...edits.map(edit=>edit.message.runtimeRef),...append.map(row=>row.runtimeRef)])
   let layoutFrom=Number.isFinite(from)?from:null
   for(const [position,mutations] of grouped)if(mutations.some(change=>!change.path.length||['turn','role','greeting','tavernRole','importSource'].includes(change.path[0])))layoutFrom=Math.min(layoutFrom??Infinity,position)
   const changeRef=await pages.writeRecord(id,{baseRevision:stored.revision,revision:next._storageRevision,
-   indices:edits.map(edit=>edit.position),tail:Number.isFinite(from)?from:null,layoutFrom})
+   indices:changedMessageIndices,tail:Number.isFinite(from)?from:null,layoutFrom})
   await pages.commit(id,{expectedRevision:view.revision,state,edits,append,truncateTo:retained,
    records:[['chat-revision:'+stored.revision,view.snapshotCursor.snapshotId],['chat-change:'+next._storageRevision,changeRef]]},{assertCurrent})
   return result(next,await head(id))

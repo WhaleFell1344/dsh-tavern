@@ -13,6 +13,8 @@ export async function load(url, context, next) {
     replace('    if (applied.deferred === true || applied.stale === true)', mark('runtime-return') + '\n    if (applied.deferred === true || applied.stale === true)')
     replace("    await record('finished', { status: result.receipt.status })", mark('settlement-return') + "\n    await record('finished', { status: result.receipt.status })")
   } else if (url.endsWith('/native-conversation-storage.js')) {
+    replace(' async function readIndexedSceneState(id,options){', " async function readIndexedSceneState(id,options){\nconsole.log('[settlement-perf]'+JSON.stringify({stage:'scene-point-read',at:performance.timeOrigin+performance.now(),count:options.turns.length}));")
+    replace('  return projectSceneImageState({...chat,messages})', mark('scene-full-read') + '\n  return projectSceneImageState({...chat,messages})')
     replace('  async function ensure(indices){', "  async function ensure(indices){\nconsole.log('[settlement-perf]'+JSON.stringify({stage:'settlement-history-load',at:performance.timeOrigin+performance.now(),full:indices===undefined,count:indices?.length??count,revision:view.state.chatRevision}));")
     replace(' async function readHelperContext(id,range){', " async function readHelperContext(id,range){\nconsole.log('[settlement-perf]'+JSON.stringify({stage:'helper-context-read',at:performance.timeOrigin+performance.now(),from:range?.from,to:range?.to,full:!range,caller:new Error().stack.split('\\n').slice(2,11)}));")
   } else if (url.endsWith('/tavern-script-host-adapter.js')) {
