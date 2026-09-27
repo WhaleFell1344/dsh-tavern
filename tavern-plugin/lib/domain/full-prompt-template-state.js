@@ -1,3 +1,4 @@
+import {projectTemplateMessage} from './template-message.js'
 import { applyTemplateStateChanges } from './template-state-patch.js'
 import { isDeepStrictEqual } from 'node:util'
 import { projectTavernHelperContext, replaceTavernHelperMessages } from './tavern-helper-context.js'
@@ -13,12 +14,7 @@ export function projectFullPromptTemplateState(chat) {
   return {
     chatId: chat.id, sessionId: chat.sessionId,
     stateRevision: helper.stateRevision, lifecycleRevision: helper.lifecycleRevision,
-    chat: helper.messages.map(message => ({
-      mes: message.message, is_user: message.role === 'user', is_system: message.role === 'system',
-      name: message.name || '', swipe_id: message.swipe_id, swipes: structuredClone(message.swipes),
-      variables: message.swipes_data.map(value => value && typeof value === 'object' && !Array.isArray(value) ? structuredClone(value) : {}),
-      ...Object.fromEntries(templateFields.filter(key => own(message.pluginData, key)).map(key => [key, structuredClone(message.pluginData[key])]))
-    })),
+    chat: helper.messages.map(projectTemplateMessage),
     chat_metadata: { ...structuredClone(helper.chatMetadata), variables: structuredClone(helper.chatVariables) }
   }
 }

@@ -255,6 +255,7 @@ export async function apply(ctx) {
   const cardMemory = createCardMemory({ dataRoot })
   const stablePrefixStorage = createSessionStablePrefixStorage(dataRoot + '/session-prefixes')
   const profileData = createProfileDataStore({ dataRoot })
+  const completeTemplateHistorySessions = new Set()
   const fullTemplateRuntime = createServerTemplateRuntime({ store: profileData,
     rpc: (method, args) => dispatchMethod(method, args, true),
     onDiagnostic: diagnostic => console.warn('dsh-tavern: 服务端模板进程异常:', diagnostic)
@@ -1337,6 +1338,16 @@ export async function apply(ctx) {
       const selected = await chatPersistence.readSettlementBase(chatId)
       if (!selected || selected.chat.sessionId !== sessionId || selected.chat.backgroundConfigVersion !== 1 || selected.chat.conversationFeaturesVersion !== 1) return undefined
       return selected
+    },
+    resolveTemplateWindow: async sessionId => {
+      if(completeTemplateHistorySessions.has(sessionId))return undefined
+      const chatId=(await readSessionMap())[str(sessionId)]
+      if(!chatId)return undefined
+      const window=await chatPersistence.readWindow(chatId,{limit:200})
+      if(!window || window.chat.sessionId!==sessionId || window.chat.backgroundConfigVersion!==1 || window.chat.conversationFeaturesVersion!==1)return undefined
+      // The virtual foreground input follows the persisted tail in this window.
+      return {chat:window.chat,historyWindow:{...helperHistoryAccess.issue({chatId,revision:window.revision,messageCount:window.messageCount}),
+        from:window.from,messageCount:window.messageCount+(window.chat.promptTemplateInput?.message?1:0)}}
     },
     resolveChatSlice: createSessionSliceReader({links:readSessionMap, readSlice:chatPersistence.readSlice}),
     resolveChatMetadataSlice: async sessionId => {
@@ -3471,7 +3482,11 @@ export async function apply(ctx) {
       case 'countFullTemplateTokens': return { tokens: estimateWorldBookTokens(args.text), estimator: 'unicode-estimate' }
       case 'getGlobalPromptTemplateSettings': return await tavernScriptHostAdapter.readGlobalPromptTemplateSettings()
       case 'saveGlobalPromptTemplateSettings': return await tavernScriptHostAdapter.saveGlobalPromptTemplateSettings(args.settings, args.expectedSettings)
-      case 'getFullPromptTemplateState': if (args.sessionId?.startsWith('opening:')) return openingPreparation.templateState(args.sessionId.slice(8)); return await tavernScriptHostAdapter.readFullPromptTemplateState(args && args.sessionId, args?.cursor)
+      case 'getFullPromptTemplateState': if (args.sessionId?.startsWith('opening:')) return openingPreparation.templateState(args.sessionId.slice(8)); return await tavernScriptHostAdapter.readFullPromptTemplateState(args && args.sessionId, args?.cursor, args?.openingWindow === 1)
+      case 'getPromptTemplateHistory': {
+        if (!serverTemplate) throw new Error('Template history is server-only')
+        return await helperHistoryAccess.read(args.token,args.messageId,args.messageId)
+      }
       case 'saveFullPromptTemplateGlobals': if (!serverTemplate) throw new Error('提示词模板已迁移到服务端，请刷新页面'); if (args.sessionId?.startsWith('opening:')) return openingPreparation.saveTemplateGlobals(args.sessionId.slice(8), args.variables); return await tavernScriptHostAdapter.saveFullPromptTemplateGlobals(args && args.sessionId, args && args.variables, args && args.expectedVariables)
       case 'saveFullPromptTemplateSettings': if (args.sessionId?.startsWith('opening:')) return openingPreparation.saveTemplateSettings(args.sessionId.slice(8), args.settings); return await tavernScriptHostAdapter.saveFullPromptTemplateSettings(args && args.sessionId, args && args.settings, args && args.expectedSettings)
       case 'saveFullPromptTemplateState': if (!serverTemplate) throw new Error('提示词模板已迁移到服务端，请刷新页面'); if (args.sessionId?.startsWith('opening:')) return openingPreparation.saveTemplateState(args.sessionId.slice(8), args.state); return await tavernScriptHostAdapter.saveFullPromptTemplateState(args && args.sessionId, args && args.state)
@@ -3541,7 +3556,10 @@ export async function apply(ctx) {
         throw conflict
       }
       case 'getFullTemplateRuntimeInfo': throw new Error('提示词模板已迁移到服务端，请刷新页面');
-      case 'getSession': return sessionViews.response(args || {})
+      case 'getSession': {
+        if(args?.fullView === true)completeTemplateHistorySessions.add(args.sessionId)
+        return sessionViews.response(args || {})
+      }
       case 'hydrateTavernHelperMessages': {
         const sessionId = args && args.sessionId
         const chatId = (await readSessionMap())[sessionId]

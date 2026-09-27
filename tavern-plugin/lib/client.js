@@ -4777,7 +4777,9 @@ window.__ModuleLoader__.load({
                     entries.push([index, message]);
                 }
                 context.messages = api.update(previous.messages || [], entries, length);
-                if (!api.info(context.messages).complete) return null;
+                const information=api.info(context.messages);
+                if (!information.complete && !(previous.historyAccess && information.count===length
+                    && entries.every(([,row])=>!row.stub))) return null;
                 if (delta.turnMessageIdChanges?.length) {
                     const fields = applyTavernVariableReceipt.turnFields;
                     if (delta.kind !== 'dispatch' || !fields) return null;
@@ -7074,7 +7076,7 @@ window.__ModuleLoader__.load({
 					const baseline=record && record.context;
                     const contextBaseline=baseline ? {workContextVersion:1,appendContextVersion:1,chatId:baseline.chatId,stateRevision:baseline.stateRevision,
                         lifecycleRevision:Number(baseline.lifecycleRevision)||0,messageCount:(baseline.messages||[]).length,
-                        transaction:baseline.transaction,complete:!baseline.messagesPending && (applyTavernVariableReceipt.indexApi.info(baseline.messages)?.complete ?? false)} : {workContextVersion:1,full:true};
+                        transaction:baseline.transaction,historyWindowVersion:baseline.historyAccess?1:undefined,complete:!baseline.messagesPending && (applyTavernVariableReceipt.indexApi.info(baseline.messages)?.complete ?? false)} : {workContextVersion:1,full:true};
                     return { contextBaseline:contextBaseline, sessionId: activeSessionId, frameCount: record ? 1 : 0, scriptIds: scripts.map(function (script) { return script.id; }), scripts: scripts, ...(record && record.scripts.has("__dsh_official_mvu__") ? { mvuDataReady: mvuDataReady(record) } : {}), ...(record && record.mvuLoadState ? { mvuLoadState: record.mvuLoadState } : {}), ...(initializationError ? { initializationError: initializationError } : {}) };
 				}
 			});

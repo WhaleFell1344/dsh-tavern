@@ -753,3 +753,18 @@ test('stale resource variable write returns a complete recovery context',async()
  assert.equal(result.context.messages.length,1)
  assert.equal(reads,1)
 })
+
+test('template initialization opts into a bounded projection without reading complete Chat',async()=>{
+ const source={...chat(),_storageRevision:8}
+ let full=0
+ const {adapter}=harness(source,{resolveChat:async()=>{full++;return source},
+  worldBooks:{templateSnapshot:async()=>({worldName:'book',worldbooks:{book:{entries:{}}}})},
+  resolveTemplateWindow:async()=>({chat:source,historyWindow:{from:9999,messageCount:10000,revision:8,token:'grant'}})})
+ const projected=await adapter.readFullPromptTemplateState('session-1',undefined,true)
+ assert.equal(full,0)
+ assert.equal(projected.state.chat.length,1)
+ assert.equal(projected.historyWindow.from,9999)
+ assert.equal(projected.state.stateRevision,8)
+ await adapter.readFullPromptTemplateState('session-1')
+ assert.equal(full,1,'default API retains its complete-state contract')
+})

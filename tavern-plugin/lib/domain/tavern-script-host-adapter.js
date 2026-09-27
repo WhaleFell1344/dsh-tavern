@@ -500,8 +500,9 @@ export function createTavernScriptHostAdapter(options = {}) {
     if (!chat || !['story', 'script'].includes(chat.mode) || (typeof options.isPlayChat === 'function' && !options.isPlayChat(chat))) throw new Error('当前会话没有绑定游玩对话')
   }
 
-  async function readFullPromptTemplateState(sessionId, cursor) {
-    const selected=await (options.resolveChatMetadataSlice?.(sessionId) ?? options.resolveChatSlice?.(sessionId,[]))
+  async function readFullPromptTemplateState(sessionId, cursor, windowed = false) {
+    const window = windowed ? await options.resolveTemplateWindow?.(sessionId) : undefined
+    const selected=!window && await (options.resolveChatMetadataSlice?.(sessionId) ?? options.resolveChatSlice?.(sessionId,[]))
     const reuse=selected?.denseMessages && syncTemplateState.matches(cursor,selected.chat)
     const reader = syncTemplateState.reader(cursor)
     let changed = !reuse && selected?.denseMessages && reader?.chatId === selected.chat.id
@@ -511,7 +512,7 @@ export function createTavernScriptHostAdapter(options = {}) {
     if (!changed?.denseMessages || changed.chat.id !== reader?.chatId
       || changed.chat.sessionId !== reader?.sessionId
       || (changed.chat.tavernHelperLifecycleRevision || 0) !== reader?.lifecycle) changed = undefined
-    const chat = reuse ? selected.chat : changed ? changed.chat : await resolveChat(sessionId)
+    const chat = window?.chat || (reuse ? selected.chat : changed ? changed.chat : await resolveChat(sessionId))
     assertTemplateChat(chat)
     const card = await options.readCard(chat)
     let templateBook
@@ -538,6 +539,7 @@ export function createTavernScriptHostAdapter(options = {}) {
         worldbooks,
         dsh: { settling: settlementTransactions.has(str(sessionId)) || ['pending', 'running'].includes(chat.settleStatus), cardPath: chat.cardPath, model: options.modelFor ? await options.modelFor(chat) : chat.model?.model || chat.model || '', regexScripts: card.extensions?.regex_scripts || [] } }
     }
+    if (window) return {...snapshot,historyWindow:window.historyWindow}
     if (changed) {
       const indices = [...changed.indices]
       if (chat.promptTemplateInput?.message) indices.push(changed.messageCount)
@@ -744,7 +746,7 @@ export function createTavernScriptHostAdapter(options = {}) {
       async function executionContext(baseline) {
         transaction.compact = input.compactContext === true || baseline?.workContextVersion === 1
         let indices, appended = false
-        if (baseline?.workContextVersion === 1 && baseline.complete === true && !baseline.full
+        if (baseline?.workContextVersion === 1 && (baseline.complete === true || baseline.historyWindowVersion === 1) && !baseline.full
           && baseline.chatId === current.id && baseline.lifecycleRevision === (current.tavernHelperLifecycleRevision || 0)
           && Number.isSafeInteger(baseline.stateRevision) && !baseline.transaction) {
           if (baseline.stateRevision === current._storageRevision && baseline.messageCount === current.messages.length) indices=[]

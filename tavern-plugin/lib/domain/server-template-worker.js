@@ -1,3 +1,4 @@
+import {createTemplateHistoryPipeClient} from './template-history-pipe.js'
 import { readFile } from 'node:fs/promises'
 import { JSDOM, VirtualConsole } from 'jsdom'
 import { estimateWorldBookTokens } from './worldbook-activation.js'
@@ -18,6 +19,7 @@ const rpc = (method, args) => {
     send({ type: 'rpc', id, method, args })
   })
 }
+rpc.readHistory = createTemplateHistoryPipeClient()
 async function initialize(sessionId, readOnly = false) {
   dom = new JSDOM('<!doctype html><div id="extensions_settings"></div>', {
     url: 'https://template.invalid/', runScripts: 'outside-only', pretendToBeVisual: true,

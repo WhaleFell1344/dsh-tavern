@@ -1,3 +1,5 @@
+import {createTemplateHistoryWindow} from './history-window.js'
+import {projectTemplateMessage} from '../../../domain/template-message.js'
 import { sameTemplateValue as same, applyTemplateStateChanges } from '../../../domain/template-state-patch.js'
 import { diffJson } from '../../../domain/json-mutation.js'
 const clone = value => value === undefined ? undefined : structuredClone(value)
@@ -47,13 +49,24 @@ function restoreSnapshot(target, source, changedRow) {
 }
 
 export async function createNativeTemplateConnection({ sessionId, rpc, services = {}, settingsHtml }) {
-  let initial=await rpc('getFullPromptTemplateState',{sessionId})
+  const windowed=typeof rpc.readHistory==='function'
+  let initial=await rpc('getFullPromptTemplateState',{sessionId,...(windowed?{openingWindow:1}:{})})
+  function openHistory(result){
+    if(!result.historyWindow)return null
+    return createTemplateHistoryWindow({window:result.historyWindow,rows:result.state.chat,read:(id,window)=>{
+      const value=rpc.readHistory({token:window.token,messageId:id})
+      if(value.revision!==window.revision || value.messages?.length!==1 || value.messages[0].message_id!==id)throw Error('Template history revision mismatch')
+      return projectTemplateMessage(value.messages[0])
+    }})
+  }
+  let history=openHistory(initial)
   const supportsPatches=initial.capabilities?.statePatch === 1
   let pendingRows=null
   const changedRow=index=>pendingRows?.add(index)
-  let baseline=initial.state, settingsBaseline=clone(initial.environment.extension_settings.EjsTemplate)
+  let baseline=history?{...initial.state,chat:history.baseline()}:initial.state, settingsBaseline=clone(initial.environment.extension_settings.EjsTemplate)
   let globalBaseline=clone(initial.environment.extension_settings.variables?.global)
   const snapshot=clone({...initial.state,...initial.environment})
+  if(history)snapshot.chat=history.chat
   let saves=Promise.resolve(), latest=saves
   function enqueue(operation) { const next=saves.then(operation); latest=next; saves=next.catch(error=>{ if(services.onPersistenceError) services.onPersistenceError(error); else console.error('Template persistence failed',error) }); return next }
   async function saveGlobals(settings) {
@@ -72,14 +85,18 @@ export async function createNativeTemplateConnection({ sessionId, rpc, services 
     loadWorldInfo:async name=>clone(initial.environment.worldbooks[name] || null),
     saveChatConditional: data=>enqueue(async()=>{
       await saveGlobals(data.extension_settings)
-      if (same(data.chat,baseline.chat) && same(data.chat_metadata,baseline.chat_metadata)) return { updated:false }
-      const changes=diffJson({chat:baseline.chat,chat_metadata:baseline.chat_metadata},{chat:data.chat,chat_metadata:data.chat_metadata})
+      if(history)baseline={...baseline,chat:history.baseline()}
+      const changes=history
+        ? [...history.changes(),...diffJson({chat_metadata:baseline.chat_metadata},{chat_metadata:data.chat_metadata})]
+        : diffJson({chat:baseline.chat,chat_metadata:baseline.chat_metadata},{chat:data.chat,chat_metadata:data.chat_metadata})
+      if(!changes.length)return {updated:false}
       const submitted=applyTemplateStateChanges(baseline,changes)
       const {chat:_chat,chat_metadata:_metadata,...header}=baseline
       const result=await rpc('saveFullPromptTemplateState',{sessionId,state:supportsPatches?{...header,changes}:submitted})
       if(result.updated!==true || (!result.state && !Array.isArray(result.statePatch))) throw new Error('Template state save was not acknowledged')
       const saved=result.state || applyTemplateStateChanges(submitted,result.statePatch)
-      reconcileTemplateReceipt(data.chat,submitted.chat,saved.chat)
+      if(history)history.acknowledge(submitted.chat,saved.chat,reconcileTemplateReceipt)
+      else reconcileTemplateReceipt(data.chat,submitted.chat,saved.chat)
       reconcileTemplateReceipt(data.chat_metadata,submitted.chat_metadata,saved.chat_metadata)
       baseline=saved
       return result
@@ -100,14 +117,26 @@ export async function createNativeTemplateConnection({ sessionId, rpc, services 
     // drain the queue and reload authoritative state instead of replaying that
     // same rejection forever. Never retry the template's side effects.
     await saves
-    const response=await rpc('getFullPromptTemplateState',{sessionId,cursor:initial.cursor})
+    const response=await rpc('getFullPromptTemplateState',{sessionId,cursor:initial.cursor,...(windowed?{openingWindow:1}:{})})
     if (!response.delta) pendingRows=null
     else for(const [index] of response.delta.chat.set) changedRow(index)
     initial=applyTemplateSync(initial,response)
-    baseline=initial.state
+    const previousHistory=history
+    history=openHistory(initial)
+    baseline=history?{...initial.state,chat:history.baseline()}:initial.state
     settingsBaseline=clone(initial.environment.extension_settings.EjsTemplate)
     globalBaseline=clone(initial.environment.extension_settings.variables?.global)
-    restoreSnapshot(snapshot,{...initial.state,...initial.environment},changedRow)
+    if(history){
+      const {chat,...rest}=initial.state
+      const {chat:previousChat,...previous}=snapshot
+      restoreSnapshot(previous,{...rest,...initial.environment},changedRow)
+      for(const key of Object.keys(snapshot))if(key!=='chat' && !Object.hasOwn(previous,key))delete snapshot[key]
+      Object.assign(snapshot,previous,{chat:history.chat})
+      pendingRows=new Set(history.loaded())
+    } else {
+      if(previousHistory)snapshot.chat=clone(initial.state.chat)
+      restoreSnapshot(snapshot,{...initial.state,...initial.environment},changedRow)
+    }
     if (latest === previousSave) latest = saves
     return snapshot
   }}

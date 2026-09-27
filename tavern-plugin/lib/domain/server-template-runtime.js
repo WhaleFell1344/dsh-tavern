@@ -1,3 +1,4 @@
+import {serveTemplateHistoryPipe} from './template-history-pipe.js'
 import { fork } from 'node:child_process'
 import { randomUUID, createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
@@ -59,9 +60,13 @@ export function createServerTemplateRuntime({ rpc, store, timeoutMs = 120000, id
     const permissionFlag = process.allowedNodeEnvironmentFlags.has('--permission') ? '--permission' : '--experimental-permission'
     const child = fork(worker, [], { env: { NODE_ENV: 'production', ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) },
       execArgv: [permissionFlag, '--allow-fs-read=' + plugin, '--allow-fs-read=' + modules, '--max-old-space-size=' + heapMb],
-      stdio: ['ignore', 'ignore', 'pipe', 'ipc'], serialization: 'advanced', windowsHide: true })
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc', 'pipe'], serialization: 'advanced', windowsHide: true })
     const record = { child, sessionId, pending: new Map(), busy: true, ready: false, closed: false, stderr: '', usedAt: Date.now(), writes: Promise.resolve() }
     sessions.set(sessionId, record)
+    serveTemplateHistoryPipe(child.stdio[4], async args => {
+      if(record.closed || !record.busy)throw Error('Expired template history read')
+      return rpc('getPromptTemplateHistory',{sessionId,token:args.token,messageId:args.messageId})
+    })
     child.on('error', error => stop(record, error))
     // Retain only a bounded stderr tail. Wait for stdio to close so V8's fatal
     // message is available; SIGABRT alone does not establish an OOM diagnosis.

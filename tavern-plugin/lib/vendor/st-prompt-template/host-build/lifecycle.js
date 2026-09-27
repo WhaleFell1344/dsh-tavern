@@ -1,3 +1,4 @@
+import {templateHistoryIndices} from './history-window.js'
 import { sameTemplateValue as same } from '../../../domain/template-state-patch.js'
 import xxhash from 'xxhash-wasm'
 import { eventSource, chat, getCurrentChatId, saveChatConditional } from './host.js'
@@ -24,7 +25,7 @@ export function createTemplateLifecycle() {
     }
     const { h64ToString } = await hashing
     const pending = new Set()
-    for (const index of changes ?? chat.keys()) {
+    for (const index of changes ?? templateHistoryIndices(chat) ?? chat.keys()) {
       if (index >= chat.length) continue;
       const message = chat[index]
       if (!(message.template_rendered?.hash === h64ToString(message.mes) && message.template_rendered.swipe === (message.swipe_id || 0)) && !matches(message.template_display,message)) pending.add(index)
@@ -54,8 +55,12 @@ export function createTemplateLifecycle() {
     }
     if (pending.size) await saveChatConditional()
     if (changedDefinition) definition = copy(currentDefinition)
-    previous = chat.map(({mes,swipe_id,swipes}, index) => pending.has(index) && !batch.has(index)
-      ? previous?.[index] : ({mes,swipe_id,swipes:[...(swipes || [])]}))
+    const nextPrevious=new Array(chat.length)
+    for(const index of templateHistoryIndices(chat) ?? chat.keys()) {
+      const {mes,swipe_id,swipes}=chat[index]
+      nextPrevious[index]=pending.has(index) && !batch.has(index) ? previous?.[index] : {mes,swipe_id,swipes:[...(swipes || [])]}
+    }
+    previous=nextPrevious
     if (changedWorlds) worlds = copy(snapshot.worldbooks)
     if (changedSettings) features = copy(snapshot.extension_settings.EjsTemplate)
     return { synchronized: batch.size > 0, deferred: pending.size > batch.size }

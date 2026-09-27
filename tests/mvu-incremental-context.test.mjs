@@ -99,3 +99,14 @@ test('committed append requires a complete dense tail and retains truncation rec
  assert.equal(helperClient.applyTavernVariableReceipt(before,{...delta,messages:[]}),null,'missing appended rows require recovery')
  assert.equal(helperClient.applyTavernVariableReceipt(before,{...delta,messageCount:0,messages:[]}),null,'truncation must use full lifecycle recovery')
 })
+
+test('windowed MVU dispatch keeps unloaded history while rejecting missing appended rows',()=>{
+ const before={chatId:'c',stateRevision:1,lifecycleRevision:0,historyAccess:{token:'grant',revision:1,messageCount:2},messages:[{message_id:0,stub:true},{message_id:1,role:'assistant',message:'tail'}]}
+ const delta={version:2,kind:'dispatch',chatId:'c',baseRevision:1,stateRevision:2,lifecycleRevision:0,eventId:'e',messageCount:3,messages:[{message_id:2,role:'assistant',message:'new'}]}
+ const next=helperClient.applyTavernVariableReceipt(before,delta)
+ assert.ok(next,'on-demand history is a valid delta baseline')
+ assert.equal(next.messages[0].stub,true)
+ assert.equal(next.messages[2].message,'new')
+ assert.equal(next.historyAccess,before.historyAccess,'unchanged old rows retain their pinned read capability')
+ assert.equal(helperClient.applyTavernVariableReceipt(before,{...delta,messages:[]}),null)
+})

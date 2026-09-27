@@ -39,7 +39,9 @@ function applyTavernVariableReceipt(previous, delta) {
             entries.push([index, message]);
         }
         context.messages = api.update(previous.messages || [], entries, length);
-        if (!api.info(context.messages).complete) return null;
+        const information=api.info(context.messages);
+        if (!information.complete && !(previous.historyAccess && information.count===length
+            && entries.every(([,row])=>!row.stub))) return null;
         if (delta.turnMessageIdChanges?.length) {
             const fields = applyTavernVariableReceipt.turnFields;
             if (delta.kind !== 'dispatch' || !fields) return null;

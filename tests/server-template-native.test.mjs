@@ -47,3 +47,36 @@ test('server engine uses real journal, delta snapshots, persistent variable writ
  await runtime.synchronize('s')
  assert.ok((await open().read('chat')).messages[0].tavernPluginData.template_rendered)
 })
+
+test('native window engine persists an old-floor variable edit without a full Chat read',async t=>{
+ const {createHelperHistoryAccess}=await import('../tavern-plugin/lib/domain/helper-history-access.js')
+ const root=await mkdtemp(join(tmpdir(),'template-native-window-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const persistence=createChatPersistence({store:createChatJournalStore({dataRoot:root,newConversations:true})})
+ const store=createProfileDataStore({dataRoot:root}),settings=createTavernExtensionSettings(store)
+ await persistence.write({id:'chat',sessionId:'s',mode:'story',cardPath:'card',variables:{},messages:Array.from({length:300},(_,i)=>({role:'assistant',turn:i+1,text:'floor '+i,variables:[{hp:i}]}))})
+ await settings.save({EjsTemplate:{enabled:true,autosave_enabled:true}}, {})
+ let fullReads=0,historyReads=0
+ const access=createHelperHistoryAccess({read:(id,range)=>{historyReads++;return persistence.readHelperContext(id,range)}})
+ const adapter=createTavernScriptHostAdapter({
+  resolveChat:()=>{fullReads++;return persistence.read('chat')},writeChat:persistence.write,readChatRevision:persistence.readRevision,updateChat:persistence.update,
+  patchChat:persistence.patch,resolveChatSlice:(_id,indices,fields)=>persistence.readSlice('chat',indices,fields),
+  resolveTemplateWindow:async()=>{const w=await persistence.readWindow('chat',{limit:200});return {chat:w.chat,historyWindow:{...access.issue({chatId:'chat',revision:w.revision,messageCount:w.messageCount}),from:w.from}}},
+  readCard:async()=>({name:'Alice',mes_example:'',description:'',personality:'',scenario:''}),scriptDispatch:{},
+  fullExtensionSettings:settings,globalVariables:createPromptTemplateGlobalVariables(store),
+  worldBooks:{templateSnapshot:async()=>({worldName:'',worldbooks:{}})}
+ })
+ const runtime=createServerTemplateRuntime({store,rpc:async(method,args)=>{
+  if(method==='getFullPromptTemplateState')return adapter.readFullPromptTemplateState('s',args.cursor,args.openingWindow===1)
+  if(method==='getPromptTemplateHistory')return access.read(args.token,args.messageId,args.messageId)
+  if(method==='saveFullPromptTemplateState')return adapter.saveFullPromptTemplateState('s',args.state)
+  if(method==='saveFullPromptTemplateSettings')return adapter.saveFullPromptTemplateSettings('s',args.settings,args.expectedSettings)
+  if(method==='saveFullPromptTemplateGlobals')return adapter.saveFullPromptTemplateGlobals('s',args.variables,args.expectedVariables)
+  throw Error(method)
+ }})
+ t.after(()=>runtime.dispose())
+ const result=await runtime.forSession('s').render('<% window.SillyTavern.getContext().chat[3].variables[0].hp=77; await window.SillyTavern.getContext().saveChatConditional(); %>saved')
+ assert.equal(result.text,'saved')
+ assert.equal((await persistence.readSlice('chat',[3])).chat.messages[0].variables[0].hp,77)
+ assert.equal(fullReads,0)
+ assert.equal(historyReads,1)
+})

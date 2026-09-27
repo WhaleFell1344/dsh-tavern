@@ -18,6 +18,7 @@ function fixture(t, options = {}) {
     await options.beforeRpc?.(method,args)
     const current = state(args.sessionId)
     if (method === 'getFullPromptTemplateState') return structuredClone(current)
+    if (method === 'getPromptTemplateHistory' && options.readHistory) return options.readHistory(args)
     if (method === 'saveFullPromptTemplateSettings') { current.environment.extension_settings.EjsTemplate = structuredClone(args.settings); return {updated:true,settings:args.settings} }
     if (method === 'saveFullPromptTemplateGlobals') { current.environment.extension_settings.variables.global = structuredClone(args.variables); return {updated:true,variables:args.variables} }
     if (method === 'saveFullPromptTemplateState') { current.state=structuredClone(args.state); return {updated:true,state:args.state} }
@@ -245,4 +246,19 @@ test('bounded formatting mirror preserves full historical data and template inpu
   assert.match(result.message.template_display?.html || result.message.mes, /0 \/ 402/)
   assert.equal(state('s').state.chat.length, 401)
   assert.equal((await engine.render('<%= window.SillyTavern.getContext().chat[0].mes %>')).text, 'history 0')
+})
+
+
+test('actual isolated template engine keeps logical floors and reads old content through its scoped pipe',async t=>{
+ const {engine,state,calls}=fixture(t,{readHistory:args=>{
+  assert.equal(args.token,'pinned');assert.equal(args.sessionId,'s')
+  return {revision:3,messages:[{message_id:args.messageId,message:'historical '+args.messageId,role:'assistant',swipe_id:0,swipes:['historical '+args.messageId],swipes_data:[{}],pluginData:{}}]}
+ }})
+ const current=state('s')
+ current.historyWindow={from:9800,messageCount:10000,revision:3,token:'pinned'}
+ current.state.stateRevision=3
+ current.state.chat=Array.from({length:200},()=>({mes:'recent',is_user:false,is_system:false,name:'',swipe_id:0,swipes:['recent'],variables:[{}]}))
+ const result=await engine.render('<%= window.SillyTavern.getContext().chat.length %>:<%= window.SillyTavern.getContext().chat[3].mes %>')
+ assert.equal(result.text,'10000:historical 3')
+ assert.deepEqual(calls.filter(c=>c.method==='getPromptTemplateHistory').map(c=>c.args.messageId),[3])
 })
