@@ -157,5 +157,6 @@ function TavernRetainedMessageFrame(props) {
             try { tavernPanelRegistry.pin(panelId, !pinned); }
             catch (error) { tavernErrorHub.report("固定面板", error); }
         } }, pinned ? "返回原消息" : "固定到右侧") : null,
+        tavernFrameSizing(props.content, props.frameSizing, props.persistent ? props.panelId : undefined) ? React.createElement("button", { type: "button", className: "dsh-tavern-btn", onClick: () => { if (!activated) { setActivated(true); return; } return lease.current?.expand(); } }, "展开大屏") : null,
         React.createElement("div", { ref: home, style: { minHeight: activated ? undefined : estimatedTavernFrameHeight(props.content) + "px" } }));
 }

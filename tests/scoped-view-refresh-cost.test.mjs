@@ -229,6 +229,8 @@ test('deferred retained frames read Helper context at activation',()=>{
  const current={version:2},stale={version:1}
  const React={useRef:()=>({current:null}),useState:()=>[true,()=>{}],useSyncExternalStore:()=>[],useEffect(){},useLayoutEffect:run=>run(),createElement:()=>null}
  const h=vm.createContext({React,tavernPanelRegistry:{},tavernRetainedFrames:{key:()=> 'frame',mount:props=>{mounted=props;return {update(){},detach(){}}}}})
+ vm.runInContext(fs.readFileSync(new URL('../tavern-plugin/lib/domain/frame-sizing.js',import.meta.url),'utf8').replace(/export \{[^}]+\}/,''),h)
+ vm.runInContext(fs.readFileSync(new URL('../tavern-plugin/src/client/modules/frame-sizing.js',import.meta.url),'utf8'),h)
  vm.runInContext(fs.readFileSync(new URL('../tavern-plugin/src/client/modules/retained-message-frames.js',import.meta.url),'utf8'),h)
  h.TavernRetainedMessageFrame({sessionId:'s',turn:1,partIndex:0,content:'<p>hello</p>',helperContext:stale,helperContextReader:()=>current})
  assert.equal(mounted.helperContext,current)

@@ -1184,6 +1184,25 @@ export async function apply(ctx) {
     return str(value).split(/[?#]/)[0].replace(/\/\/[^/@\s]+@/, '//').slice(0, 1000)
   }
 
+  function sanitizeFrameLayout(value) {
+    if (!value || typeof value !== 'object') return null
+    const number = n => typeof n === 'number' && Number.isFinite(n) ? Math.round(Math.max(0, Math.min(1000000, n))) : null
+    return {
+      mode: ['legacy', 'content', 'viewport', 'fixed'].includes(value.mode) ? value.mode : 'legacy',
+      source: ['template', 'panel', 'card'].includes(value.source) ? value.source : 'legacy',
+      reason: value.reason === 'container' ? 'container' : 'content',
+      phase: ['loading', 'interactive', 'complete'].includes(value.phase) ? value.phase : null,
+      width: number(value.width), height: number(value.height), availableHeight: number(value.availableHeight),
+      minHeight: number(value.minHeight), maxHeight: number(value.maxHeight),
+      roots: (Array.isArray(value.roots) ? value.roots : []).slice(0, 3).map(node => ({
+        tag: str(node?.tag).slice(0, 16), id: str(node?.id).slice(0, 80),
+        width: number(node?.width), height: number(node?.height), clientHeight: number(node?.clientHeight), scrollHeight: number(node?.scrollHeight),
+        position: str(node?.position).slice(0, 24), overflowY: str(node?.overflowY).slice(0, 24),
+        cssHeight: str(node?.cssHeight).slice(0, 32), minHeight: str(node?.minHeight).slice(0, 32)
+      }))
+    }
+  }
+
   function sanitizeDisplayRuntime(value) {
     const input = value && typeof value === 'object' ? value : {}
     function scalar(item, limit = 4000) {
@@ -1197,6 +1216,7 @@ export async function apply(ctx) {
       panelId: str(input.panelId).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80),
       placement: input.placement === "sidebar" ? "sidebar" : "message",
       dom: str(input.dom).slice(0, 100000),
+      layout: sanitizeFrameLayout(input.layout),
       console: (Array.isArray(input.console) ? input.console : []).slice(-100).map(function (item) {
         return { at: Math.max(0, Number(item && item.at) || 0), level: ['log', 'info', 'warn', 'error'].includes(item && item.level) ? item.level : 'log', args: scalar(item && item.args, 12000) }
       }),
@@ -1216,6 +1236,7 @@ export async function apply(ctx) {
       panelId: str(runtime.panelId),
       placement: runtime.placement,
       dom: str(runtime.dom),
+      layout: runtime.layout || null,
       console: (Array.isArray(runtime.console) ? runtime.console : []).map(function (item) {
         return { level: item && item.level, args: item && item.args }
       }),
@@ -1523,7 +1544,7 @@ export async function apply(ctx) {
       tavernHelperScriptDiagnostics: helperRuntime.diagnostics,
       tavernRemoteAssetPins: Array.isArray(cardExtensions.remoteAssetPins) ? cardExtensions.remoteAssetPins : [],
       tavernHelperWorldbook: helperWorldbook,
-      tavernRuntimePolicy: { trustedCardMode: runtimeSettings.trustedCardMode },
+      tavernRuntimePolicy: { trustedCardMode: runtimeSettings.trustedCardMode, frameSizing: cardExtensions.frameSizing },
       releaseCapabilities: TAVERN_RELEASE_CAPABILITIES,
       presentationWarnings: (Array.isArray(chat.presentationWarnings) ? chat.presentationWarnings : []).concat(
         chat.importHistory?.rescue ? [rescueHistoryNotice(chat.importHistory.rescue)] : [],
