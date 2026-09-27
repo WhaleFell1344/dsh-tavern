@@ -143,8 +143,8 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   for(const row of page.messages)chat.messages.push(await t.get(row.message.runtimeRef))
   return {chat,messageCount:view.messageCount,from,to:end-1,revision:view.state.chatRevision}
  }
- async function readSlice(id,indices=[],fields){
-  const view=await head(id)
+ async function readSlice(id,indices=[],fields,pinned){
+  const view=pinned||await head(id)
   if(!view)return null
   if(indices.some(index=>index>=view.messageCount))return undefined
   if(indices.some(index=>!Number.isSafeInteger(index)||index<0))throw Error('消息楼层不存在')
@@ -160,6 +160,80 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   }
   for(const position of indices)chat.messages.push(await t.get(references.get(position)))
   return {chat,messageCount:view.messageCount,denseMessages:true}
+ }
+ async function changeCoverage(id,revision){
+  const view=await head(id)
+  if(!view)return null
+  const current=view.state.chatRevision
+  if(!Number.isSafeInteger(revision)||revision<1||revision>current||current-revision>64)return undefined
+  const keys=Array.from({length:current-revision},(_,i)=>'chat-change:'+(revision+i+1))
+  const refs=await pages.readEntries(id,keys,{snapshotId:view.snapshotCursor.snapshotId})
+  const indices=new Set();let tail=view.messageCount,layoutFrom=view.messageCount,layoutChanged=false
+  for(let i=0;i<keys.length;i++){
+   if(!refs[keys[i]])return undefined
+   const frame=await pages.readRecord(id,refs[keys[i]])
+   if(frame.baseRevision!==revision+i||frame.revision!==revision+i+1)return undefined
+   for(const index of frame.indices)if(index<view.messageCount)indices.add(index)
+   if(frame.tail!==null)tail=Math.min(tail,frame.tail)
+   if(frame.layoutFrom!==null){layoutChanged=true;layoutFrom=Math.min(layoutFrom,frame.layoutFrom)}
+  }
+  for(let index=tail;index<view.messageCount;index++)indices.add(index)
+  return {view,indices:[...indices].sort((a,b)=>a-b),baseRevision:revision,revision:current,layoutChanged,layoutFrom}
+ }
+ async function readChangedSlice(id,revision,fields,indicesOnly=false){
+  const coverage=await changeCoverage(id,revision)
+  if(!coverage)return coverage
+  const {view,...changes}=coverage
+  if(indicesOnly)return {indices:changes.indices,baseRevision:changes.baseRevision,revision:changes.revision}
+  if(revision===changes.revision)return undefined
+  return {...changes,...await readSlice(id,changes.indices,fields,view)}
+ }
+ // A transaction pins one immutable head; only explicit reads populate rows.
+ async function readSettlementBase(id){
+  const view=await head(id)
+  if(!view)return null
+  const chat=await selectedHeader(id,view,'settlement'),t=tree(id),rows=new Map(),references=new Map()
+  const count=view.messageCount
+  let tail=Promise.resolve()
+  async function pageFor(position){
+   const start=Math.floor(position/64)*64,end=Math.min(count,start+64)
+   if(!references.has(position)){
+    const page=await pages.readHistoryPage(id,{cursor:{snapshotId:view.snapshotCursor.snapshotId,before:end},limit:end-start})
+    for(const row of page.messages)references.set(row.position,row.message)
+   }
+   return references.get(position)
+  }
+  async function ensure(indices){
+   const ids=indices===undefined?Array.from({length:count},(_,i)=>i):[...new Set(indices)]
+   for(const index of ids)if(!Number.isSafeInteger(index)||index<0||index>=count)throw Error('消息楼层不存在: '+index)
+   const pending=tail.then(async()=>{for(const index of ids)if(!rows.has(index)){
+    const reference=await pageFor(index)
+    rows.set(index,await t.get(reference.runtimeRef))
+   }})
+   tail=pending.catch(()=>{})
+   return pending
+  }
+  chat.messages=createScopedMessages(count,[],index=>{
+   if(!rows.has(index))throw Object.assign(Error('MVU history floor is not loaded: '+index),{code:'MVU_HISTORY_NOT_LOADED'})
+   return rows.get(index)
+  })
+  async function previousMvu(before){
+   for(let index=before-1;index>=0;index--){
+    const reference=await pageFor(index)
+    let valid=reference.session?.mvuSnapshot
+    // Old native pages have no flag. Inspect only the selected variable shape,
+    // never materialize their body or unrelated variable values.
+    if(typeof valid!=='boolean'){
+     const swipe=await t.get(reference.runtimeRef,'/swipeId')||0
+     const path='/variables/'+swipe
+     const keys=await t.type(reference.runtimeRef,path)==='object'?await t.keys(reference.runtimeRef,path):[]
+     valid=keys.includes('stat_data')&&keys.includes('schema')
+    }
+    if(valid){await ensure([index]);return index}
+   }
+   return -1
+  }
+  return {chat,messageCount:count,denseMessages:true,ensure,previousMvu}
  }
  // Helper owns a read projection, not an editable runtime Chat. Bind header
  // and every page to one immutable head, even while another writer appends.
@@ -241,7 +315,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   chat.messages=messages
   return projectChatSessionState(chat,{pendingMvuSettlement:options.scoped!==true&&Object.hasOwn(chat,'pendingMvuSettlement')?chat.pendingMvuSettlement:pending,...(options.scoped===true?{messages:createScopedMessages(messages.length,[],position=>structuredClone(messages[position]))}:{})})
  }
- function sessionSummary(row){return JSON.parse(JSON.stringify({message:projectSessionMessage(row),pending:row.role==='assistant'&&row.mvu?.pending===true?{
+ function sessionSummary(row){const variables=row.variables?.[Math.max(0,Number(row.swipeId)||0)];return JSON.parse(JSON.stringify({mvuSnapshot:Boolean(variables&&variables.stat_data!==undefined&&variables.schema!==undefined),message:projectSessionMessage(row),pending:row.role==='assistant'&&row.mvu?.pending===true?{
   hasSubmission:Boolean(row.mvu.pendingSubmission),prepared:Boolean(row.mvu.delivery?.prepared)}:null}))}
  function currentWorld(chat){
   for(let position=(chat.messages?.length??0)-1;position>=0;position--){
@@ -387,9 +461,13 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    worldRevision:view.state.worldRevision+(worldRef!==view.state.worldRef?1:0)}
   assertCurrent?.()
   await batch.flush([worldRef,chatHeaderRef,...edits.map(edit=>edit.message.runtimeRef),...append.map(row=>row.runtimeRef)])
+  let layoutFrom=Number.isFinite(from)?from:null
+  for(const [position,mutations] of grouped)if(mutations.some(change=>!change.path.length||['turn','role','greeting','tavernRole','importSource'].includes(change.path[0])))layoutFrom=Math.min(layoutFrom??Infinity,position)
+  const changeRef=await pages.writeRecord(id,{baseRevision:stored.revision,revision:next._storageRevision,
+   indices:edits.map(edit=>edit.position),tail:Number.isFinite(from)?from:null,layoutFrom})
   await pages.commit(id,{expectedRevision:view.revision,state,edits,append,truncateTo:retained,
-   records:[['chat-revision:'+stored.revision,view.snapshotCursor.snapshotId]]},{assertCurrent})
+   records:[['chat-revision:'+stored.revision,view.snapshotCursor.snapshotId],['chat-change:'+next._storageRevision,changeRef]]},{assertCurrent})
   return result(next,await head(id))
  }
- return Object.freeze({patch,read,readWindow,readRevisionMetadata,readHelperContext,readSlice,readSessionState,readDisplayRuntimeState,readSceneImageState,version,create,write})
+ return Object.freeze({patch,read,readWindow,readSettlementBase,readChangedSlice,readRevisionMetadata,readHelperContext,readSlice,readSessionState,readDisplayRuntimeState,readSceneImageState,version,create,write})
 }

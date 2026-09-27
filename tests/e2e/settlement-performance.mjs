@@ -268,6 +268,12 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     delete report.settlementPerformance.activeSample
     console.log('PERF ' + JSON.stringify({ ...size, ...Object.fromEntries(Object.entries(sample).filter(([key]) => key.endsWith('Ms'))) }))
     await writeFile(join(output, 'settlement-performance.json'), JSON.stringify(report.settlementPerformance, null, 2))
+    if (process.env.TAVERN_PERF_REQUIRE_LAZY === '1') {
+      assert.ok(!events.some(event => event.stage === 'full-read-miss'), 'settlement must not read the complete Chat')
+      const loads = events.filter(event => event.stage === 'settlement-history-load')
+      assert.ok(loads.length > 0, 'exercise native transaction reader')
+      assert.ok(loads.every(event => !event.full && event.count <= 512), 'normal settlement must keep history reads bounded')
+    }
     if (append && requireCompact) {
       const contexts = events.filter(event => event.stage === 'execution-context')
       assert.ok(contexts.length > 0 && contexts.every(event => event.compact && event.messages <= 5),

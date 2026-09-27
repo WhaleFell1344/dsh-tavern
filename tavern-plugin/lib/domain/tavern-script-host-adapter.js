@@ -47,6 +47,11 @@ export function createTavernScriptHostAdapter(options = {}) {
   const mutationTails = new Map()
   const settlementTransactions = new Map()
   const settlementReaders = new WeakMap()
+  async function ensureRows(chat, indices) { await settlementReaders.get(chat)?.ensure?.(indices) }
+  async function fullContext(chat) {
+    await ensureRows(chat)
+    return projectTavernHelperContext(chat)
+  }
   // One detached base, never writable or exposed to callers. Incremental storage
   // reads replace changed rows; cache eviction only costs a cold full read.
   let settlementBase = null
@@ -117,8 +122,8 @@ export function createTavernScriptHostAdapter(options = {}) {
     return Math.max(0, Number(chat && chat.tavernHelperLifecycleRevision) || 0) === Math.max(0, Number(expectedLifecycleRevision) || 0)
   }
 
-  function staleMutation(chat) {
-    return { updated: false, stale: true, context: projectTavernHelperContext(chat) }
+  async function staleMutation(chat) {
+    return { updated: false, stale: true, context: await fullContext(chat) }
   }
 
   async function resolveChat(sessionId) {
@@ -149,7 +154,7 @@ export function createTavernScriptHostAdapter(options = {}) {
     return transaction === undefined ? await resolveChat(sessionId) : transaction.draft
   }
 
-  function transactionResult(sessionId, target, multiple = false, eventId = '') {
+  async function transactionResult(sessionId, target, multiple = false, eventId = '') {
     const transaction = settlementTransactions.get(str(sessionId))
     assertTransactionEvent(transaction, eventId)
     if (transaction === undefined) return null
@@ -159,7 +164,7 @@ export function createTavernScriptHostAdapter(options = {}) {
       transactional: true,
       ...(multiple ? { targets: target } : { target }),
       ...(transaction.compact ? { contextDelta: projectMvuReceipt(transaction.work, multiple ? target : [target]) }
-        : { context: projectTavernHelperContext(transaction.draft) })
+        : { context: await fullContext(transaction.draft) })
     }
   }
 
@@ -168,8 +173,8 @@ export function createTavernScriptHostAdapter(options = {}) {
       const chat = await mutationChat(sessionId, eventId)
       await assertScriptEnabled(chat)
       if (!mutationIsCurrent(chat, expectedLifecycleRevision)) return staleMutation(chat)
-      if (!mutateScriptPrompts(chat, operation)) return { updated: false, context: projectTavernHelperContext(chat) }
-      const transactional = transactionResult(sessionId, { type: 'prompts' }, false, eventId)
+      if (!mutateScriptPrompts(chat, operation)) return { updated: false, context: await fullContext(chat) }
+      const transactional = await transactionResult(sessionId, { type: 'prompts' }, false, eventId)
       if (transactional !== null) return transactional
       let saved
       if (options.patchChat && Number.isSafeInteger(chat._storageRevision) && chat._storageRevision > 0) {
@@ -184,7 +189,7 @@ export function createTavernScriptHostAdapter(options = {}) {
         chat._storageRevision = saved._storageRevision
         chat.updatedAt = saved.updatedAt
       }
-      return { updated: true, context: projectTavernHelperContext(chat) }
+      return { updated: true, context: await fullContext(chat) }
     })
   }
 
@@ -264,9 +269,12 @@ export function createTavernScriptHostAdapter(options = {}) {
       && (scoped || (chat.messages || []).every(message => message && typeof message === 'object'))
     let patched = false
     const transaction = settlementTransactions.get(str(sessionId))
-    if (transaction && (!option?.type || option.type === 'message')) transaction.work.touch(option?.message_id)
+    if (transaction && (!option?.type || option.type === 'message')) {
+      await transaction.work.touchAsync(option?.message_id)
+      assertTransactionEvent(settlementTransactions.get(str(sessionId)), eventId)
+    }
     const updated = replaceTavernHelperVariables(chat, { option, variables })
-    const transactional = transactionResult(sessionId, updated, false, eventId)
+    const transactional = await transactionResult(sessionId, updated, false, eventId)
     if (transactional !== null) return transactional
     try {
       let saved
@@ -319,7 +327,7 @@ export function createTavernScriptHostAdapter(options = {}) {
         baseRevision, stateRevision: chat._storageRevision, ...changes
       } }
     }
-    return { updated: true, target: updated, context: projectTavernHelperContext(chat) }
+    return { updated: true, target: updated, context: await fullContext(chat) }
   }
 
   async function updateMessages(sessionId, messages, expectedLifecycleRevision, eventId) {
@@ -336,7 +344,11 @@ export function createTavernScriptHostAdapter(options = {}) {
       delete patch.message
       return patch
     })
-    if (transaction) for (const patch of patches) if (patch && typeof patch === 'object') transaction.work.touch(patch.message_id)
+    if (transaction) {
+      for (const patch of patches) if (patch && typeof patch === 'object') await transaction.work.touchAsync(patch.message_id)
+      if (chat.messages.length) await transaction.work.ensure([0])
+      assertTransactionEvent(settlementTransactions.get(str(sessionId)), eventId)
+    }
     const updated = replaceTavernHelperMessages(chat, patches)
     if (chat.mvu && chat.mvu.owner === 'official') {
       const opening = Array.isArray(chat.messages) ? chat.messages[0] : null
@@ -345,7 +357,7 @@ export function createTavernScriptHostAdapter(options = {}) {
         chat.mvu.openingInitialization = { version: 2, status: 'complete', completedAt: Date.now() }
       }
     }
-    const transactional = transactionResult(sessionId, updated, true, eventId)
+    const transactional = await transactionResult(sessionId, updated, true, eventId)
     if (transactional !== null) return transactional
     try { await options.writeChat(chat, { source: 'tavern-helper.messages' }) }
     catch (error) {
@@ -355,7 +367,7 @@ export function createTavernScriptHostAdapter(options = {}) {
       }
       throw error
     }
-    return { updated: true, targets: updated, context: projectTavernHelperContext(chat) }
+    return { updated: true, targets: updated, context: await fullContext(chat) }
   }
 
   async function createMessages(sessionId, messages, option, expectedLifecycleRevision, eventId) {
@@ -375,7 +387,7 @@ export function createTavernScriptHostAdapter(options = {}) {
       throw error
     }
     if (typeof options.publishCreatedMessages === 'function') await options.publishCreatedMessages(chat, created)
-    return { updated: true, targets: created, context: projectTavernHelperContext(chat) }
+    return { updated: true, targets: created, context: await fullContext(chat) }
   }
 
   async function worldbookRecord(sessionId, requestedName, template = false, suppliedChat, readOnly = false) {
@@ -493,7 +505,7 @@ export function createTavernScriptHostAdapter(options = {}) {
       return applyChatPluginData(latest, baselines, request)
     }, { source: 'tavern-helper.chat-plugin-data' })
     if (!saved) throw new Error('聊天已不存在，插件数据未保存')
-    return { updated: true, context: projectTavernHelperContext(saved) }
+    return { updated: true, context: await fullContext(saved) }
   }
 
   function assertTemplateChat(chat) {
@@ -650,6 +662,7 @@ export function createTavernScriptHostAdapter(options = {}) {
   async function context(sessionId, chatValue, transientUserText = '', indices) {
     const selected = !chatValue && !transientUserText && !indices ? await options.resolveHelperContext?.(sessionId) : undefined
     const chat = chatValue || selected?.chat || await resolveChat(sessionId)
+    await ensureRows(chat, transientUserText ? undefined : indices)
     const draft = { ...chat, messages: chat.messages || [] }
     const userText = str(transientUserText).trim()
     if (userText !== '') {
@@ -695,13 +708,14 @@ export function createTavernScriptHostAdapter(options = {}) {
     const operationId = str(input.operationId).trim()
     if (operationId === '') throw new Error('MVU 变量结算缺少 operationId')
     const expectedLifecycleRevision = Math.max(0, Number(input.expectedLifecycleRevision) || 0)
-    if (!mutationIsCurrent(current, expectedLifecycleRevision)) return { updated: false, stale: true, context: projectTavernHelperContext(current) }
+    if (!mutationIsCurrent(current, expectedLifecycleRevision)) return { updated: false, stale: true, context: await fullContext(current) }
     const messageId = Number(input.messageId)
     if (!Number.isInteger(messageId) || messageId < 0 || messageId >= current.messages.length) throw new Error('MVU 变量结算楼层不存在')
+    await ensureRows(current, [messageId])
     const message = current.messages[messageId]
     const swipeId = Number(input.swipeId)
     if (!Number.isInteger(swipeId) || swipeId < 0 || swipeId !== Math.max(0, Number(message.swipeId) || 0)) {
-      return { updated: false, stale: true, context: projectTavernHelperContext(current) }
+      return { updated: false, stale: true, context: await fullContext(current) }
     }
     const command = str(input.command).trim()
     if (command === '') throw new Error('MVU 变量结算命令为空')
@@ -714,11 +728,13 @@ export function createTavernScriptHostAdapter(options = {}) {
     const beforeDispatch = options.scriptDispatch.status?.(sessionId)
     if (beforeDispatch?.busy) {
       await record('runtime-deferred', { availability: beforeDispatch })
-      return { updated: false, deferred: true, deferredReason: 'runtime-busy', context: projectTavernHelperContext(current) }
+      return { updated: false, deferred: true, deferredReason: 'runtime-busy', context: await fullContext(current) }
     }
     const originalText = str((message.swipes && message.swipes[swipeId]) ?? message.sourceText ?? message.text)
     const eventId = 'mvu-work:' + randomUUID()
-    const work = createMvuWorkingCopy(current, eventId)
+    const work = createMvuWorkingCopy(current, eventId, {ensure: indices => ensureRows(current, indices)})
+    const reader = settlementReaders.get(current)
+    if (reader) settlementReaders.set(work.chat, reader)
     work.touch(messageId)
     const transaction = {
       work, compact: input.compactContext === true,
@@ -738,7 +754,7 @@ export function createTavernScriptHostAdapter(options = {}) {
       const internalText = str(input.storyText).trim() + '\n\n' + command
       const hasMvuSnapshot = value => value && value.stat_data !== undefined && value.schema !== undefined
       const indexedBase = settlementReaders.get(current)
-      let priorId = indexedBase ? indexedBase.previousMvu(messageId) : -1
+      let priorId = indexedBase ? await indexedBase.previousMvu(messageId) : -1
       for (let i=indexedBase ? -1 : messageId-1;i>=0;i--) {
         const row=current.messages[i]
         if (hasMvuSnapshot(row.variables?.[row.swipeId || 0])) { priorId=i; break }
@@ -795,7 +811,7 @@ export function createTavernScriptHostAdapter(options = {}) {
         await record('runtime-initialization-failed', { error })
         return { updated: false, rejected: true, retryable: false, validation,
           diagnostics: [{ kind: 'initialization', level: 'error', initializationFailed: true, message: error }],
-          context: projectTavernHelperContext(current) }
+          context: await fullContext(current) }
       }
       if (availability?.initializationError) return await initializationRejected(availability.initializationError)
       // MVU is a local capability of the chat. A temporarily absent browser
@@ -804,7 +820,7 @@ export function createTavernScriptHostAdapter(options = {}) {
       // it when the executor registers again.
       if (availability && availability.ready !== true) {
         await record('runtime-deferred', { availability })
-        return { updated: false, deferred: true, deferredReason: 'runtime-not-ready', context: projectTavernHelperContext(current) }
+        return { updated: false, deferred: true, deferredReason: 'runtime-not-ready', context: await fullContext(current) }
       }
       const dispatched = await options.scriptDispatch.dispatch(sessionId, 'MESSAGE_RECEIVED', [messageId], eventContext, { eventId: transaction.eventId, signal: input.signal, ...(lazy ? { contextForBaseline: executionContext } : {}) })
       await record('runtime-completed', { handled: dispatched.handled === true, timedOut: dispatched.timedOut === true, executionLost: dispatched.executionLost === true, claimTimedOut: dispatched.claimTimedOut === true, phase: dispatched.phase, disposed: dispatched.disposed === true, error: dispatched.error, diagnostics: dispatched.diagnostics || [] })
@@ -812,14 +828,14 @@ export function createTavernScriptHostAdapter(options = {}) {
         if (dispatched.initializationFailed === true) return await initializationRejected(str(dispatched.error))
         if (dispatched.unavailable === true || (input.durable === true && (dispatched.disposed === true || dispatched.timedOut === true || /超时|timed?\s*out|timeout/i.test(str(dispatched.error))))) {
           await record('runtime-deferred', { availability: options.scriptDispatch.status?.(sessionId) })
-          return { updated: false, deferred: true, deferredReason: dispatched.claimTimedOut === true ? 'claim-timeout' : 'delivery-interrupted', context: projectTavernHelperContext(current) }
+          return { updated: false, deferred: true, deferredReason: dispatched.claimTimedOut === true ? 'claim-timeout' : 'delivery-interrupted', context: await fullContext(current) }
         }
         if (str(dispatched.error).trim() !== '' && !dispatched.timedOut && !dispatched.disposed
           && !/超时|timed?\s*out|timeout/i.test(str(dispatched.error))) {
           const validation = { changes: [], sideEffects: [], failures: [{ message: str(dispatched.error) }] }
           await record('validation-rejected', { failures: validation.failures, externalEffects: transaction.externalEffects === true })
           return { updated: false, rejected: true, retryable: transaction.externalEffects !== true, retryAfterMs: MVU_RETRY_AFTER_MS,
-            validation, diagnostics: dispatched.diagnostics || [], context: projectTavernHelperContext(current) }
+            validation, diagnostics: dispatched.diagnostics || [], context: await fullContext(current) }
         }
         if (dispatched.timedOut === true) throw new Error('MVU 脚本执行回执超时，本轮结算未确认完成，请重试结算')
         if (dispatched.disposed === true) throw new Error('MVU 浏览器执行器已断开，本轮结算中断，请重试结算')
@@ -827,7 +843,7 @@ export function createTavernScriptHostAdapter(options = {}) {
       }
       const settled = transaction.draft.messages[messageId]
       if (!settled || Math.max(0, Number(settled.swipeId) || 0) !== swipeId) {
-        return { updated: false, stale: true, context: projectTavernHelperContext(current) }
+        return { updated: false, stale: true, context: await fullContext(current) }
       }
       if (!Array.isArray(settled.swipes)) settled.swipes = [originalText]
       settled.swipes[swipeId] = originalText
@@ -851,7 +867,7 @@ export function createTavernScriptHostAdapter(options = {}) {
         await record('validation-rejected', { failures: validation.failures, externalEffects: transaction.externalEffects === true })
         return {
           updated: false, rejected: true, retryable: transaction.externalEffects !== true, retryAfterMs: MVU_RETRY_AFTER_MS,
-          validation, diagnostics: dispatched.diagnostics || [], context: projectTavernHelperContext(current)
+          validation, diagnostics: dispatched.diagnostics || [], context: await fullContext(current)
         }
       }
       // The browser event can take time; recheck the target before committing its draft.
@@ -863,7 +879,7 @@ export function createTavernScriptHostAdapter(options = {}) {
         operationId, chatId: current.id, sessionId,
         branchId: input.branchId, basedOnRevision: input.basedOnRevision,
         expectedLifecycleRevision, messageId, swipeId,
-        before: current, after: transaction.draft, messageIndices: work.dirty
+        before: current, after: transaction.draft, messageIndices: work.dirty, guardChanges: Boolean(reader?.ensure)
       })
       await record('prepared', { mutations: transaction.mutations })
       return {
@@ -875,7 +891,7 @@ export function createTavernScriptHostAdapter(options = {}) {
         swipeId,
         effect,
         variables: structuredClone(afterVariables),
-        ...(input.compactResult === true ? {} : { context: projectTavernHelperContext(transaction.draft) })
+        ...(input.compactResult === true ? {} : { context: await fullContext(transaction.draft) })
       }
     } catch (error) {
       await record('runtime-or-persistence-failed', { error: str(error && error.message || error) })

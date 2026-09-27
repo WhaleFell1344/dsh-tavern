@@ -104,6 +104,12 @@ Host 中管理酒馆脚本工作的排队、offer、显式 start、可续租执�
 
 酒馆脚本运行模块完成一次 MVU 结算后返回的、绑定 Background Operation 与 Story Timeline 版本的纯数据效果。它在浏览器执行阶段不写入 Chat；只有对应正文仍是当前 branch/revision 时，Background Task Coordinator 才提交变量效果与 Settlement Receipt。正文 checkpoint 与 revision 已在 Foreground Turn 成功时独立提交。中文正式名称为“MVU 结算效果”。
 
+## MVU Transaction History
+
+原生分页存档中，MVU 工作副本固定一个不可变存档版本，只加载实际访问的楼层。异步宿主边界先确保楼层已加载，内部同步数组视图保留完整长度与绝对下标；未加载楼层不能被当作不存在。首次修改复制该楼层，事务覆盖层优先于固定版本的历史，提交只包含明确修改的楼层和头部字段。显式完整上下文请求仍可读取全部历史。原生消息摘要保存 MVU 快照标记，旧摘要缺失标记时按需检查变量形状。
+
+原生存储随 head CAS 发布版本变更清单，Helper 可在不建立整档缓存的情况下交接增量上下文。变更覆盖缺失或超过查询窗口时保留完整恢复语义。新原生 MVU 效果同时保存修改字段的旧值，提交先检查字段冲突，再应用全部修改；既有剧情版本、生命周期和 swipe 校验继续生效。
+
 ## MVU Settlement Reconciler
 
 把持久化的 pendingSubmission 与当前酒馆脚本运行时状态重新协调的 Host Module。它在服务启动时扫描，在 Session Signal 唤醒时复查，并对瞬时读取或调度失败自动退避重试；pendingSubmission 才是待接续事实，浏览器就绪与 Signal 都只是触发复查的提示。中文正式名称为“MVU 结算协调器”。

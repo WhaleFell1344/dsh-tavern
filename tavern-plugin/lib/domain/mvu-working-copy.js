@@ -2,21 +2,32 @@ import { createScopedMessages } from './scoped-messages.js'
 import { projectTavernHelperMessage } from './tavern-helper-context.js'
 
 // The base is a private, detached read. Never hand its shared rows to a writer.
-export function createMvuWorkingCopy(base, eventId) {
+export function createMvuWorkingCopy(base, eventId, {ensure = async () => {}} = {}) {
   const chat = { ...base, messages: createScopedMessages((base.messages || []).length, [], id => base.messages[id]) }
   for (const key of ['variables', 'mvu', 'tavernScriptPrompts', 'tavernHelperScriptVariables', 'macroState']) {
     if (base[key] !== undefined) chat[key] = structuredClone(base[key])
   }
   const dirty = new Set()
-  return { chat, eventId, sequence: 0, dirty,
+  const indexOf = value => {
+    const raw = value === undefined || value === null || value === 'latest' ? -1 : Number(value)
+    const index = raw < 0 ? chat.messages.length + raw : raw
+    if (!Number.isInteger(index) || index < 0 || index >= chat.messages.length) throw new Error('消息楼层不存在: ' + value)
+    return index
+  }
+  const work = { chat, eventId, sequence: 0, dirty, ensure,
+    async touchAsync(value) {
+      const index = indexOf(value)
+      await ensure([index])
+      return work.touch(index)
+    },
     touch(value) {
-      const raw = value === undefined || value === null || value === 'latest' ? -1 : Number(value)
-      const index = raw < 0 ? chat.messages.length + raw : raw
+      const index = indexOf(value)
       if (!Number.isInteger(index) || !chat.messages[index]) throw new Error('消息楼层不存在: ' + value)
       if (!dirty.has(index)) { chat.messages[index] = structuredClone(chat.messages[index]); dirty.add(index) }
       return chat.messages[index]
     }
   }
+  return work
 }
 
 export function projectMvuReceipt(work, targets) {

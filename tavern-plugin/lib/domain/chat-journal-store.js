@@ -589,6 +589,8 @@ export function createChatJournalStore(options = {}) {
   // Trusted settlement input: immutable revision-bound index, detached header,
   // and lazily detached rows. No writable storage-cache object escapes.
   async function readSettlementBase(chatId) {
+    const selected = await native.readSettlementBase(chatId)
+    if (selected !== null) return selected
     const state = await cachedState(chatId)
     if (!state || !Array.isArray(state.chat.messages)) return undefined
     const source = indexedMessages.from(state.chat.messages)
@@ -657,11 +659,15 @@ export function createChatJournalStore(options = {}) {
     return readCache.get(chatId)?.stamp === metadata.stamp ? null : metadata
   }
   async function readChangedIndices(chatId, revision) {
+    const selected = await native.readChangedSlice(chatId, revision, undefined, true)
+    if (selected !== null) return selected
     const metadata = await missingNativeCoverage(chatId)
     if (metadata) return revision === metadata.revision ? {indices:[],baseRevision:revision,revision} : undefined
     return changedIndices(chatId, await cachedState(chatId), revision)
   }
   async function readChangedSlice(chatId, revision, fields) {
+    const selected = await native.readChangedSlice(chatId, revision, fields)
+    if (selected !== null) return selected
     if (await missingNativeCoverage(chatId)) return undefined
     const state = await cachedState(chatId)
     if (revision === state?.revision) return undefined

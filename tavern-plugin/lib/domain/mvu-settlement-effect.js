@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import { applyJsonChangesShared, diffJson } from './json-mutation.js'
 
 function str(value) {
@@ -28,6 +29,15 @@ function assertIdentity(chat, effect) {
   }
 }
 
+function valueAt(chat,path) {
+  let value=chat
+  for(const key of path){
+    if(value===null||typeof value!=='object'||!(Array.isArray(value) ? key in value : Object.prototype.hasOwnProperty.call(value,key)))return {present:false}
+    value=value[key]
+  }
+  return {present:true,value}
+}
+
 /** Create a serializable, operation-scoped effect without persisting Chat state. */
 export function createMvuSettlementEffect(input = {}) {
   // The caller owns the draft and declares every touched floor. Do not scan
@@ -47,6 +57,7 @@ export function createMvuSettlementEffect(input = {}) {
     expectedLifecycleRevision: Math.max(0, Number(input.expectedLifecycleRevision) || 0),
     messageId: Number(input.messageId),
     swipeId: Number(input.swipeId),
+    ...(input.guardChanges ? {expected:changes.map(change=>structuredClone(valueAt(input.before,change.path)))} : {}),
     changes: structuredClone(changes)
   }
 }
@@ -54,6 +65,14 @@ export function createMvuSettlementEffect(input = {}) {
 /** Apply one effect at the Story Timeline commit seam while preserving unrelated projections. */
 export function applyMvuSettlementEffect(chat, effect, scope) {
   assertIdentity(chat, effect)
+  if(effect.expected){
+    if(!Array.isArray(effect.expected)||effect.expected.length!==effect.changes.length)throw new Error('Invalid MVU conflict guards')
+    for(let i=0;i<effect.changes.length;i++)if(!isDeepStrictEqual(valueAt(chat,effect.changes[i].path),effect.expected[i])){
+      const error=new Error('MVU 结算期间目标字段已变化，拒绝覆盖并发修改')
+      error.code='STALE_SETTLEMENT_EFFECT'
+      throw error
+    }
+  }
   const changes = effect.changes.filter(change => ALLOWED_ROOTS.has(String(change.path?.[0])))
   if (Array.isArray(scope?.messageIndices)) {
     const allowed = new Set(scope.messageIndices)
