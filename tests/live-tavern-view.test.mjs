@@ -555,3 +555,24 @@ test('脚本会话在 messagesPending 期间不同步 execution', async () => {
   assert.match(source, /hydrateTavernHelperMessages/)
   assert.match(source, /wait for hydration before scripts/)
 })
+
+test('opening window publishes recent content before full compatibility hydration even without Helper', async () => {
+  const timers = fakeTimers(), seen = []
+  let finish
+  const full = new Promise(resolve => { finish = resolve })
+  const module = createLiveTavernViewModule({
+    load: async () => ({view:{historyWindow:{from:100,to:147,messageCount:148},text:'recent'}}),
+    hydrateHelperMessages: async () => full,
+    shouldPoll: () => false, pollWhileBusy:false,
+    schedule:timers.schedule,cancel:timers.cancel
+  })
+  const stop = module.subscribe('window-no-helper', state => { if(state.phase==='ready')seen.push(state.view) })
+  await timers.runNext()
+  assert.equal(seen.at(-1).text,'recent')
+  assert.ok(seen.at(-1).historyWindow)
+  finish({text:'complete'})
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(seen.at(-1).text,'complete')
+  assert.equal(seen.at(-1).historyWindow,undefined)
+  stop()
+})

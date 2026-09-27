@@ -26,7 +26,7 @@ function canProjectDirty(previous, chat, indices) {
 /** Own snapshot selection, projection cache and transport revision pairing.
  * Projections consume detached inputs; callers never receive a partial Chat.
  */
-export function createSessionViewReader({ readState, readChat, readChanges, readViewDelta, project, activity,
+export function createSessionViewReader({ readState, readChat, readChanges, readViewDelta, readOpeningWindow, project, activity,
   trace, foregroundRunning, synchronize, resourceVersion = async () => '' }) {
   const cache = new Map()
   const helperWindows = new Map()
@@ -108,9 +108,19 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
   async function read(sessionId, options) { return (await load(sessionId, options)).view }
   async function response(args = {}) {
     const sessionId = args.sessionId
+    // An explicit first-paint projection has its own contract and never enters
+    // the complete view cache. Full/script consumers keep the existing path.
+    if (args.openingWindow === 1 && args.viewSync === 1 && !args.viewCursor && args.fullView !== true && readOpeningWindow && project.opening) {
+      const window = await trace.stage('readOpeningWindow', () => readOpeningWindow(sessionId))
+      if (window) {
+        const view = await trace.stage('projectOpeningWindow', () => project.opening(window))
+        trace.state({viewRebuild:'window',helperMessageCount:window.chat.messages.length})
+        return synchronize(String(sessionId),view,args.viewCursor,{revision:window.revision,receiptSync:args.receiptSync})
+      }
+    }
     const previous = args.viewSync === 1 ? synchronize.peek?.(args.viewCursor) : null
     const result = await load(sessionId, {
-      windowHelperMessages: args.viewSync === 1 && (args.viewCursor === undefined || args.viewCursor === null || args.viewCursor === '')
+      windowHelperMessages: args.fullView !== true && args.viewSync === 1 && (args.viewCursor === undefined || args.viewCursor === null || args.viewCursor === '')
     })
     if (args.viewSync !== 1) return { view: result.view }
     const dirtyMessageIndices = result.chat && previous?.sessionId === String(sessionId)

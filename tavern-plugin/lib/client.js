@@ -1064,7 +1064,7 @@ window.__ModuleLoader__.load({
 			if (trace) payload._traceId = trace.id;
 			if (sessionId) payload.sessionId = sessionId;
 			const viewRead = method === "getSession" ? beginSessionViewRead(payload.sessionId) : null;
-			if (viewRead) { payload.viewSync = 1; payload.viewCursor = viewRead.cursor; if (viewRead.receiptSync) payload.receiptSync = 1; }
+			if (viewRead) { payload.viewSync = 1; payload.openingWindow = 1; payload.viewCursor = viewRead.cursor; if (viewRead.receiptSync) payload.receiptSync = 1; }
 			const requestBody = JSON.stringify(payload);
 			if (trace) {
 				try { trace.requestBytes = typeof TextEncoder === "function" ? new TextEncoder().encode(requestBody).length : requestBody.length; }
@@ -1100,7 +1100,8 @@ window.__ModuleLoader__.load({
 					if (typeof result?.errorCode === "string" && result.errorCode) error.code = result.errorCode;
 					throw error;
 				}
-				return viewRead ? viewRead.accept(result) : result;
+				const accepted = viewRead ? viewRead.accept(result) : result;
+                return accepted.view && accepted.view.historyWindow ? {...accepted,view:expandTavernOpeningWindow(accepted.view)} : accepted;
 			}).catch(function (error) {
                 if (trace) trace.failed = true;
 				if (method === "generateSceneImage") recordImageInteraction(payload.sessionId, payload.turn, payload.requestId, "failed", "rpc-error");
@@ -1465,7 +1466,7 @@ window.__ModuleLoader__.load({
 					}
 					if (shouldPoll(view)) record.optimisticBusy = false;
 					publish(record, { phase: "ready", view: view, error: "", updatedAt: Date.now() }, result);
-					if (view && view.tavernHelper && view.tavernHelper.messagesPending && typeof options.hydrateHelperMessages === "function") {
+					if (view && (view.historyWindow || view.tavernHelper && view.tavernHelper.messagesPending) && typeof options.hydrateHelperMessages === "function") {
 						try {
 							view = await options.hydrateHelperMessages(record.id, view) || view;
 							if (records.get(record.id) !== record) return;
@@ -1603,6 +1604,14 @@ window.__ModuleLoader__.load({
 			return /^人物卡不存在:\s*/.test(String(value && value.message || value || ""));
 		}
 
+        function expandTavernOpeningWindow(view) {
+            const range=view && view.historyWindow, helper=view && view.tavernHelper;
+            if (!range || !helper || !Array.isArray(helper.messages)) return view;
+            const messages=Array.from({length:range.messageCount},function (_,message_id) { return {message_id:message_id,stub:true}; });
+            for (const row of helper.messages) messages[row.message_id]=row;
+            return {...view,tavernHelper:{...helper,messages:messages}};
+        }
+
 		function applyTavernHelperMessageHydration(view, payload) {
 			if (!view || !view.tavernHelper || !Array.isArray(view.tavernHelper.messages) || !payload || !Array.isArray(payload.messages)) return view;
 			const messages = view.tavernHelper.messages.slice();
@@ -1617,6 +1626,10 @@ window.__ModuleLoader__.load({
 		}
 
 		async function hydrateLiveTavernHelperMessages(sessionId, view) {
+            // First paint is independent of compatibility/history preparation.
+            // A window must not be promoted to a complete view by filling only
+            // Helper rows: historical display projections need their full read.
+            if (view && view.historyWindow) return (await rpc("getSession", {fullView:true}, sessionId)).view;
 			const pending = view && view.tavernHelper && view.tavernHelper.messagesPending;
 			if (!pending) return view;
 			const payload = await rpc("hydrateTavernHelperMessages", {
@@ -6100,6 +6113,25 @@ window.__ModuleLoader__.load({
 			}
 		}
 
+        // The parent sends the latest complete context after iframe load. Keep
+        // archive data out of executable srcdoc and install the facade before
+        // companion modules can continue past their existing readiness gate.
+        function startTavernHelperFromMessage(metadata, bootstrap) {
+            window.__dshTavernHelperReady = new Promise(function (resolve, reject) {
+                function receive(event) {
+                    const data = event && event.data;
+                    if (event.source !== parent || !data || data.token !== metadata.token || data.type !== "dsh-tavern-helper-context") return;
+                    window.removeEventListener("message", receive);
+                    try { bootstrap(data.context); resolve(window.__dshTavernHelperReady); }
+                    catch (error) {
+                        parent.postMessage({type:"dsh-tavern-helper-bootstrap-failed",token:metadata.token,message:String(error && error.message || error)},"*");
+                        reject(error);
+                    }
+                }
+                window.addEventListener("message", receive);
+            });
+        }
+
 		function buildTavernHelperScriptParts(input) {
 			const scripts = Array.isArray(input && input.scripts)
 				? input.scripts
@@ -6119,8 +6151,8 @@ window.__ModuleLoader__.load({
 			};
 			const context = input && input.context && typeof input.context === "object" ? input.context : {};
 			const safeMetadata = JSON.stringify(metadata).replace(/</g, "\\u003c");
-			const safeContext = JSON.stringify(context).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
-			const bootstrap = '(' + tavernHelperScriptBootstrap.toString() + ')(' + safeMetadata + ',' + safeContext + ',{'
+			const safeContext = input && input.deferContext === true ? "initialContext" : JSON.stringify(context).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+			let bootstrap = '(' + tavernHelperScriptBootstrap.toString() + ')(' + safeMetadata + ',' + safeContext + ',{'
 				+ 'createInitializationTiming:' + createTavernInitializationTiming.toString() + ','
 				+ 'createTransport:' + createTavernHelperTransport.toString() + ','
                 + 'createIndexedArrayApi:' + createIndexedArrayApi.toString() + ','
@@ -6133,6 +6165,7 @@ window.__ModuleLoader__.load({
 				+ 'createChatData:' + createTavernChatDataFacade.toString() + ','
                 + 'createLocalVariables:' + createTavernLocalVariables.toString() + ','
 				+ 'installFacade:' + installTavernHelperFacade.toString() + '});';
+            if (input && input.deferContext === true) bootstrap = '(' + startTavernHelperFromMessage.toString() + ')(' + safeMetadata + ',function(initialContext){' + bootstrap + '});';
 			const modules = scripts.map(function (script) {
 				return { id: String(script && script.id || ""), system: String(script && script.system || ""), assetUrl: String(script && script.assetUrl || ""), content: String(script && script.content || "") };
 			});
@@ -6566,7 +6599,7 @@ window.__ModuleLoader__.load({
 				frame.title = "人物卡共享脚本沙箱";
 				if (!trustedCardMode) frame.sandbox = "allow-scripts";
 				frame.referrerPolicy = "no-referrer";
-				frame.srcdoc = buildTavernHelperScriptDocument({ token: record.token, scripts: scripts, context: context, trustedCardMode: trustedCardMode });
+				frame.srcdoc = buildTavernHelperScriptDocument({ token: record.token, scripts: scripts, context: context, trustedCardMode: trustedCardMode, deferContext: true });
 				frame.addEventListener("load", function () {
 					if (records.get(record.id) !== record) return;
 					record.loaded = true;
@@ -7451,7 +7484,7 @@ window.__ModuleLoader__.load({
 				if (state && state.phase === "ready") {
 					const view = state.view || {};
 					// Cold getSession may ship stub Helper floors; wait for hydration before scripts.
-					if (view.tavernHelper && view.tavernHelper.messagesPending) {
+					if (view.historyWindow || view.tavernHelper && view.tavernHelper.messagesPending) {
 						retire(record);
 						return;
 					}
@@ -14931,6 +14964,8 @@ window.__ModuleLoader__.load({
 		exports.createTavernInitializationTiming = createTavernInitializationTiming;
 		exports.createTavernHelperEventBus = createTavernHelperEventBus;
 		exports.buildTavernHelperScriptDocument = buildTavernHelperScriptDocument;
+        exports.startTavernHelperFromMessage = startTavernHelperFromMessage;
+        exports.expandTavernOpeningWindow = expandTavernOpeningWindow;
 		exports.createTavernHostStylesheetBridge = createTavernHostStylesheetBridge;
 		exports.createTavernPanelRegistry = createTavernPanelRegistry;
 		exports.createTavernCardAppPresence = createTavernCardAppPresence;

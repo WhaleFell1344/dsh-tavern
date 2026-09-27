@@ -1760,3 +1760,38 @@ test('保留多个正式会话时，parent.Mvu 随当前会话切换而不是最
   releaseB(); assert.equal(host.Mvu, a.Mvu)
   releaseA(); assert.equal(host.Mvu, undefined)
 })
+
+test('deferred Helper iframe keeps large context out of executable HTML',()=>{
+ const context={messages:[{message:'unique-large-history-payload'.repeat(20000)}]}
+ const small=client.buildTavernHelperScriptDocument({token:'deferred',scripts:[],context:{messages:[]},deferContext:true})
+ const large=client.buildTavernHelperScriptDocument({token:'deferred',scripts:[],context,deferContext:true})
+ assert.equal(large.length,small.length,'history must travel once through structured clone, not JS source')
+ assert.doesNotMatch(large,/unique-large-history-payload/)
+})
+
+test('deferred Helper starts once with authenticated complete context and waits for dependencies',async()=>{
+ const listeners=new Set(),parent={postMessage(){}}
+ const window={addEventListener(_kind,fn){listeners.add(fn)},removeEventListener(_kind,fn){listeners.delete(fn)}}
+ const start=vm.runInNewContext('('+client.startTavernHelperFromMessage.toString()+')',{window,parent,Promise})
+ let calls=0,received,finish
+ start({token:'t'},context=>{calls++;received=context;window.__dshTavernHelperReady=new Promise(resolve=>{finish=resolve})})
+ const ready=window.__dshTavernHelperReady,receive=[...listeners][0],context={messages:[{message_id:0,message:'old'},{message_id:9999,message:'latest'}]}
+ receive({source:{},data:{type:'dsh-tavern-helper-context',token:'t',context}})
+ receive({source:parent,data:{type:'dsh-tavern-helper-context',token:'wrong',context}})
+ assert.equal(calls,0)
+ receive({source:parent,data:{type:'dsh-tavern-helper-context',token:'t',context}})
+ assert.equal(calls,1);assert.equal(received,context);assert.equal(listeners.size,0)
+ let settled=false;ready.then(()=>{settled=true});await Promise.resolve();assert.equal(settled,false)
+ finish(true);assert.equal(await ready,true)
+})
+
+test('opening wire window expands absolute Helper ids without mutating the transport baseline',()=>{
+ const input={historyWindow:{from:9998,to:9999,messageCount:10000,revision:2},tavernHelper:{stateRevision:2,messages:[{message_id:9998,message:'one'},{message_id:9999,message:'two'}],messagesPending:{from:0,to:9997}}}
+ const view=client.expandTavernOpeningWindow(input)
+ assert.equal(input.tavernHelper.messages.length,2)
+ assert.equal(view.tavernHelper.messages.length,10000)
+ assert.equal(view.tavernHelper.messages[9998].message,'one')
+ assert.equal(view.tavernHelper.messages[0].stub,true)
+ assert.equal(view.tavernHelper.messages[0].message_id,0)
+ assert.equal(client.expandTavernOpeningWindow({tavernHelper:null}).tavernHelper,null)
+})

@@ -489,6 +489,8 @@ export function createChatJournalStore(options = {}) {
     const state = await cachedState(chatId)
     return state ? copyJsonTree(state.chat) : undefined
   }
+  // Native-only opt-in. Null keeps legacy readers on their complete contract.
+  async function readWindow(chatId,options) { return native.readWindow(chatId,options) }
   async function readHelperContext(chatId, range) {
     const selected = await native.readHelperContext(chatId, range)
     if (selected !== null) return selected
@@ -954,5 +956,5 @@ export function createChatJournalStore(options = {}) {
 
   // update() owns both boundaries: updater drafts and returned values are
   // detached from cached state and from each other, including aborted writes.
-  return Object.freeze({ detachedUpdate: true, migrateCompatibility, restoreLegacy, read, readHelperContext, readSessionState, readSceneImageState, readSettlementCheckpoint, readBackgroundConfig, readDisplayRuntimeState, flushMaintenance, prepareSnapshot, readSlice, readSettlementBase, readChangedSlice, readChangedIndices, readViewDelta, patch, readRevision, update, version, remove })
+  return Object.freeze({ detachedUpdate: true, migrateCompatibility, restoreLegacy, read, readWindow, readHelperContext, readSessionState, readSceneImageState, readSettlementCheckpoint, readBackgroundConfig, readDisplayRuntimeState, flushMaintenance, prepareSnapshot, readSlice, readSettlementBase, readChangedSlice, readChangedIndices, readViewDelta, patch, readRevision, update, version, remove })
 }

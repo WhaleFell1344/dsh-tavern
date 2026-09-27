@@ -58,10 +58,13 @@ async function savedChat() {
   return games[0]
 }
 async function assertNativeStorage() {
-  const chat=await savedChat()
+  let chat=await savedChat()
   const pages=createConversationPageStore({root:join(data,'chats')})
   const domain=createConversationState({store:pages})
   const view=await domain.open(chat.id,{limit:2})
+  // Display maintenance can commit between these reads. Compare both formats
+  // at the immutable revision selected by the domain, not two different heads.
+  if(chat._storageRevision!==view.state.chatRevision)chat=await createChatJournalStore({dataRoot:data}).readRevision(chat.id,view.state.chatRevision)
   assert.equal(view.metadata.format,'conversation-state-v2')
   assert.equal(view.metadata.settings.runtimeLayout,1)
   assert.equal(view.messageCount,chat.messages.length)
@@ -172,6 +175,8 @@ try {
           TAVERN_E2E_COMPACTION_DIR: compactionScenario ? output : '',
           TAVERN_E2E_RECOVERY_DIR: recoveryScenario ? output : '',
           TAVERN_E2E_PERFORMANCE_DIR: process.argv.includes('--settlement-performance') ? output : '',
+          TAVERN_PERF_HISTORY_READY: process.env.TAVERN_PERF_HISTORY_READY || '',
+          TAVERN_PERF_BODY_REPEATS: process.env.TAVERN_PERF_BODY_REPEATS || '',
           TAVERN_E2E_BACKGROUND_DIR: process.argv.includes('--background-lifecycle') ? output : '',
           TAVERN_E2E_REQUEST_AUDIT: join(output, 'preset-requests.jsonl'),
           TAVERN_E2E_MEMORY_AUDIT: process.argv.includes('--card-memory') ? join(output, 'memory-requests.jsonl') : '',
@@ -212,9 +217,10 @@ try {
       await history.filter({visible:true}).or(sidebarToggle.filter({visible:true})).first().waitFor()
       if (!await history.isVisible()) await sidebarToggle.click()
       await history.click()
+      const openSessionStarted=Date.now()
       await page.locator('.dsh-tavern-side-row-name').first().click()
       await openStatus()
-      return {bootMs,openStarted}
+      return {bootMs,openStarted,openSessionStarted}
     }
     browser = await chromium.launch({ headless: true })
     context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, ...(recoveryScenario ? { hasTouch: true } : {}) })
@@ -291,7 +297,7 @@ try {
       await cpuProfiler.send('Profiler.setSamplingInterval',{interval:10000})
       await cpuProfiler.send('Profiler.start')
     }
-    await settlementPerformanceChecks({page,step,savedChat,output,report,restartServer,root,data,readLog:()=>log})
+    await settlementPerformanceChecks({page,step,savedChat,output,report,restartServer,root,data,runtime,readLog:()=>log})
   } else if (process.argv.includes('--mvu-incremental')) {
     await incrementalMvuChecks({page,step,savedChat,output,report,restartServer})
   } else if (process.argv.includes('--background-lifecycle')) {

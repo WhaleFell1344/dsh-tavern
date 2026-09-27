@@ -1436,7 +1436,7 @@ export async function apply(ctx) {
   const inputFieldsProjection = createInputFieldsProjection()
   const incrementalReplyView = createIncrementalReplyView({ readChanges: (id, revision) => chatPersistence.readChangedSlice(id, revision, 'settlement') })
   async function view(chat, card, persistedProjection = false, options = {}) {
-    scheduleTemplateSync(chat)
+    if (!options.openingWindow) scheduleTemplateSync(chat)
     const runtimeSettings = await requestPerformance.stage('settings', () => readTavernSettings())
     let scriptProgress = null
     if ((chat.mode || 'story') === 'script') {
@@ -1744,8 +1744,36 @@ export async function apply(ctx) {
     if (mode === 'script') result.scriptPreview = await requestPerformance.stage('scriptPreview', () => scriptPreviewOf(chat))
     return result
   }
+  async function readOpeningWindow(sessionId) {
+    const chatId = (await readSessionMap())[str(sessionId)]
+    if (!chatId) return null
+    const window = await chatPersistence.readWindow(chatId,{limit:HELPER_MESSAGE_COLD_WINDOW})
+    if (!window || window.from===0 || window.chat.sessionId!==sessionId
+      || window.chat.backgroundConfigVersion!==1 || window.chat.conversationFeaturesVersion!==1
+      || !['story','script'].includes(window.chat.mode || 'story')
+      || window.chat.messages.some(message=>message.role==='assistant' && !Number.isSafeInteger(message.turn))) return null
+    return window
+  }
+  async function projectOpeningWindow(window) {
+    // Disable revision caches for this partial input. It must never replace a
+    // full history projection or be used as an editable Chat baseline.
+    const chat={...window.chat,_storageRevision:undefined}
+    const card=await readChatCard(chat)
+    const result=await view(chat,card,false,{openingWindow:true})
+    result.historyWindow={from:window.from,to:window.to,messageCount:window.messageCount,revision:window.revision}
+    if(result.tavernHelper){
+      const helper=result.tavernHelper
+      // Transport only loaded rows; the client adapts absolute ids at the
+      // legacy synchronous Helper boundary without sending N placeholders.
+      const messages=helper.messages.map((row,index)=>({...row,message_id:window.from+index}))
+      result.tavernHelper={...helper,stateRevision:window.revision,messages,
+        turnMessageIds:Object.fromEntries(Object.entries(helper.turnMessageIds).map(([turn,index])=>[turn,window.from+index])),
+        messagesPending:{from:0,to:window.from-1}}
+    }
+    return result
+  }
   const sessionViews = createSessionViewReader({
-    readState: sessionStateForSession, readChat: chatForSession,
+    readState: sessionStateForSession, readChat: chatForSession, readOpeningWindow,
     resourceVersion: async chat => {
       if (!chat.cardPath || chat.mode === 'card') return ''
       const binding = await fileResources.worldBookBindingForCard(chat.cardPath)
@@ -1756,7 +1784,7 @@ export async function apply(ctx) {
     },
     readChanges: chatPersistence.readChangedIndices,
     readViewDelta: chatPersistence.readViewDelta,
-    project: { cached: projectCachedSessionView, dirty: projectDirtySessionView, full: projectFullSessionView },
+    project: { cached: projectCachedSessionView, dirty: projectDirtySessionView, full: projectFullSessionView, opening:projectOpeningWindow },
     activity: chat => backgroundTasks.activity(chat), trace: requestPerformance,
     foregroundRunning: sessionId => agentRegistry.get(str(sessionId))?.phase?.kind === 'running',
     synchronize: createSessionViewSync()
@@ -2937,10 +2965,19 @@ export async function apply(ctx) {
     for (const row of recoveredIndex.chats || []) {
       try { await recoverRegeneration(row.id) }
       catch (error) { console.error('dsh-tavern: 恢复正文重新生成失败', row.id, error?.message || error) }
-      const chat = await readChat(row.id)
+      // Startup needs header metadata, not every historical message. The window
+      // is read-only: only materialize a writable Chat when legacy migration is
+      // actually eligible. Never write this partial projection back to storage.
+      const window = await chatPersistence.readWindow(row.id, { limit: 1, includeCheckpoints: true })
+      let chat = window ? window.chat : await readChat(row.id)
       if (chat === undefined) continue
       activeChatIds.push(row.id)
-      try { if (await presetLibrary.migrateChat(chat)) await writeChat(chat) } catch (error) { console.warn('dsh-tavern: 旧对话预设条目配置迁移失败', chat.id, error) }
+      try {
+        if (str(chat.bypassPlanId) === '' && (str(chat.runtimePresetPath) || str(chat.runtimePresetSnapshot?.presetPath))) {
+          if (window) chat = await readChat(row.id)
+          if (await presetLibrary.migrateChat(chat)) await writeChat(chat)
+        }
+      } catch (error) { console.warn('dsh-tavern: 旧对话预设条目配置迁移失败', chat.id, error) }
       await syncChatSummary(chat)
     }
     await foregroundHandoff.recover(activeChatIds)

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { readFile, writeFile, readdir, rm } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
+import {pathToFileURL} from 'node:url'
 import { createChatJournalStore } from '../../tavern-plugin/lib/domain/chat-journal-store.js'
 import { createChatPersistence } from '../../tavern-plugin/lib/domain/chat-persistence.js'
-import { encodeMigratedSessionLog, parseSessionLog } from '../../tavern-plugin/lib/domain/legacy-session-migration.js'
+import { encodeMigratedSessionLog, encodeCurrentGeneration, parseSessionLog } from '../../tavern-plugin/lib/domain/legacy-session-migration.js'
 
 // Avoid Playwright's iframe element preview: a srcdoc containing a complete
 // compatibility context can be hundreds of MB and preview formatting dominates
@@ -21,7 +22,7 @@ export function settlementPerformanceInitialVariables() {
   return state
 }
 
-export async function settlementPerformanceChecks({ page, step, savedChat, output, report, restartServer, root, data, readLog }) {
+export async function settlementPerformanceChecks({ page, step, savedChat, output, report, restartServer, root, data, readLog, runtime }) {
   const rounds = Number(process.env.TAVERN_PERF_ROUNDS || 1000)
   const fields = Number(process.env.TAVERN_PERF_FIELDS || 20)
   const runs = Number(process.env.TAVERN_PERF_RUNS || 5)
@@ -47,11 +48,24 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
   const chatId = fixture.id
   let size
   report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + active storage + React; synthetic history, fixed model; tracing disabled', requireCompact, size: { rounds, fields }, samples: [] }
+  let firstWindow
+  const observeWindow=async response=>{
+    if(firstWindow||!response.url().endsWith('/api/dsh-tavern/getSession'))return
+    const body=await response.text().catch(()=>null)
+    if(!body)return
+    let payload;try{payload=JSON.parse(body)}catch{return}
+    if(!payload.view?.historyWindow)return
+    firstWindow={...payload.view.historyWindow,responseAt:Date.now(),bytes:Buffer.byteLength(body)}
+    report.settlementPerformance.firstWindow=firstWindow
+    await page.waitForFunction(()=>document.body?.innerText.includes('这是性能测试的合成剧情'),null,{timeout:15000}).then(()=>{firstWindow.bodyVisibleAt=Date.now()},()=>{})
+  }
+  page.on('response',observeWindow)
   await step(`构造 ${rounds} 轮隔离长档并重新打开`, async () => {
     const reopening = await restartServer(async () => {
       const next = structuredClone(fixture), greeting = next.messages[0], user = next.messages.find(m => m.role === 'user'), assistant = next.messages.at(-1)
       const state = structuredClone(assistant.variables[0])
       assert.equal(Object.keys(state.stat_data).length, fields + 1, 'large variable schema must come from real card initialization')
+      if(historyReady)assert.ok(assistant.text.includes('这是性能测试的合成剧情，不对应真实存档。'.repeat(bodyRepeats)),'ready fixture must use actual long model output, not a short body mislabeled with bodyRepeats')
       const body = historyReady ? assistant.text : '这是性能测试的合成剧情，不对应真实存档。'.repeat(bodyRepeats) + '\n\n<StatusPlaceHolderImpl/>'
       const userBody = turn => historyReady ? user.text : '性能测试输入 ' + turn
       next.messages = [{ ...greeting, variables: [structuredClone(state)] }]
@@ -86,8 +100,20 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
         const path = join(sessions, file), saved = parseSessionLog(await readFile(path))
         if (saved.header.id !== fixture.sessionId) continue
         const header = { type: 'session', delegationDepth: 0, version: 0, id: fixture.sessionId, createdAt: saved.header.createdAt, cwd: saved.header.cwd }
-        await writeFile(join(dirname(path), 'session.jsonl.zstd'), encodeMigratedSessionLog(JSON.stringify(header), rows))
-        await rm(path)
+        if(process.argv.includes('--native-format')){
+          const {sessionFormatCatalog:catalog}=await import(pathToFileURL(join(runtime,'lib/node_modules/@deepseek-ai/dsh-session-format-catalog/lib/index.js')).href)
+          const restore=catalog.createRestore(header,{recovery:'recoverable',validation:'current'})
+          for(const row of rows)restore.decodeRow(row)
+          const artifact=restore.finish()
+          assert.equal(artifact.header.version,3)
+          await writeFile(path,encodeCurrentGeneration(artifact,catalog))
+          await rm(join(dirname(path),'session.jsonl.zstd'),{force:true})
+          size.sessionFormat=3
+        }else{
+          await writeFile(join(dirname(path), 'session.jsonl.zstd'), encodeMigratedSessionLog(JSON.stringify(header), rows))
+          await rm(path)
+          size.sessionFormat=0
+        }
         found = true; break
       }
       assert.ok(found, 'synthetic Chat and native Session must have matching turn coordinates')
@@ -95,13 +121,15 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     await (await statusFrame(page)).locator('#e2e-gold').filter({ hasText: /^金币：10$/ }).waitFor({ timeout: 120000 })
     if (reopening) {
       size.runtimeBootMs = reopening.bootMs
+      if(firstWindow)firstWindow.sessionClickToBodyMs=firstWindow.bodyVisibleAt-reopening.openSessionStarted
       size.coldOpenToStatusMs = Date.now() - reopening.openStarted
+      if(firstWindow){firstWindow.responseMs=firstWindow.responseAt-reopening.openStarted;firstWindow.bodyVisibleMs=firstWindow.bodyVisibleAt-reopening.openStarted}
     }
     // Exclude cold initialization and allow snapshot maintenance to settle.
     await page.waitForTimeout(3000)
   })
   const samples = []
-  report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + active storage + React; synthetic history, fixed model; tracing disabled', requireCompact, size, samples }
+  report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + active storage + React; synthetic history, fixed model; tracing disabled', requireCompact, size, samples, firstWindow }
   for (let run = 0; run < runs; run++) await step(`长档结算采样 ${run + 1}/${runs}`, async () => {
     const gold = 100 + run
     await writeFile(join(output, 'performance-control.json'), JSON.stringify({ id: run, gold }))

@@ -97,6 +97,20 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   }
   return result
  }
+ // A window is explicitly NOT a writable Chat: coordinates refer to the pinned
+ // full archive, while chat.messages contains only this bounded page.
+ async function readWindow(id,{limit=48,before,revision,includeCheckpoints=false}={}){
+  if(!Number.isSafeInteger(limit)||limit<1||limit>500)throw Error('Invalid history window limit')
+  const view=await headAtRevision(id,revision??Infinity)
+  if(!view)return null
+  const end=before??view.messageCount
+  if(!Number.isSafeInteger(end)||end<0||end>view.messageCount)throw Error('Invalid history window cursor')
+  const from=Math.max(0,end-limit),chat=await selectedHeader(id,view,includeCheckpoints?undefined:'settlement'),t=tree(id)
+  const page=await pages.readHistoryPage(id,{cursor:{snapshotId:view.snapshotCursor.snapshotId,before:end},limit})
+  chat.messages=[]
+  for(const row of page.messages)chat.messages.push(await t.get(row.message.runtimeRef))
+  return {chat,messageCount:view.messageCount,from,to:end-1,revision:view.state.chatRevision}
+ }
  async function readSlice(id,indices=[],fields){
   const view=await head(id)
   if(!view)return null
@@ -344,5 +358,5 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    records:[['chat-revision:'+stored.revision,view.snapshotCursor.snapshotId]]},{assertCurrent})
   return result(next,await head(id))
  }
- return Object.freeze({patch,read,readRevisionMetadata,readHelperContext,readSlice,readSessionState,readSceneImageState,version,create,write})
+ return Object.freeze({patch,read,readWindow,readRevisionMetadata,readHelperContext,readSlice,readSessionState,readSceneImageState,version,create,write})
 }
