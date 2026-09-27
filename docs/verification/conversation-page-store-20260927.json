@@ -1,0 +1,236 @@
+{
+  "scope": "new-format file adapter; fresh reader per sample; no browser/model/MVU; OS disk cache not cleared",
+  "pageSize": 50,
+  "samples": [
+    {
+      "rounds": 1000,
+      "run": 0,
+      "initializationMs": 376.518417,
+      "openMs": 7.946541999999965,
+      "commitMs": 59.63541700000002,
+      "open": {
+        "readBlocks": 6,
+        "readPages": 2,
+        "readBytes": 152209,
+        "writeBlocks": 0,
+        "writePages": 0,
+        "writeBytes": 0
+      },
+      "commit": {
+        "readBlocks": 3,
+        "readPages": 1,
+        "readBytes": 31971,
+        "writeBlocks": 4,
+        "writePages": 1,
+        "writeBytes": 34427
+      }
+    },
+    {
+      "rounds": 1000,
+      "run": 1,
+      "initializationMs": 376.518417,
+      "openMs": 3.8047090000000026,
+      "commitMs": 59.038500000000056,
+      "open": {
+        "readBlocks": 6,
+        "readPages": 2,
+        "readBytes": 152359,
+        "writeBlocks": 0,
+        "writePages": 0,
+        "writeBytes": 0
+      },
+      "commit": {
+        "readBlocks": 3,
+        "readPages": 1,
+        "readBytes": 32112,
+        "writeBlocks": 4,
+        "writePages": 1,
+        "writeBytes": 34484
+      }
+    },
+    {
+      "rounds": 1000,
+      "run": 2,
+      "initializationMs": 376.518417,
+      "openMs": 5.663832999999954,
+      "commitMs": 57.2042909999999,
+      "open": {
+        "readBlocks": 6,
+        "readPages": 2,
+        "readBytes": 152416,
+        "writeBlocks": 0,
+        "writePages": 0,
+        "writeBytes": 0
+      },
+      "commit": {
+        "readBlocks": 3,
+        "readPages": 1,
+        "readBytes": 32169,
+        "writeBlocks": 4,
+        "writePages": 1,
+        "writeBytes": 34541
+      }
+    },
+    {
+      "rounds": 1000,
+      "run": 3,
+      "initializationMs": 376.518417,
+      "openMs": 4.529083000000014,
+      "commitMs": 60.677459,
+      "open": {
+        "readBlocks": 6,
+        "readPages": 2,
+        "readBytes": 152473,
+        "writeBlocks": 0,
+        "writePages": 0,
+        "writeBytes": 0
+      },
+      "commit": {
+        "readBlocks": 3,
+        "readPages": 1,
+        "readBytes": 32226,
+        "writeBlocks": 4,
+        "writePages": 1,
+        "writeBytes": 34598
+      }
+    },
+    {
+      "rounds": 1000,
+      "run": 4,
+      "initializationMs": 376.518417,
+      "openMs": 4.648957999999993,
+      "commitMs": 54.66266600000006,
+      "open": {
+        "readBlocks": 6,
+        "readPages": 2,
+        "readBytes": 152530,
+        "writeBlocks": 0,
+        "writePages": 0,
+        "writeBytes": 0
+      },
+      "commit": {
+        "readBlocks": 3,
+        "readPages": 1,
+        "readBytes": 32283,
+        "writeBlocks": 4,
+        "writePages": 1,
+        "writeBytes": 34655
+      }
+    },
+    {
+      "rounds": 10000,
+      "run": 0,
+      "initializationMs": 3708.701958,
+      "openMs": 6.636625000000095,
+      "commitMs": 70.82129200000054,
+      "open": {
+        "readBlocks": 7,
+        "readPages": 2,
+        "readBytes": 182001,
+        "writeBlocks": 0,
+        "writePages": 0,
+        "writeBytes": 0
+      },
+      "commit": {
+        "readBlocks": 4,
+        "readPages": 1,
+        "readBytes": 61699,
+        "writeBlocks": 5,
+        "writePages": 1,
+        "writeBytes": 64155
+      }
+    },
+    {
+      "rounds": 10000,
+      "run": 1,
+      "initializationMs": 3708.701958,
+      "openMs": 5.582166000000143,
+      "commitMs": 72.92866700000013,
+      "open": {
+        "readBlocks": 7,
+        "readPages": 2,
+        "readBytes": 182151,
+        "writeBlocks": 0,
+        "writePages": 0,
+        "writeBytes": 0
+      },
+      "commit": {
+        "readBlocks": 4,
+        "readPages": 1,
+        "readBytes": 61840,
+        "writeBlocks": 5,
+        "writePages": 1,
+        "writeBytes": 64212
+      }
+    },
+    {
+      "rounds": 10000,
+      "run": 2,
+      "initializationMs": 3708.701958,
+      "openMs": 4.61566700000003,
+      "commitMs": 70.4425829999991,
+      "open": {
+        "readBlocks": 7,
+        "readPages": 2,
+        "readBytes": 182208,
+        "writeBlocks": 0,
+        "writePages": 0,
+        "writeBytes": 0
+      },
+      "commit": {
+        "readBlocks": 4,
+        "readPages": 1,
+        "readBytes": 61897,
+        "writeBlocks": 5,
+        "writePages": 1,
+        "writeBytes": 64269
+      }
+    },
+    {
+      "rounds": 10000,
+      "run": 3,
+      "initializationMs": 3708.701958,
+      "openMs": 5.384500000000116,
+      "commitMs": 71.43166699999983,
+      "open": {
+        "readBlocks": 7,
+        "readPages": 2,
+        "readBytes": 182265,
+        "writeBlocks": 0,
+        "writePages": 0,
+        "writeBytes": 0
+      },
+      "commit": {
+        "readBlocks": 4,
+        "readPages": 1,
+        "readBytes": 61954,
+        "writeBlocks": 5,
+        "writePages": 1,
+        "writeBytes": 64326
+      }
+    },
+    {
+      "rounds": 10000,
+      "run": 4,
+      "initializationMs": 3708.701958,
+      "openMs": 4.831167000000278,
+      "commitMs": 72.75420800000029,
+      "open": {
+        "readBlocks": 7,
+        "readPages": 2,
+        "readBytes": 182322,
+        "writeBlocks": 0,
+        "writePages": 0,
+        "writeBytes": 0
+      },
+      "commit": {
+        "readBlocks": 4,
+        "readPages": 1,
+        "readBytes": 62011,
+        "writeBlocks": 5,
+        "writePages": 1,
+        "writeBytes": 64383
+      }
+    }
+  ]
+}
