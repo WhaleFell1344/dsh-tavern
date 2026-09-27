@@ -48,3 +48,20 @@ test('changed slices cover multiple commits and fall back after external writes 
  assert.deepEqual(metadataOnly.indices,[])
  assert.equal(metadataOnly.chat.counter,32)
 })
+
+test('layout boundary proves tail append but never hides old-floor replacement or truncation',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'journal-layout-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const db=createChatPersistence({store:createChatJournalStore({dataRoot:root,frameLimit:1000})})
+ await db.write({id:'c',messages:[{role:'assistant',turn:1,text:'one'},{role:'assistant',turn:2,text:'two'}]})
+ await db.update('c',c=>{c.messages.push({role:'assistant',turn:3,text:'three'});return c})
+ for(let i=0;i<35;i++)await db.update('c',c=>{c.messages[0].text='edit '+i;return c})
+ const append=await db.readChangedSlice('c',1)
+ assert.equal(append.layoutChanged,true);assert.equal(append.layoutFrom,2)
+ assert.equal((await db.readViewDelta('c',1)).layoutFrom,2)
+ await db.update('c',c=>{c.messages[0].turn=20;return c})
+ assert.equal((await db.readChangedSlice('c',1)).layoutFrom,0)
+ const before=(await db.readSessionState('c'))._storageRevision
+ await db.update('c',c=>{c.messages.splice(1);return c})
+ await db.update('c',c=>{c.messages.push({role:'assistant',turn:4},{role:'assistant',turn:5},{role:'assistant',turn:6});return c})
+ assert.equal((await db.readChangedSlice('c',before)).layoutFrom,1,'regrowth cannot disguise a truncated prefix as append')
+})

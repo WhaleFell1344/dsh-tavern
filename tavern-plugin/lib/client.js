@@ -1010,8 +1010,9 @@ window.__ModuleLoader__.load({
 
 		// Canonical array-index keys retain ordinary object enumeration order. Legacy
 		// non-turn keys use the original object path instead of changing its semantics.
-		function createTurnFieldIndex() {
-		  const index = createOrderedNumericIndex({visit: () => createSessionViewReader.onTurnFieldVisit?.()});
+		function createTurnFieldIndex(options = {}) {
+		  const createIndex = options.createIndex || createOrderedNumericIndex;
+		  const index = createIndex({visit: options.visit || (() => createSessionViewReader.onTurnFieldVisit?.())});
 		  const states = new WeakMap();
 		  const validKey = key => /^(0|[1-9]\d*)$/.test(String(key)) && Number(key) < 0xffffffff;
 		  function wrap(rows) {
@@ -4655,7 +4656,10 @@ window.__ModuleLoader__.load({
                     if (delta.stateRevision < previous.stateRevision) return previous;
                     if (delta.baseRevision !== previous.stateRevision || previous.messagesPending) return null;
                 } else if (delta.kind === 'dispatch') {
-                    if (previous.transaction || delta.baseRevision !== previous.stateRevision || previous.messagesPending) return null;
+                    // The committed view may arrive between claiming and dispatching.
+                    // Its exact target revision is also a valid base for this draft.
+                    if (previous.transaction || (delta.baseRevision !== previous.stateRevision && delta.stateRevision !== previous.stateRevision) || previous.messagesPending) return null;
+                    if (delta.stateRevision === previous.stateRevision && delta.messageCount !== (previous.messages || []).length) return null;
                 } else return null;
                 const context = Object.assign({}, previous, delta.header || {}, {
                     stateRevision: delta.stateRevision,
@@ -4679,6 +4683,15 @@ window.__ModuleLoader__.load({
                 }
                 context.messages = api.update(previous.messages || [], entries, length);
                 if (!api.info(context.messages).complete) return null;
+                if (delta.turnMessageIdChanges?.length) {
+                    const fields = applyTavernVariableReceipt.turnFields;
+                    if (delta.kind !== 'dispatch' || !fields) return null;
+                    const source = fields.from(previous.turnMessageIds || {});
+                    const changes = delta.turnMessageIdChanges;
+                    if (!fields.has(source) || !changes.every(row => Array.isArray(row) && row.length === 2 && fields.validKey(row[0])
+                        && Number.isInteger(row[1]) && row[1] >= (delta.stateRevision === previous.stateRevision ? 0 : (previous.messages || []).length) && row[1] < length)) return null;
+                    context.turnMessageIds = fields.update(source, changes, []);
+                }
                 for (const key of ['chatVariables', 'scriptVariables', 'scriptPrompts']) if (Object.hasOwn(delta, key)) context[key] = JSON.parse(JSON.stringify(delta[key]));
                 return context;
             }
@@ -4702,6 +4715,7 @@ window.__ModuleLoader__.load({
             return context;
         }
         applyTavernVariableReceipt.indexApi = createIndexedArrayApi({valid: row => Boolean(row && !row.stub), eligible: row => Boolean(row?.variables?.stat_data !== undefined && row?.variables?.schema !== undefined)});
+        applyTavernVariableReceipt.turnFields = createTurnFieldIndex();
 
 		function installTavernHelperFacade(options) {
 			const nativeWorldInfoSnapshots = new WeakMap();
@@ -4910,6 +4924,7 @@ window.__ModuleLoader__.load({
 
 		function tavernHelperScriptBootstrap(metadata, initialContext, modules) {
             modules.applyVariableReceipt.indexApi = modules.createIndexedArrayApi({valid: row => Boolean(row && !row.stub), eligible: row => Boolean(row?.variables?.stat_data !== undefined && row?.variables?.schema !== undefined)});
+            modules.applyVariableReceipt.turnFields = modules.createTurnFieldIndex({createIndex:modules.createOrderedNumericIndex,visit:function(){}});
             const initializationTiming = modules.createInitializationTiming({ report: function (timings) { parent.postMessage({ type: "dsh-tavern-mvu-load-diagnostic", token: metadata.token, diagnostic: { phase: "initialization-timing", timings: timings } }, "*"); } });
             window.__dshTavernInitializationTiming = initializationTiming;
             window.addEventListener("pagehide", initializationTiming.dispose, { once: true });
@@ -6106,6 +6121,8 @@ window.__ModuleLoader__.load({
 				+ 'createInitializationTiming:' + createTavernInitializationTiming.toString() + ','
 				+ 'createTransport:' + createTavernHelperTransport.toString() + ','
                 + 'createIndexedArrayApi:' + createIndexedArrayApi.toString() + ','
+                + 'createOrderedNumericIndex:' + createOrderedNumericIndex.toString() + ','
+                + 'createTurnFieldIndex:' + createTurnFieldIndex.toString() + ','
                 + 'applyVariableReceipt:' + applyTavernVariableReceipt.toString() + ','
 				+ 'createEvents:' + createTavernHelperEventBus.toString() + ','
 				+ 'createPopup:' + createTavernHelperPopup.toString() + ','
@@ -6934,7 +6951,7 @@ window.__ModuleLoader__.load({
 					const scripts = record ? Array.from(record.scripts.values()).map(function (script) { return { id: script.id, loaded: script.loaded, subscriptionsReady: script.subscriptionsReady, initializationFailed: script.initializationFailed }; }) : [];
 					const initializationError = mvuInitializationError(record);
 					const baseline=record && record.context;
-                    const contextBaseline=baseline ? {workContextVersion:1,chatId:baseline.chatId,stateRevision:baseline.stateRevision,
+                    const contextBaseline=baseline ? {workContextVersion:1,appendContextVersion:1,chatId:baseline.chatId,stateRevision:baseline.stateRevision,
                         lifecycleRevision:Number(baseline.lifecycleRevision)||0,messageCount:(baseline.messages||[]).length,
                         transaction:baseline.transaction,complete:!baseline.messagesPending && (applyTavernVariableReceipt.indexApi.info(baseline.messages)?.complete ?? false)} : {workContextVersion:1,full:true};
                     return { contextBaseline:contextBaseline, sessionId: activeSessionId, frameCount: record ? 1 : 0, scriptIds: scripts.map(function (script) { return script.id; }), scripts: scripts, ...(record && record.scripts.has("__dsh_official_mvu__") ? { mvuDataReady: mvuDataReady(record) } : {}), ...(record && record.mvuLoadState ? { mvuLoadState: record.mvuLoadState } : {}), ...(initializationError ? { initializationError: initializationError } : {}) };

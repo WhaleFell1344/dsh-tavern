@@ -551,10 +551,10 @@ export function createChatJournalStore(options = {}) {
   function rememberChanges(previous, revision, changes) {
     const indices = new Set()
     let tail = Infinity
-    let layoutChanged = false
+    let layoutChanged = false, layoutFrom = Infinity
     let headerFields = new Set(), runtimeInputKeys = new Set()
     for (const change of changes) {
-      if (!change.path.length) { tail = 0; layoutChanged = true; headerFields = null; runtimeInputKeys = null; break }
+      if (!change.path.length) { tail = 0; layoutChanged = true; layoutFrom = 0; headerFields = null; runtimeInputKeys = null; break }
       if (change.path[0] !== 'messages') {
         headerFields.add(String(change.path[0]))
         if(change.path[0]==='runtimeInputs' && runtimeInputKeys){
@@ -563,11 +563,15 @@ export function createChatJournalStore(options = {}) {
         }
         continue
       }
-      if (change.path.length <= 2 || ['turn','role','greeting','tavernRole','importSource'].includes(change.path[2])) layoutChanged = true
+      if (change.path.length <= 2 || ['turn','role','greeting','tavernRole','importSource'].includes(change.path[2])) {
+        layoutChanged = true
+        const start = Number.isSafeInteger(change.path[1]) ? change.path[1] : change.op === 'splice' ? change.index : 0
+        layoutFrom = Math.min(layoutFrom, Number.isSafeInteger(start) && start >= 0 ? start : 0)
+      }
       if (change.path.length > 1 && Number.isSafeInteger(change.path[1])) indices.add(change.path[1])
       else tail = Math.min(tail, change.op === 'splice' ? change.index : 0)
     }
-    const frames = previous.concat({baseRevision: revision - 1, revision, indices: [...indices], tail, layoutChanged, runtimeInputKeys:runtimeInputKeys && runtimeInputKeys.size<=4096 ? [...runtimeInputKeys] : null, headerFields:headerFields && headerFields.size<=4096 ? [...headerFields] : null})
+    const frames = previous.concat({baseRevision: revision - 1, revision, indices: [...indices], tail, layoutChanged, layoutFrom, runtimeInputKeys:runtimeInputKeys && runtimeInputKeys.size<=4096 ? [...runtimeInputKeys] : null, headerFields:headerFields && headerFields.size<=4096 ? [...headerFields] : null})
     if (frames.length <= 32) return frames
     const [first, second, ...rest] = frames
     const mergedTail = Math.min(first.tail, second.tail)
@@ -577,7 +581,7 @@ export function createChatJournalStore(options = {}) {
     // Keep a conservative older summary plus exact recent frames. Bound the
     // summary too; eviction loses coverage and safely restores the full fallback.
     if (mergedIndices.length > 4096) return frames.slice(-32)
-    return [{baseRevision:first.baseRevision,revision:second.revision,indices:mergedIndices,tail:mergedTail,layoutChanged:first.layoutChanged || second.layoutChanged,runtimeInputKeys:mergedRuntimeKeys && mergedRuntimeKeys.length<=4096?mergedRuntimeKeys:null,headerFields:mergedHeaderFields && mergedHeaderFields.length<=4096 ? mergedHeaderFields : null},...rest]
+    return [{baseRevision:first.baseRevision,revision:second.revision,indices:mergedIndices,tail:mergedTail,layoutChanged:first.layoutChanged || second.layoutChanged,layoutFrom:Math.min(first.layoutFrom ?? 0,second.layoutFrom ?? 0),runtimeInputKeys:mergedRuntimeKeys && mergedRuntimeKeys.length<=4096?mergedRuntimeKeys:null,headerFields:mergedHeaderFields && mergedHeaderFields.length<=4096 ? mergedHeaderFields : null},...rest]
   }
   function changedIndices(chatId, state, revision) {
     if (!state || !Number.isSafeInteger(revision) || revision < 0 || revision > state.revision) return undefined
@@ -600,7 +604,7 @@ export function createChatJournalStore(options = {}) {
     if (revision === state?.revision) return undefined
     const changed = changedIndices(chatId,state,revision)
     return changed ? {...slice(state.chat,changed.indices,fields),indices:changed.indices,baseRevision:revision,
-      layoutChanged:knownChanges(chatId,state).filter(frame=>frame.revision>revision).some(frame=>frame.layoutChanged !== false)} : undefined
+      layoutFrom:Math.min(...knownChanges(chatId,state).filter(frame=>frame.revision>revision).map(frame=>frame.layoutFrom ?? 0)), layoutChanged:knownChanges(chatId,state).filter(frame=>frame.revision>revision).some(frame=>frame.layoutChanged !== false)} : undefined
   }
   /** Detached display input: unchanged Helper variables come from the cached view.
    * Never use this projection as a writable Chat or for a full Helper rebuild. */
@@ -628,7 +632,7 @@ export function createChatJournalStore(options = {}) {
     const runtimeKeys=headerFrames.every(frame=>Array.isArray(frame.runtimeInputKeys)) ? [...new Set(headerFrames.flatMap(frame=>frame.runtimeInputKeys))] : null
     const runtime=state.chat.runtimeInputs
     const runtimeInputChanges=runtimeKeys?.map(key=>({key,present:runtime!=null && Object.hasOwn(runtime,key),value:runtime!=null && Object.hasOwn(runtime,key)?copyJsonTree(runtime[key]):undefined})) ?? null
-    return { ...changed, changedHeaderFields, runtimeInputChanges, layoutChanged:knownChanges(chatId,state).filter(frame=>frame.revision>revision).some(frame=>frame.layoutChanged !== false), chat }
+    return { ...changed, changedHeaderFields, runtimeInputChanges, layoutFrom:Math.min(...knownChanges(chatId,state).filter(frame=>frame.revision>revision).map(frame=>frame.layoutFrom ?? 0)), layoutChanged:knownChanges(chatId,state).filter(frame=>frame.revision>revision).some(frame=>frame.layoutChanged !== false), chat }
   }
 
   /** Exact-version internal commit; stale callers must use their existing merge path. */

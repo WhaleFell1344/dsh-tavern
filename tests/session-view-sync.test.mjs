@@ -99,3 +99,14 @@ test('dirty message indices reuse hashes without re-serializing untouched histor
   assert.deepEqual(changed.viewDelta.set[0][0], ['tavernHelper', 'messages', 399])
   assert.equal(server.peek(changed.viewCursor).revision, 2)
 })
+
+test('cold placeholder baseline must hydrate unchanged history before trusting dirty-floor evidence',()=>{
+ const server=createSessionViewSync(),begin=context.reader()
+ const cold={tavernHelper:{messages:[{message_id:0,stub:true,message:''},{message_id:1,message:'latest'}],messagesPending:{from:0,to:0}}}
+ let request=begin('cold')
+ request.accept(json(server('cold',cold,request.cursor,{revision:1})))
+ const full={tavernHelper:{messages:[{message_id:0,message:'history',variables:{hp:7}},{message_id:1,message:'latest updated'}]}}
+ request=begin('cold')
+ const result=request.accept(json(server('cold',full,request.cursor,{revision:2,dirtyMessageIndices:new Set([1])})))
+ assert.deepEqual(json(result.view),full,'storage-unchanged does not mean an old placeholder is hydrated')
+})

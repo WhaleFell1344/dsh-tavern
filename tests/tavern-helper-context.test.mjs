@@ -135,6 +135,22 @@ test('冷启动只对窗口外楼层出骨架，补水后与全量投影一致',
   assert.deepEqual(hydrated.messages[0], projectTavernHelperMessage(chat.messages[0], 0))
 })
 
+test('verified tail append visits only appended floors and preserves turn mappings', () => {
+  for (const length of [1000, 10000]) {
+    const rows = Array.from({length}, (_, i) => ({role:'assistant', turn:i + 1, text:'old', variables:[{hp:i}]}))
+    const previous = projectTavernHelperContext({id:'append',messages:rows},{indexed:true})
+    rows.push({role:'user',turn:length + 1,text:'input'}, {role:'assistant',turn:length + 1,text:'new',variables:[{hp:7}]})
+    let reads = 0
+    const messages = new Proxy(rows,{get(target,key,receiver){if(typeof key === 'string' && /^\d+$/.test(key)) reads++;return Reflect.get(target,key,receiver)}})
+    const next = projectTavernHelperContext({id:'append',messages},{indexed:true,previousContext:previous,previousMessages:previous.messages,dirtyIndices:new Set([length,length + 1]),layoutChanged:true,layoutFrom:length})
+    assert.ok(reads <= 4, `append visited ${reads} floors of ${length}`)
+    assert.equal(next.messages[0],previous.messages[0])
+    assert.equal(next.turnMessageIds[String(length + 1)],length + 1)
+    assert.equal(previous.turnMessageIds[String(length + 1)],undefined)
+    assert.deepEqual(JSON.parse(JSON.stringify(next)),JSON.parse(JSON.stringify(projectTavernHelperContext({id:'append',messages:rows}))))
+  }
+})
+
 test('dirty 局部投影复用未脏楼层，只重建脏索引与新增尾段', () => {
   const chat = {
     id: 'dirty',

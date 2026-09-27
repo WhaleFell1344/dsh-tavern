@@ -2113,6 +2113,7 @@ window.__ModuleLoader__.load({
 		// @include local-variables.js
         // @include variable-receipts.js
         applyTavernVariableReceipt.indexApi = createIndexedArrayApi({valid: row => Boolean(row && !row.stub), eligible: row => Boolean(row?.variables?.stat_data !== undefined && row?.variables?.schema !== undefined)});
+        applyTavernVariableReceipt.turnFields = createTurnFieldIndex();
 
 		function installTavernHelperFacade(options) {
 			const nativeWorldInfoSnapshots = new WeakMap();
@@ -2321,6 +2322,7 @@ window.__ModuleLoader__.load({
 
 		function tavernHelperScriptBootstrap(metadata, initialContext, modules) {
             modules.applyVariableReceipt.indexApi = modules.createIndexedArrayApi({valid: row => Boolean(row && !row.stub), eligible: row => Boolean(row?.variables?.stat_data !== undefined && row?.variables?.schema !== undefined)});
+            modules.applyVariableReceipt.turnFields = modules.createTurnFieldIndex({createIndex:modules.createOrderedNumericIndex,visit:function(){}});
             const initializationTiming = modules.createInitializationTiming({ report: function (timings) { parent.postMessage({ type: "dsh-tavern-mvu-load-diagnostic", token: metadata.token, diagnostic: { phase: "initialization-timing", timings: timings } }, "*"); } });
             window.__dshTavernInitializationTiming = initializationTiming;
             window.addEventListener("pagehide", initializationTiming.dispose, { once: true });
@@ -3517,6 +3519,8 @@ window.__ModuleLoader__.load({
 				+ 'createInitializationTiming:' + createTavernInitializationTiming.toString() + ','
 				+ 'createTransport:' + createTavernHelperTransport.toString() + ','
                 + 'createIndexedArrayApi:' + createIndexedArrayApi.toString() + ','
+                + 'createOrderedNumericIndex:' + createOrderedNumericIndex.toString() + ','
+                + 'createTurnFieldIndex:' + createTurnFieldIndex.toString() + ','
                 + 'applyVariableReceipt:' + applyTavernVariableReceipt.toString() + ','
 				+ 'createEvents:' + createTavernHelperEventBus.toString() + ','
 				+ 'createPopup:' + createTavernHelperPopup.toString() + ','
@@ -4345,7 +4349,7 @@ window.__ModuleLoader__.load({
 					const scripts = record ? Array.from(record.scripts.values()).map(function (script) { return { id: script.id, loaded: script.loaded, subscriptionsReady: script.subscriptionsReady, initializationFailed: script.initializationFailed }; }) : [];
 					const initializationError = mvuInitializationError(record);
 					const baseline=record && record.context;
-                    const contextBaseline=baseline ? {workContextVersion:1,chatId:baseline.chatId,stateRevision:baseline.stateRevision,
+                    const contextBaseline=baseline ? {workContextVersion:1,appendContextVersion:1,chatId:baseline.chatId,stateRevision:baseline.stateRevision,
                         lifecycleRevision:Number(baseline.lifecycleRevision)||0,messageCount:(baseline.messages||[]).length,
                         transaction:baseline.transaction,complete:!baseline.messagesPending && (applyTavernVariableReceipt.indexApi.info(baseline.messages)?.complete ?? false)} : {workContextVersion:1,full:true};
                     return { contextBaseline:contextBaseline, sessionId: activeSessionId, frameCount: record ? 1 : 0, scriptIds: scripts.map(function (script) { return script.id; }), scripts: scripts, ...(record && record.scripts.has("__dsh_official_mvu__") ? { mvuDataReady: mvuDataReady(record) } : {}), ...(record && record.mvuLoadState ? { mvuLoadState: record.mvuLoadState } : {}), ...(initializationError ? { initializationError: initializationError } : {}) };

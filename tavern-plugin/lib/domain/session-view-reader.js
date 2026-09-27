@@ -50,12 +50,12 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
           && delta.revision === next.revision && identity(delta.chat).revision === next.revision
           && matches(cached, {...identity(delta.chat), resourceVersion: resources})) {
           verifiedDelta=delta
-          if (canProjectDirty(cached.view, delta.chat, dirty)) return { chat: delta.chat, cached, dirty, layoutChanged:delta.layoutChanged, changedHeaderFields:delta.changedHeaderFields,runtimeInputChanges:delta.runtimeInputChanges, resourceVersion: resources }
+          if (canProjectDirty(cached.view, delta.chat, dirty)) return { chat: delta.chat, cached, dirty, layoutChanged:delta.layoutChanged,layoutFrom:delta.layoutFrom, changedHeaderFields:delta.changedHeaderFields,runtimeInputChanges:delta.runtimeInputChanges, resourceVersion: resources }
         }
       }
       const chat = await trace.stage('readFullChat', () => readChat(sessionId))
       const evidence=chat && verifiedDelta && chat.id===verifiedDelta.chat.id && identity(chat).revision===verifiedDelta.revision
-        ? {dirty:new Set(verifiedDelta.indices),layoutChanged:verifiedDelta.layoutChanged,changedHeaderFields:verifiedDelta.changedHeaderFields,runtimeInputChanges:verifiedDelta.runtimeInputChanges} : {}
+        ? {dirty:new Set(verifiedDelta.indices),layoutChanged:verifiedDelta.layoutChanged,layoutFrom:verifiedDelta.layoutFrom,changedHeaderFields:verifiedDelta.changedHeaderFields,runtimeInputChanges:verifiedDelta.runtimeInputChanges} : {}
       return { chat, cached: chat && cache.get(chat.id), resourceVersion: resources, ...evidence }
     })
     const { chat, cached } = selected
@@ -69,7 +69,7 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
     } else {
       const dirty = selected.dirty ?? (matches(cached, next) && cached.revision < next.revision ? await changes(chat, cached.revision) : null)
       if (matches(cached, next) && canProjectDirty(cached?.view, chat, dirty)) {
-        view = await trace.stage('projectViewDirty', () => project.dirty(chat, cached.view, dirty, currentActivity, {layoutChanged:selected.layoutChanged,changedHeaderFields:selected.changedHeaderFields,runtimeInputChanges:selected.runtimeInputChanges}))
+        view = await trace.stage('projectViewDirty', () => project.dirty(chat, cached.view, dirty, currentActivity, {layoutChanged:selected.layoutChanged,layoutFrom:selected.layoutFrom,changedHeaderFields:selected.changedHeaderFields,runtimeInputChanges:selected.runtimeInputChanges}))
         rebuild = 'dirty'
       } else {
         view = await project.full(chat, {...options,inputChanges:matches(cached,next) && dirty ? {baseRevision:cached.revision,indices:dirty,changedHeaderFields:selected.changedHeaderFields,runtimeInputChanges:selected.runtimeInputChanges} : undefined})

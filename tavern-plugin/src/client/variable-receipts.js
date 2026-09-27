@@ -12,7 +12,10 @@ function applyTavernVariableReceipt(previous, delta) {
             if (delta.stateRevision < previous.stateRevision) return previous;
             if (delta.baseRevision !== previous.stateRevision || previous.messagesPending) return null;
         } else if (delta.kind === 'dispatch') {
-            if (previous.transaction || delta.baseRevision !== previous.stateRevision || previous.messagesPending) return null;
+            // The committed view may arrive between claiming and dispatching.
+            // Its exact target revision is also a valid base for this draft.
+            if (previous.transaction || (delta.baseRevision !== previous.stateRevision && delta.stateRevision !== previous.stateRevision) || previous.messagesPending) return null;
+            if (delta.stateRevision === previous.stateRevision && delta.messageCount !== (previous.messages || []).length) return null;
         } else return null;
         const context = Object.assign({}, previous, delta.header || {}, {
             stateRevision: delta.stateRevision,
@@ -36,6 +39,15 @@ function applyTavernVariableReceipt(previous, delta) {
         }
         context.messages = api.update(previous.messages || [], entries, length);
         if (!api.info(context.messages).complete) return null;
+        if (delta.turnMessageIdChanges?.length) {
+            const fields = applyTavernVariableReceipt.turnFields;
+            if (delta.kind !== 'dispatch' || !fields) return null;
+            const source = fields.from(previous.turnMessageIds || {});
+            const changes = delta.turnMessageIdChanges;
+            if (!fields.has(source) || !changes.every(row => Array.isArray(row) && row.length === 2 && fields.validKey(row[0])
+                && Number.isInteger(row[1]) && row[1] >= (delta.stateRevision === previous.stateRevision ? 0 : (previous.messages || []).length) && row[1] < length)) return null;
+            context.turnMessageIds = fields.update(source, changes, []);
+        }
         for (const key of ['chatVariables', 'scriptVariables', 'scriptPrompts']) if (Object.hasOwn(delta, key)) context[key] = JSON.parse(JSON.stringify(delta[key]));
         return context;
     }

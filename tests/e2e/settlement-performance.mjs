@@ -15,6 +15,7 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
   const rounds = Number(process.env.TAVERN_PERF_ROUNDS || 1000)
   const fields = Number(process.env.TAVERN_PERF_FIELDS || 20)
   const runs = Number(process.env.TAVERN_PERF_RUNS || 5)
+  const append = process.env.TAVERN_PERF_APPEND === '1'
   assert.ok(Number.isInteger(rounds) && rounds >= 2 && rounds <= 5000)
   assert.ok(Number.isInteger(fields) && fields >= 0 && fields <= 2000)
   assert.ok(Number.isInteger(runs) && runs >= 1 && runs <= 100)
@@ -85,11 +86,17 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
         addEventListener('message', event => { if (event.data?.type === 'dsh-tavern-helper-event-complete' && String(event.data.eventId).startsWith('mvu-work:')) window.__perfSettlement.events.push({ stage: 'browser-event-complete', eventId: event.data.eventId, at: performance.timeOrigin + performance.now() }) })
       }
     })
+    if (append) {
+      const composer = page.getByRole('textbox', {name:/发消息|Message/})
+      await composer.fill('性能测试继续游玩 ' + run)
+      await composer.press('Enter')
+    } else {
     const receipt = page.locator('.dsh-tavern-mvu-receipt').filter({ visible: true }).last()
     if (await receipt.getAttribute('open') === null) await receipt.locator('summary').click()
     await receipt.getByRole('button', { name: '重新结算变量', exact: true }).click()
     await page.getByPlaceholder('例如：这轮还没有交付物品，不要扣除库存。').fill('性能测试：本次金币更新为 ' + gold)
     await page.getByRole('button', { name: '重新结算', exact: true }).click()
+    }
     const statusFrame = await (await page.locator('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame').elementHandle()).contentFrame()
     const visiblePromise = statusFrame.evaluate(gold => new Promise(resolve => {
       const node = document.querySelector('#e2e-gold')
@@ -104,7 +111,8 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     const receiptAt = await page.evaluate(() => window.__perfSettlement.receiptAt || null)
     // Fresh store, independent of the running server's hot cache. Read only target.
     const readStart = performance.now()
-    const disk = await createChatJournalStore({ dataRoot: data }).readSlice(chatId, [size.messages - 1], 'settlement')
+    const disk = await createChatJournalStore({ dataRoot: data }).readSlice(chatId, [size.messages - 1 + (append ? 2 * (run + 1) : 0)], 'settlement')
+    assert.equal(disk.messageCount, size.messages + (append ? 2 * (run + 1) : 0), 'append must add exactly one user/assistant pair')
     const saved = disk.chat.messages[0]
     assert.equal(saved.variables[0].stat_data.gold, gold)
     assert.equal(Object.keys(saved.variables[0].stat_data).length, fields + 1)
@@ -113,9 +121,15 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     assert.equal(saved.mvu.pending, false)
     const diskReadMs = performance.now() - readStart
     const events = [...readLog().slice(offset).matchAll(/\[settlement-perf\](\{[^\n]+\})/g)].map(match => JSON.parse(match[1]))
+    if (append) {
+      const contexts = events.filter(event => event.stage === 'execution-context')
+      assert.ok(contexts.length > 0 && contexts.every(event => event.compact && event.messages <= 5),
+        'warm append settlement must keep a bounded context without full recovery')
+    }
     const at = stage => events.find(x => x.stage === stage)?.at
-    const commitStart = at('commit-start'), commitAt = at('commit-return')
     const submitted = at('submitted'), runtime = at('runtime-return')
+    const commitStart = events.find(x=>x.stage==='commit-start' && x.at>=runtime)?.at
+    const commitAt = events.find(x=>x.stage==='commit-return' && x.at>=commitStart)?.at
     assert.ok(submitted && runtime && commitStart && commitAt, 'all real settlement boundaries must be measured')
     const journal = events.filter(x => x.stage === 'journal-appended' && x.source === 'background.settlement.commit' && x.at >= commitStart && x.at <= commitAt).at(-1)?.at
     assert.ok(journal, 'final commit must append a journal frame (OS-visible write, not fsync)')
@@ -124,7 +138,7 @@ export async function settlementPerformanceChecks({ page, step, savedChat, outpu
     const browserCompleteAt = browserEvents.find(x => x.eventId === eventId)?.at
     assert.ok(browserCompleteAt, 'observe completion of the exact MVU browser event')
     const round = n => Math.round(n * 10) / 10
-    const sample = { run, gold, clickedAt, submittedAt: submitted, runtimeReturnedAt: runtime, commitStartedAt: commitStart, journalAppendedAt: journal, commitAt, visibleAt, receiptAt, browserCompleteAt,
+    const sample = { run, append, gold, clickedAt, submittedAt: submitted, runtimeReturnedAt: runtime, commitStartedAt: commitStart, journalAppendedAt: journal, commitAt, visibleAt, receiptAt, browserCompleteAt,
       browserToJournalMs: round(journal - browserCompleteAt), browserToCommitMs: round(commitAt - browserCompleteAt), browserToVisibleMs: round(visibleAt - browserCompleteAt),
       submitToCommitMs: round(commitAt - submitted), submitToVisibleMs: round(visibleAt - submitted), runtimeToCommitMs: round(commitAt - runtime),
       runtimeToVisibleMs: round(visibleAt - runtime), commitMs: round(commitAt - commitStart), commitToVisibleMs: round(visibleAt - commitAt),

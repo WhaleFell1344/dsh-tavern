@@ -67,3 +67,25 @@ test('parent defers committed refresh during a transaction and never publishes d
  assert.equal(runtime.inspect().contextBaseline.transaction,undefined)
  assert.equal(runtime.inspect().contextBaseline.stateRevision,6)
 })
+
+test('real iframe accepts an append dispatch and preserves synchronous historical reads',async()=>{
+ const initial={chatId:'append',stateRevision:1,lifecycleRevision:0,turnMessageIds:{1:0},messages:[{message_id:0,role:'assistant',message:'old',variables:{stat_data:{hp:10}}}]}
+ const run=helperHostHarness(initial)
+ run.receive({type:'dsh-tavern-helper-context',contextDelta:{version:2,kind:'dispatch',chatId:'append',baseRevision:1,stateRevision:2,lifecycleRevision:0,eventId:'append-event',messageCount:2,header:{},turnMessageIdChanges:[['2',1]],messages:[{message_id:1,role:'assistant',message:'new',variables:{stat_data:{hp:9}}}]}})
+ await new Promise(r=>setImmediate(r))
+ assert.equal(run.window.getChatMessages(0)[0].message,'old')
+ assert.equal(run.window.getChatMessages(1)[0].message,'new')
+ assert.equal(run.window.getVariables({type:'message',message_id:1}).stat_data.hp,9)
+ assert.equal(run.calls().length,0,'append must not fall back to fetching a full context')
+})
+
+test('dispatch can use an already synchronized target revision without fetching full history',()=>{
+ const before={chatId:'c',stateRevision:6,lifecycleRevision:0,messages:[{message_id:0,role:'assistant',message:'committed',variables:{hp:10}}]}
+ const delta={version:2,kind:'dispatch',chatId:'c',lifecycleRevision:0,baseRevision:5,stateRevision:6,eventId:'e',messageCount:1,header:{},messages:[{...before.messages[0],message:'committed + command'}]}
+ const applied=helperClient.applyTavernVariableReceipt(before,delta)
+ assert.ok(applied,'a view refresh that already reached the dispatch target is a valid baseline')
+ assert.equal(applied.messages[0].message,'committed + command')
+ assert.equal(before.messages[0].message,'committed')
+ assert.equal(helperClient.applyTavernVariableReceipt({...before,stateRevision:7},delta),null,'never overwrite a newer committed revision')
+ assert.equal(helperClient.applyTavernVariableReceipt({...before,stateRevision:4},delta),null,'missing revisions still require recovery')
+})

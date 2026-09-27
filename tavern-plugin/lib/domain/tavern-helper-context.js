@@ -1,5 +1,6 @@
 import { createIndexedArrayApi } from './indexed-array.js'
-import { freezeJson } from './freeze-json.js'
+import { freezeJson, createImmutableTurnFields } from './freeze-json.js'
+const helperTurns = createImmutableTurnFields()
 const helperIndex = createIndexedArrayApi({valid: row => Boolean(row && !row.stub)})
 import { assertPluginJson } from './tavern-chat-plugin-data.js'
 import { projectAgentContent } from './runtime-content-projection.js'
@@ -118,13 +119,26 @@ export function projectTavernHelperContext(chat, options = {}) {
   }
   let messages = []
   let turnMessageIds = {}
-  const indexedReuse = options.indexed && options.layoutChanged === false && dirty && options.previousContext
-    && helperIndex.info(previousMessages)?.complete && previousMessages.length === sources.length
+  const tailAppend = previousMessages && Number.isSafeInteger(options.layoutFrom)
+    && options.layoutFrom >= previousMessages.length && sources.length > previousMessages.length
+  const indexedReuse = options.indexed && (options.layoutChanged === false || tailAppend) && dirty && options.previousContext
+    && helperIndex.info(previousMessages)?.complete && (previousMessages.length === sources.length || tailAppend)
     && options.previousContext.chatId === str(chat.id)
     && options.previousContext.lifecycleRevision === Math.max(0,Number(chat.tavernHelperLifecycleRevision)||0)
   if (indexedReuse) {
-    messages = helperIndex.update(previousMessages,[...dirty].map(id => [id,freezeJson(projectTavernHelperMessage(sources[id],id))]))
+    const turns = []
+    messages = helperIndex.update(previousMessages,[...dirty].sort((a,b)=>a-b).map(id => {
+      const source = sources[id]
+      const projected = freezeJson(projectTavernHelperMessage(source,id))
+      if (id >= previousMessages.length) {
+        const mapping = {}
+        rememberAssistantTurn(mapping, source, id, projected.role)
+        turns.push(...Object.entries(mapping))
+      }
+      return [id,projected]
+    }), sources.length)
     turnMessageIds = options.previousContext.turnMessageIds
+    if (turns.length) turnMessageIds = helperTurns.update(turnMessageIds, turns)
   }
   for (let index = 0; !indexedReuse && index < sources.length; index++) {
     const source = sources[index]
@@ -147,7 +161,7 @@ export function projectTavernHelperContext(chat, options = {}) {
   }
   if (options.indexed && !indexedReuse) {
     messages = helperIndex.from(messages.map(freezeJson))
-    turnMessageIds = freezeJson(turnMessageIds)
+    turnMessageIds = helperTurns.from(turnMessageIds)
   }
   const result = {
     version: 1,

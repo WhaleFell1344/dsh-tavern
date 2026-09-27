@@ -79,7 +79,9 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
     const replyChanges = immutableArrayChanges(base?.replySource?.deref(),replies)
     const sameReplies = isImmutableJson(replies) && base?.replySource?.deref() === replies
     const arrays = [
-      {path:['tavernHelper','messages'],value:messages,previous:base?.messageHashes,dirty:dirtyMessageIndices},
+      // Storage deltas cannot describe hydration: an unchanged old floor may
+      // still be a placeholder in this reader's transport baseline.
+      {path:['tavernHelper','messages'],value:messages,previous:base?.messageHashes,dirty:base?.messagesPending || view?.tavernHelper?.messagesPending ? null : dirtyMessageIndices},
       {path:['replyProjections'],value:replies,previous:base?.replyHashes,dirty:replyChanges ? new Set(replyChanges) : sameReplies ? new Set() : null},
       ...keyedReceipts ? [] : [{path:['mvuReceipts'],value:receipts,previous:base?.receiptHashes,dirty:receiptChanges ? new Set(receiptChanges) : null}]
     ]
@@ -111,6 +113,7 @@ export function createSessionViewSync({ maxReaders = 32 } = {}) {
       hashes,
       inputFields,
       messageHashes: arrays[0].next,
+      messagesPending: Boolean(view?.tavernHelper?.messagesPending),
       replyHashes: arrays[1].next,
       receiptHashes: arrays[2]?.next,
       receiptSync: keyedReceipts,

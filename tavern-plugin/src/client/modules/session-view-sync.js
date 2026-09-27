@@ -275,8 +275,9 @@ function createStoryTurnLookup() {
 
 // Canonical array-index keys retain ordinary object enumeration order. Legacy
 // non-turn keys use the original object path instead of changing its semantics.
-function createTurnFieldIndex() {
-  const index = createOrderedNumericIndex({visit: () => createSessionViewReader.onTurnFieldVisit?.()});
+function createTurnFieldIndex(options = {}) {
+  const createIndex = options.createIndex || createOrderedNumericIndex;
+  const index = createIndex({visit: options.visit || (() => createSessionViewReader.onTurnFieldVisit?.())});
   const states = new WeakMap();
   const validKey = key => /^(0|[1-9]\d*)$/.test(String(key)) && Number(key) < 0xffffffff;
   function wrap(rows) {

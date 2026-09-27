@@ -730,14 +730,18 @@ export function createTavernScriptHostAdapter(options = {}) {
       }
       async function executionContext(baseline) {
         transaction.compact = input.compactContext === true || baseline?.workContextVersion === 1
-        let indices
+        let indices, appended = false
         if (baseline?.workContextVersion === 1 && baseline.complete === true && !baseline.full
           && baseline.chatId === current.id && baseline.lifecycleRevision === (current.tavernHelperLifecycleRevision || 0)
           && Number.isSafeInteger(baseline.stateRevision) && !baseline.transaction) {
           if (baseline.stateRevision === current._storageRevision && baseline.messageCount === current.messages.length) indices=[]
           else {
             const changed = await options.resolveChangedChatSlice?.(sessionId, baseline.stateRevision, 'settlement')
-            if (changed?.denseMessages && changed.layoutChanged === false && changed.chat.id === current.id && changed.chat._storageRevision === current._storageRevision) indices=changed.indices
+            if (changed?.denseMessages && changed.baseRevision === baseline.stateRevision && changed.chat.id === current.id && changed.chat._storageRevision === current._storageRevision) {
+              appended = baseline.appendContextVersion === 1 && Number.isSafeInteger(baseline.messageCount) && baseline.messageCount >= 0
+                && current.messages.length > baseline.messageCount && Number.isSafeInteger(changed.layoutFrom) && changed.layoutFrom >= baseline.messageCount
+              if (changed.layoutChanged === false || appended) indices=changed.indices
+            }
           }
         }
         if (indices) indices=[...new Set([...indices,messageId,...(priorId>=0 && input.baselineVariables ? [priorId] : [])])].filter(i=>i<current.messages.length)
@@ -753,9 +757,17 @@ export function createTavernScriptHostAdapter(options = {}) {
         if (transaction.compact) projected.transaction={eventId,sequence:work.sequence}
         if (!indices) return projected
         const {messages,...header}=projected
+        const turnMessageIdChanges = []
+        if (appended) for (const id of [...indices].sort((a,b)=>a-b)) {
+          if (id < baseline.messageCount) continue
+          const source = current.messages[id]
+          const role = source.role === 'tavern-helper' ? (['system','assistant','user'].includes(source.tavernRole) ? source.tavernRole : 'assistant') : source.role === 'user' ? 'user' : 'assistant'
+          const turn = Math.max(0, Number(source.turn) || (source.greeting === true ? 1 : 0))
+          if (role === 'assistant' && turn > 0) turnMessageIdChanges.push([String(turn),id])
+        }
         return {contextDelta:{version:2,kind:'dispatch',chatId:current.id,
           lifecycleRevision:current.tavernHelperLifecycleRevision||0,baseRevision:baseline.stateRevision,
-          stateRevision:current._storageRevision,eventId,messageCount:current.messages.length,header,messages}}
+          stateRevision:current._storageRevision,eventId,messageCount:current.messages.length,header,messages,turnMessageIdChanges}}
       }
       transaction.executionContext = executionContext
       const lazy = options.scriptDispatch.supportsContextProjection === true
