@@ -1,0 +1,111 @@
+{
+  "generatedAt": "2026-09-27T10:26:59.430Z",
+  "node": "v22.22.0",
+  "scope": "new domain only; warm OS cache; fixed two scalar paths; no browser or legacy MVU executor",
+  "results": [
+    {
+      "fields": 1000,
+      "worldBytes": 1063403,
+      "buildMs": 3181.91275,
+      "samples": [
+        {
+          "calculateAndPrepareMs": 175.25604199999998,
+          "commitMs": 95.82858299999998,
+          "wireBytes": 560,
+          "io": {
+            "read": {
+              "blocks": 89,
+              "bytes": 36163
+            },
+            "write": {
+              "blocks": 18,
+              "bytes": 7941
+            }
+          }
+        },
+        {
+          "calculateAndPrepareMs": 214.61158400000022,
+          "commitMs": 103.03070800000023,
+          "wireBytes": 560,
+          "io": {
+            "read": {
+              "blocks": 83,
+              "bytes": 36567
+            },
+            "write": {
+              "blocks": 24,
+              "bytes": 11763
+            }
+          }
+        },
+        {
+          "calculateAndPrepareMs": 172.11725000000024,
+          "commitMs": 97.19720799999959,
+          "wireBytes": 560,
+          "io": {
+            "read": {
+              "blocks": 95,
+              "bytes": 43006
+            },
+            "write": {
+              "blocks": 20,
+              "bytes": 9809
+            }
+          }
+        }
+      ]
+    },
+    {
+      "fields": 10000,
+      "worldBytes": 1216403,
+      "buildMs": 37203.311666,
+      "samples": [
+        {
+          "calculateAndPrepareMs": 164.02637500000128,
+          "commitMs": 85.01279200000135,
+          "wireBytes": 560,
+          "io": {
+            "read": {
+              "blocks": 97,
+              "bytes": 45605
+            },
+            "write": {
+              "blocks": 19,
+              "bytes": 8988
+            }
+          }
+        },
+        {
+          "calculateAndPrepareMs": 215.9916250000024,
+          "commitMs": 84.96179200000188,
+          "wireBytes": 560,
+          "io": {
+            "read": {
+              "blocks": 90,
+              "bytes": 44696
+            },
+            "write": {
+              "blocks": 26,
+              "bytes": 14123
+            }
+          }
+        },
+        {
+          "calculateAndPrepareMs": 178.80191699999705,
+          "commitMs": 97.95816699999705,
+          "wireBytes": 560,
+          "io": {
+            "read": {
+              "blocks": 103,
+              "bytes": 52448
+            },
+            "write": {
+              "blocks": 21,
+              "bytes": 10856
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

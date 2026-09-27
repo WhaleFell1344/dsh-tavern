@@ -1,7 +1,9 @@
 import {createHash,randomUUID} from 'node:crypto'
 import {isDeepStrictEqual} from 'node:util'
+import {createIncrementalJsonState} from './incremental-json-state.js'
 
-const FORMAT='conversation-state-v1'
+const FORMAT='conversation-state-v2'
+const WORLD_FORMAT='incremental-world-v1'
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)
 const error=(code,message=code)=>Object.assign(new Error(message),{code})
 function capture(value){
@@ -20,23 +22,30 @@ function world(value){if(!object(value)||!object(value.variables))throw error('C
  * Every write is a short CAS; retries never rerun models or script effects.
  */
 export function createConversationState({store}){
+ function tree(id){return createIncrementalJsonState({read:ref=>store.readRecord(id,ref),write:value=>store.writeRecord(id,value)})}
+ async function worldRoot(id,state){return state.worldRef??tree(id).create(world(state.world))}
+ async function worldValue(id,ref){const record=await store.readRecord(id,ref);return record.format===WORLD_FORMAT&&!Object.hasOwn(record,'variables')?tree(id).get(record.root):record}
+ async function validRoot(id,root){
+  if(await tree(id).type(root)!=='object'||await tree(id).type(root,'/variables')!=='object')throw error('CONVERSATION_INPUT','World requires variables')
+ }
  async function create(id,input){
   const value=capture(input)
   world(value.world)
   return store.create(id,{metadata:{format:FORMAT,settings:value.metadata??{}},messages:value.messages??[],
-   state:{branchId:randomUUID(),storyRevision:0,worldRevision:0,lifecycleRevision:0,activeSettlementId:null,world:value.world}})
+   state:{branchId:randomUUID(),storyRevision:0,worldRevision:0,lifecycleRevision:0,activeSettlementId:null,worldRef:await tree(id).create(value.world)}})
  }
- async function open(id,{limit=50}={}){
+ async function open(id,{limit=50,includeWorld=true}={}){
   const view=await store.openConversation(id,{limit})
   if(!view)throw error('CONVERSATION_MISSING')
-  if(view.metadata?.format!==FORMAT)throw error('CONVERSATION_FORMAT','Conversation requires explicit domain migration')
+  if(![FORMAT,'conversation-state-v1'].includes(view.metadata?.format))throw error('CONVERSATION_FORMAT','Conversation requires explicit domain migration')
+  if(includeWorld&&view.state.worldRef)view.state.world=await tree(id).get(view.state.worldRef)
   return {...view,basis:basis(view.state)}
  }
  async function records(id,view,keys){return store.readEntries(id,keys,{snapshotId:view.snapshotCursor.snapshotId})}
  async function readOperation(id,key){operationId(key);return (await store.readEntries(id,[key]))?.[key]}
  async function transact(id,build){
   for(let attempt=0;attempt<5;attempt++){
-   const view=await open(id,{limit:1}),change=await build(view)
+   const view=await open(id,{limit:1,includeWorld:false}),change=await build(view)
    if(!change.write)return capture(change.result)
    try{
     await store.commit(id,{expectedRevision:view.revision,...change.write})
@@ -68,8 +77,9 @@ export function createConversationState({store}){
     return {result:existing[key].receipt}
    }
    assertBasis(view,args.basis)
-   const beforeRef=await store.writeRecord(id,view.state.world),settlementId='mvu:'+args.operationId
-   const afterState={...view.state,storyRevision:view.state.storyRevision+1,activeSettlementId:settlementId}
+   const root=await worldRoot(id,view.state),beforeRef=await store.writeRecord(id,{format:WORLD_FORMAT,root}),settlementId='mvu:'+args.operationId
+   const {world:legacyWorld,...headState}=view.state
+   const afterState={...headState,worldRef:root,storyRevision:view.state.storyRevision+1,activeSettlementId:settlementId}
    const position=view.messageCount+1,contentVersionId=fingerprint({text:args.assistantText})
    const assistant={id:key+':assistant',role:'assistant',text:args.assistantText,turnId:args.operationId,
     contentVersionId,stateBeforeRef:beforeRef,stateAfterRef:null,settlementId,settlementStatus:'pending'}
@@ -105,7 +115,10 @@ export function createConversationState({store}){
   })
  }
  async function prepareSettlement(id,input){
-  const args=capture(input),key=operationId(args.operationId),value=world(args.world),signature=fingerprint(value)
+  const args=capture(input),key=operationId(args.operationId)
+  if(Object.hasOwn(args,'world')===Object.hasOwn(args,'changes'))throw error('CONVERSATION_INPUT','Provide world or changes')
+  const incremental=Object.hasOwn(args,'changes')
+  const signature=incremental?fingerprint({changes:args.changes}):fingerprint(world(args.world))
   return transact(id,async view=>{
    const op=(await records(id,view,[key]))[key]
    if(op?.effectFingerprint&&op.effectFingerprint!==signature)throw error('IDEMPOTENCY_CONFLICT')
@@ -113,10 +126,26 @@ export function createConversationState({store}){
    assertTarget(view,op)
    if(!op.submissionRef)throw error('CONVERSATION_INPUT','Settlement submission must be durable first')
    if(op.status==='prepared')return {result:op}
-   const preparedWorldRef=await store.writeRecord(id,value)
-   const next={...op,status:'prepared',preparedWorldRef,effectFingerprint:signature}
+   const root=await worldRoot(id,view.state)
+   const effect=await tree(id).apply(root,incremental?args.changes:[{op:'set',path:'',value:args.world}])
+   await validRoot(id,effect.nextRoot)
+   const preparedWorldRef=await store.writeRecord(id,{format:WORLD_FORMAT,root:effect.nextRoot})
+   const deltaRef=await store.writeRecord(id,{version:1,operationId:key,basis:op.basis,mode:incremental?'delta':'snapshot',...effect})
+   const next={...op,deltaRef,status:'prepared',preparedWorldRef,effectFingerprint:signature}
    return {result:next,write:{records:[[key,next]]}}
   })
+ }
+ // Calculation is deliberately outside CAS retries. This is a state-only
+ // callback, not the legacy script executor or an external side-effect runner.
+ async function calculateSettlement(id,{operationId:key},calculate){
+  operationId(key)
+  const view=await open(id,{limit:1,includeWorld:false}),op=(await records(id,view,[key]))[key]
+  if(op?.status==='completed')return op
+  assertTarget(view,op)
+  if(op.status==='prepared')return op
+  if(!op.submissionRef)throw error('CONVERSATION_INPUT','Settlement submission must be durable first')
+  const effect=await tree(id).calculate(await worldRoot(id,view.state),calculate)
+  return prepareSettlement(id,{operationId:key,changes:effect.changes})
  }
  async function commitSettlement(id,input){
   const key=operationId(input.operationId)
@@ -125,8 +154,12 @@ export function createConversationState({store}){
    if(op?.status==='completed')return {result:op.receipt}
    const message=assertTarget(view,op)
    if(op.status!=='prepared'||!op.preparedWorldRef)throw error('CONVERSATION_INPUT','No prepared settlement effect')
-   const nextState={...view.state,world:world(await store.readRecord(id,op.preparedWorldRef)),worldRevision:view.state.worldRevision+1,activeSettlementId:null}
-   const receipt={status:'completed',operationId:key,position:op.position,basis:basis(nextState)}
+   const prepared=await store.readRecord(id,op.preparedWorldRef)
+   const root=prepared.format===WORLD_FORMAT&&!Object.hasOwn(prepared,'variables')?prepared.root:await tree(id).create(world(prepared))
+   await validRoot(id,root)
+   const {world:legacyWorld,...headState}=view.state
+   const nextState={...headState,worldRef:root,worldRevision:view.state.worldRevision+1,activeSettlementId:null}
+   const receipt={status:'completed',operationId:key,position:op.position,basis:basis(nextState),...(op.deltaRef?{deltaRef:op.deltaRef}:{})}
    return {result:receipt,write:{state:nextState,records:[[key,{...op,status:'completed',receipt}]],
     edits:[{position:op.position,message:{...message,stateAfterRef:op.preparedWorldRef,settlementStatus:'completed'}}]}}
   })
@@ -145,12 +178,33 @@ export function createConversationState({store}){
  }
  async function readMessageState(id,{position,side='after'}){
   if(!Number.isSafeInteger(position)||position<0||!['before','after'].includes(side))throw error('CONVERSATION_INPUT')
-  const view=await open(id,{limit:1})
+  const view=await open(id,{limit:1,includeWorld:false})
   if(position>=view.messageCount)throw error('CONVERSATION_INPUT','Message position out of range')
   const page=await store.readHistoryPage(id,{cursor:{snapshotId:view.snapshotCursor.snapshotId,before:position+1},limit:1})
   const ref=page.messages[0].message[side==='before'?'stateBeforeRef':'stateAfterRef']
-  return ref?store.readRecord(id,ref):undefined
+  return ref?worldValue(id,ref):undefined
  }
- return Object.freeze({create,open,commitForeground,submitSettlement,prepareSettlement,commitSettlement,readOperation,readMessageState,
+ async function readWorld(id,{path=''}={}){
+  const view=await open(id,{limit:1,includeWorld:false})
+  return tree(id).get(await worldRoot(id,view.state),path)
+ }
+ async function readSettlementDelta(id,key){
+  const op=await readOperation(id,key)
+  if(op?.status!=='completed'||!op.deltaRef)throw error('CONVERSATION_INPUT','No committed delta')
+  return {...await store.readRecord(id,op.deltaRef),nextBasis:op.receipt.basis}
+ }
+ return Object.freeze({create,open,readWorld,readSettlementDelta,commitForeground,submitSettlement,prepareSettlement,calculateSettlement,commitSettlement,readOperation,readMessageState,
   failSettlement:(id,input)=>finishUnsuccessfully(id,input,'failed'),cancelSettlement:(id,input)=>finishUnsuccessfully(id,input,'cancelled')})
+}
+
+/** Receiver for a replica already synchronized to the foreground basis.
+ * A gap or lifecycle change requests resynchronization; never guess a base.
+ */
+export async function receiveConversationDelta({tree,root,basis:current},delta){
+ if(delta?.version!==1||!['delta','snapshot'].includes(delta.mode)||!delta.nextBasis)throw error('CONVERSATION_INPUT','Invalid settlement delta')
+ const expected={...delta.basis,worldRevision:delta.basis?.worldRevision+1}
+ if(!isDeepStrictEqual(expected,delta.nextBasis))throw error('CONVERSATION_INPUT','Invalid delta revision')
+ if(root===delta.nextRoot&&isDeepStrictEqual(current,delta.nextBasis))return {root,basis:current}
+ if(root!==delta.baseRoot||!isDeepStrictEqual(current,delta.basis))throw error('CONVERSATION_STALE','Replica must resynchronize')
+ return {root:await tree.receive(root,delta),basis:delta.nextBasis}
 }

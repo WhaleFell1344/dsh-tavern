@@ -199,3 +199,7 @@ restoreStoryPosition(id, expectedBasis, target)
 - 已有旧 Chat 的无损影子映射及只读迁移审计；未激活为权威存储。
 - 已新增独立领域事务：正文追加、submission/准备结果持久化、MVU 原子落地、操作回执索引、重复/过期提交保护。见 [领域事务验证](../verification/conversation-state-20260927.md)。
 - 当前仍处于关键路径接入前的领域层验证。实际首屏、原生 Session、模板/Helper、回滚及迁移激活尚未切换，不能以原型耗时宣布万轮游玩性能完成。
+
+### 变量层增量化
+
+新领域后端的 world 改为不可变 JSON 树根引用；按路径计算、增量效果回执和原子根发布已实现。具体接口、精确快照同步、旧完整变量兼容与数组删除的成本边界见 [变量增量验证](../verification/variable-delta-20260927.md)。官方脚本执行器与产品 UI 尚未接入该协议，继续保留原行为。
