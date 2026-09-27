@@ -82,7 +82,7 @@ TAVERN_E2E_WRONG_GOLD=1 TAVERN_E2E_TIMEOUT_MS=10000 pnpm test:e2e
 
 `node tests/e2e/gameplay.mjs --mvu-incremental` 在真实 DSH、Remote 与状态栏 iframe 中调用 Helper API，分别更新历史楼、末楼、chat 和 script 变量，独立读档核对正文与回执未变。第二页面冷加载后检查直接写入及正式 MVU 重新结算的实时同步，最后重启服务、继续写入并刷新验证。
 
-为一次运行收集完整证据，跨页面超时会先截图、记录磁盘/主页面/第二页面值，再刷新确认恢复并继续其他场景；所有已记录问题最终统一使测试失败，不会将刷新恢复当作实时同步通过。`report.json` 的 `staleViewers`、`variableScopes` 和 `variableIssues` 保存证据。当前基线存在已复现失败，见 [2026-09-27 验收报告](../../docs/verification/mvu-performance-e2e-20260927.md)。
+为一次运行收集完整证据，跨页面超时会先截图、记录磁盘/主页面/第二页面值，再刷新确认恢复并继续其他场景；所有已记录问题最终统一使测试失败，不会将刷新恢复当作实时同步通过。`report.json` 的 `staleViewers`、`variableScopes` 和 `variableIssues` 保存证据。该用例发现的两项问题已修复并通过复测，原始失败与修复证据见 [2026-09-27 验收报告](../../docs/verification/mvu-performance-e2e-20260927.md)。
 
 ## 压缩专项
 
