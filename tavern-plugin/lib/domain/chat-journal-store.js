@@ -489,6 +489,11 @@ export function createChatJournalStore(options = {}) {
     return state ? copyJsonTree(state.chat) : undefined
   }
   async function readSessionState(chatId, options = {}) {
+    const cached=readCache.get(chatId)
+    if(!cached||cached.stamp!==await version(chatId)){
+      const selected=await native.readSessionState(chatId,options)
+      if(selected!==null)return selected
+    }
     // Internal readers opt into lazy, detached rows. Default callers retain
     // ordinary arrays (including structuredClone compatibility).
     const state = await cachedState(chatId)
@@ -503,6 +508,12 @@ export function createChatJournalStore(options = {}) {
     return state ? projectSceneImageState(state.chat) : undefined
   }
   async function readBackgroundConfig(chatId) {
+    const cached=readCache.get(chatId)
+    if(!cached||cached.stamp!==await version(chatId)){
+      const selected=await native.readSlice(chatId,[],['id','sessionId','mode','backgroundConfigVersion','conversationFeaturesVersion',
+       'backgroundModelSelection','backgroundModelRevision','backgroundTasks','webSearchEnabled','sceneImagesEnabled','cardContextRevision','timeline.participants.background.status'])
+      if(selected!==null)return selected?projectChatBackgroundConfig(selected.chat):undefined
+    }
     const state = await cachedState(chatId)
     return state ? projectChatBackgroundConfig(state.chat) : undefined
   }
@@ -538,6 +549,11 @@ export function createChatJournalStore(options = {}) {
   }
   /** Detached metadata and selected native rows, never an editable full-chat snapshot. */
   async function readSlice(chatId, indices=[], fields) {
+    const cached=readCache.get(chatId)
+    if(!cached||cached.stamp!==await version(chatId)){
+      const selected=await native.readSlice(chatId,indices,fields)
+      if(selected!==null)return selected
+    }
     const state=await cachedState(chatId)
     return state && !indices.some(i=>i>=(state.chat.messages?.length||0)) ? slice(state.chat,indices,fields) : undefined
   }

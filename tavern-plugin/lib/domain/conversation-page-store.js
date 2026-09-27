@@ -1,5 +1,5 @@
 import {createHash, randomUUID} from 'node:crypto'
-import {mkdir, open, readFile, rename, rm} from 'node:fs/promises'
+import {mkdir, open, readFile, rename, rm, link} from 'node:fs/promises'
 import path from 'node:path'
 import {createDurableFilePromotion} from '../durable-file-promotion.js'
 
@@ -13,12 +13,35 @@ const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)
 function conflict(){return Object.assign(new Error('Conversation revision conflict'),{code:'CONVERSATION_CONFLICT'})}
 function integer(value,min=0){return Number.isSafeInteger(value)&&value>=min}
 
-export function createConversationPageStore({root,onIO=()=>{}}={}) {
+export function createConversationPageStore({root,onIO=()=>{},linkFile=link}={}) {
  if(!root)throw Error('Conversation store requires root')
  root=path.resolve(root)
  // A live, slow writer must never lose its lock merely due to elapsed time.
  // Dead process recovery and pending head promotion use the existing protocol.
  const promotion=createDurableFilePromotion({writeLockStaleMs:Number.MAX_SAFE_INTEGER})
+ const packed=new Map();let packedBytes=0
+ function cachePacked(dir,id,value,size){
+  const key=dir+'/'+id,old=packed.get(key)
+  if(old){packedBytes-=old.size;packed.delete(key)}
+  while(packed.size&&packedBytes+size>8*1024*1024){const oldest=packed.keys().next().value;packedBytes-=packed.get(oldest).size;packed.delete(oldest)}
+  if(size<=8*1024*1024){packed.set(key,{value,size});packedBytes+=size}
+ }
+ function decodeBlock(dir,id,bytes){
+  if(hash(bytes)===id)return JSON.parse(bytes)
+  let pack
+  try{pack=JSON.parse(bytes)}catch{throw Error('Immutable block checksum mismatch')}
+  if(pack?.kind!=='record-pack-v1'||!Array.isArray(pack.records)||pack.records.length>128)throw Error('Immutable block checksum mismatch')
+  const entries=[],seen=new Set()
+  for(const entry of pack.records){
+   if(!Array.isArray(entry)||entry.length!==2||seen.has(entry[0]))throw Error('Immutable pack checksum mismatch')
+   const [ref,value]=entry,record={kind:'record',value},encoded=JSON.stringify(record)
+   if(hash(encoded)!==ref)throw Error('Immutable pack checksum mismatch')
+   seen.add(ref);entries.push([ref,record,Buffer.byteLength(encoded)*2+128])
+  }
+  if(!seen.has(id))throw Error('Immutable pack is missing requested block')
+  for(const entry of entries)cachePacked(dir,...entry)
+  return entries.find(entry=>entry[0]===id)[1]
+ }
  function directory(id){
   if(typeof id!=='string'||!id||id==='.'||id==='..'||/[\\/\0]/.test(id))throw Error('Invalid conversation id')
   return path.join(root,id)
@@ -32,14 +55,15 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
   const handle=await open(dir,'r')
   try{await handle.sync()}catch(error){if(!['EINVAL','ENOTSUP','EISDIR'].includes(error.code))throw error}finally{await handle.close()}
  }
- async function writeBlock(dir,value){
+ async function writeBlock(dir,value,directories){
   const bytes=JSON.stringify(value),id=hash(bytes),target=blobPath(dir,id),parent=path.dirname(target)
   await mkdir(parent,{recursive:true})
+  if(directories){directories.add(parent);directories.add(path.dirname(parent));directories.add(dir)}
   let existing
   try{existing=await readFile(target,'utf8')}catch(error){if(error.code!=='ENOENT')throw error}
   if(existing!==undefined){
    onIO({kind:'read',type:value.kind,bytes:Buffer.byteLength(existing),reason:'deduplication'})
-   if(existing!==bytes)throw Error('Immutable block corruption')
+   if(existing!==bytes&&JSON.stringify(decodeBlock(dir,id,existing))!==bytes)throw Error('Immutable block corruption')
    return id
   }
   const staging=target+'.staging-'+randomUUID()
@@ -47,22 +71,26 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
   try{
    handle=await open(staging,'wx');await handle.writeFile(bytes);await handle.sync();await handle.close();handle=null
    await rename(staging,target)
-   await syncDirectory(parent)
-   await syncDirectory(path.dirname(parent))
-   await syncDirectory(dir)
+   if(!directories){
+    await syncDirectory(parent)
+    await syncDirectory(path.dirname(parent))
+    await syncDirectory(dir)
+   }
   }finally{if(handle)await handle.close();await rm(staging,{force:true})}
   onIO({kind:'write',type:value.kind,bytes:Buffer.byteLength(bytes)})
   return id
  }
  function reader(dir){
-  // Request-local only: cold and warm operations have the same bounded reads.
+  // Page/index reads remain request-local; decoded record packs have a bounded cache.
   const cache=new Map()
   return async function readBlock(id,kind){
    if(!cache.has(id)){
-    const bytes=await readFile(blobPath(dir,id),'utf8')
-    if(hash(bytes)!==id)throw Error('Immutable block checksum mismatch')
-    const value=JSON.parse(bytes)
-    cache.set(id,value);onIO({kind:'read',type:value.kind,bytes:Buffer.byteLength(bytes)})
+    const remembered=packed.get(dir+'/'+id)
+    if(remembered){cache.set(id,remembered.value);packed.delete(dir+'/'+id);packed.set(dir+'/'+id,remembered)}
+    else {
+     const bytes=await readFile(blobPath(dir,id),'utf8'),value=decodeBlock(dir,id,bytes)
+     cache.set(id,value);onIO({kind:'read',type:value.kind,bytes:Buffer.byteLength(bytes)})
+    }
    }
    const value=cache.get(id)
    if(kind&&value.kind!==kind)throw Error('Invalid block type')
@@ -215,6 +243,16 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
   return {revision:head.revision,messageCount:head.count,messages,
    snapshotCursor:{snapshotId:headId,before},previousCursor:start?{snapshotId:headId,before:start}:null}
  }
+ // Header/configuration readers never need a history page, including its
+ // potentially large historical receipts. The pointer pins all returned fields.
+ async function readHead(id,{snapshotId}={}){
+  const dir=directory(id),read=reader(dir)
+  const selected=snapshotId?{head:validateHead(await read(snapshotId,'head'),id),headId:snapshotId}:await current(dir,id,read)
+  if(!selected)return undefined
+  const {head,headId}=selected
+  return {revision:head.revision,messageCount:head.count,snapshotCursor:{snapshotId:headId,before:head.count},
+   state:copy((await read(head.stateId,'state')).value),metadata:copy((await read(head.metadataId,'metadata')).value)}
+ }
  async function openConversation(id,{limit=50,snapshotId}={}){
   pageLimit(limit)
   const dir=directory(id),read=reader(dir)
@@ -244,6 +282,78 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
  // Detached immutable records let migration separate large historical state
  // and extension payloads from the page body. They are not a second mutable head.
  async function writeRecord(id,value){return writeBlock(directory(id),{kind:'record',value:copy(value)})}
+ // Independent immutable blocks may be flushed concurrently. All files and
+ // directory entries are durable before this returns and BEFORE head publication.
+ async function writeRecords(id,values){
+  const dir=directory(id),records=copy(values),directories=new Set(),refs=new Array(records.length)
+  const entries=new Map(),groups=[]
+  for(let i=0;i<records.length;i++){
+   const bytes=JSON.stringify({kind:'record',value:records[i]}),ref=hash(bytes)
+   refs[i]=ref;entries.set(ref,{ref,value:records[i],bytes})
+  }
+  let group=[],groupBytes=64
+  for(const entry of entries.values()){
+   let existing
+   try{existing=await readFile(blobPath(dir,entry.ref),'utf8')}catch(error){if(error.code!=='ENOENT')throw error}
+   const parent=path.dirname(blobPath(dir,entry.ref))
+   directories.add(parent);directories.add(path.join(dir,'blocks'));directories.add(dir)
+   if(existing!==undefined){
+    if(JSON.stringify(decodeBlock(dir,entry.ref,existing))!==entry.bytes)throw Error('Immutable block corruption')
+    onIO({kind:'read',type:'record',bytes:Buffer.byteLength(existing),reason:'deduplication'})
+    continue
+   }
+   const size=Buffer.byteLength(JSON.stringify([entry.ref,entry.value]))+1
+   if(group.length&&(groupBytes+size>64*1024||group.length>=128)){groups.push(group);group=[];groupBytes=64}
+   group.push(entry);groupBytes+=size
+  }
+  if(group.length)groups.push(group)
+  const packDirectory=path.join(dir,'blocks','.packs')
+  if(groups.some(group=>group.length>1)){await mkdir(packDirectory,{recursive:true});directories.add(packDirectory)}
+  // Hard links provide direct hash lookup without a growing pack index. Each
+  // pack inode is synced once; all link directories are synced before the head.
+  // Filesystems without hard links keep the original durable block layout.
+  let index=0
+  const workers=Array.from({length:Math.min(8,groups.length)},async()=>{
+   while(index<groups.length){
+    const group=groups[index++]
+    if(group.length===1){await writeBlock(dir,{kind:'record',value:group[0].value},directories);continue}
+    const bytes=JSON.stringify({kind:'record-pack-v1',records:group.map(entry=>[entry.ref,entry.value])})
+    const target=path.join(packDirectory,hash(bytes)+'.json'),staging=target+'.staging-'+randomUUID()
+    let handle
+    try{
+     handle=await open(staging,'wx');await handle.writeFile(bytes);await handle.sync();await handle.close();handle=null
+     await rename(staging,target)
+     onIO({kind:'write',type:'record-pack',bytes:Buffer.byteLength(bytes)})
+     for(const entry of group){
+      const destination=blobPath(dir,entry.ref)
+      await mkdir(path.dirname(destination),{recursive:true})
+      try{await linkFile(target,destination);onIO({kind:'link',type:'record',bytes:0})}
+      catch(error){
+       if(error.code==='EEXIST'){
+        if(JSON.stringify(decodeBlock(dir,entry.ref,await readFile(destination,'utf8')))!==entry.bytes)throw Error('Immutable block corruption')
+       }else if(['EXDEV','EPERM','EACCES','ENOTSUP','EOPNOTSUPP','ENOSYS','EMLINK'].includes(error.code)){
+        await writeBlock(dir,{kind:'record',value:entry.value},directories)
+       }else throw error
+      }
+     }
+    }finally{if(handle)await handle.close();await rm(staging,{force:true})}
+   }
+  })
+  const results=await Promise.allSettled(workers)
+  const failed=results.find(result=>result.status==='rejected')
+  if(failed)throw failed.reason
+  // Children first, then their parents: no acknowledged head can name a block
+  // whose directory entry has not completed its durability barrier.
+  const leaves=[...directories].filter(directory=>directory!==dir&&directory!==path.join(dir,'blocks'))
+  let directoryIndex=0
+  const synced=await Promise.allSettled(Array.from({length:Math.min(8,leaves.length)},async()=>{
+   while(directoryIndex<leaves.length)await syncDirectory(leaves[directoryIndex++])
+  }))
+  const syncFailure=synced.find(result=>result.status==='rejected')
+  if(syncFailure)throw syncFailure.reason
+  if(directories.size){await syncDirectory(path.join(dir,'blocks'));await syncDirectory(dir)}
+  return refs
+ }
  async function readRecord(id,reference){return copy((await reader(directory(id))(reference,'record')).value)}
  async function readEntries(id,keys,{snapshotId}={}){
   if(!Array.isArray(keys))throw Error('Invalid record keys')
@@ -257,5 +367,5 @@ export function createConversationPageStore({root,onIO=()=>{}}={}) {
   }
   return Object.fromEntries(entries)
  }
- return Object.freeze({create,commit,openConversation,readHistoryPage,readState,writeRecord,readRecord,readEntries})
+ return Object.freeze({create,commit,readHead,openConversation,readHistoryPage,readState,writeRecord,writeRecords,readRecord,readEntries})
 }

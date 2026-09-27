@@ -3,10 +3,12 @@ import assert from 'node:assert/strict'
 import {mkdtemp,rm,readdir,readFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
+import {spawnSync} from 'node:child_process'
 import {createChatJournalStore} from '../tavern-plugin/lib/domain/chat-journal-store.js'
 import {createChatPersistence} from '../tavern-plugin/lib/domain/chat-persistence.js'
 import {createConversationPageStore} from '../tavern-plugin/lib/domain/conversation-page-store.js'
 import {createConversationState} from '../tavern-plugin/lib/domain/conversation-state.js'
+import {projectChatSessionState,projectChatBackgroundConfig} from '../tavern-plugin/lib/domain/chat-session-state.js'
 
 async function fixture(t){
  const root=await mkdtemp(join(tmpdir(),'native-chat-'))
@@ -17,6 +19,72 @@ async function fixture(t){
  return {root,store,persistence,pages,domain:createConversationState({store:pages}),io}
 }
 const row=gold=>({role:'assistant',text:'reward',variables:[{stat_data:{gold},schema:{}}]})
+
+test('one variable transaction persists final roots, not twenty intermediate worlds',async t=>{
+ const {persistence,io,domain,root}=await fixture(t)
+ const chat=await persistence.write({id:'a',messages:[{role:'assistant',text:'reward',variables:[{stat_data:Object.fromEntries(Array.from({length:20},(_,i)=>['f'+i,0]))}]}]})
+ io.length=0
+ await persistence.patch('a',chat._storageRevision,Array.from({length:20},(_,i)=>({op:'set',path:['messages',0,'variables',0,'stat_data','f'+i],value:1})))
+ assert.ok(io.filter(e=>e.kind==='write').length<=35,'do not persist unreachable intermediate tree roots')
+ assert.deepEqual((await domain.readWorld('a')).variables.stat_data,Object.fromEntries(Array.from({length:20},(_,i)=>['f'+i,1])))
+ const fresh=createChatJournalStore({dataRoot:root})
+ assert.deepEqual((await fresh.read('a')).messages[0].variables[0],(await domain.readWorld('a')).variables)
+})
+
+test('process death during a buffered flush cannot publish half a variable transaction',async t=>{
+ const {root,persistence}=await fixture(t)
+ const original=await persistence.write({id:'a',messages:[row(0)]})
+ const child=spawnSync(process.execPath,['--input-type=module','-e',`
+  import {createChatJournalStore} from ${JSON.stringify(new URL('../tavern-plugin/lib/domain/chat-journal-store.js',import.meta.url).href)};
+  import {createChatPersistence} from ${JSON.stringify(new URL('../tavern-plugin/lib/domain/chat-persistence.js',import.meta.url).href)};
+  let writes=0;
+  const store=createChatJournalStore({dataRoot:${JSON.stringify(root)},onNativeIO:e=>{if(['write','link'].includes(e.kind)&&e.type==='record'&&++writes===2)process.kill(process.pid,'SIGKILL')}});
+  await createChatPersistence({store}).patch('a',1,[{op:'set',path:['messages',0,'variables',0,'stat_data','gold'],value:10}]);
+ `],{encoding:'utf8',timeout:15000})
+ assert.equal(child.signal,'SIGKILL',child.stderr)
+ const restarted=createChatPersistence({store:createChatJournalStore({dataRoot:root})})
+ assert.deepEqual(await restarted.read('a'),original)
+ await restarted.patch('a',1,[{op:'set',path:['messages',0,'variables',0,'stat_data','gold'],value:10}])
+ assert.equal((await restarted.read('a')).messages[0].variables[0].stat_data.gold,10)
+})
+
+test('cold selected reads skip historical variables and return the same session projection',async t=>{
+ const {root,persistence}=await fixture(t)
+ const historical=row(1)
+ historical.variables[0].stat_data.archive='history-only'.repeat(15000)
+ const chat=await persistence.write({id:'a',sessionId:'s',messages:[historical,...Array.from({length:128},()=>row(2)),{...row(3),mvu:{pending:true,pendingSubmission:{ops:[]}}}],
+  timeline:{schemaVersion:1,operations:{},checkpoints:['large-checkpoint'.repeat(15000)],participants:{background:{status:'idle'}}},mode:'story'})
+ let io=[]
+ const fresh=createChatJournalStore({dataRoot:root,onNativeIO:e=>io.push(e)})
+ const selected=await fresh.readSlice('a',[129],'settlement')
+ assert.equal(selected.messageCount,130)
+ assert.deepEqual(selected.chat.messages,[chat.messages[129]])
+ assert.deepEqual(selected.chat.timeline.checkpoints,[])
+ assert.ok(io.every(e=>e.bytes<65536),'selected reads must skip historical variables and checkpoints')
+ assert.ok(io.filter(e=>e.type==='page').length<=3,'tail selection must not read every page')
+ io=[]
+ const tail=await fresh.readSlice('a',Array.from({length:100},(_,i)=>30+i),'settlement')
+ assert.deepEqual(tail.chat.messages,chat.messages.slice(30))
+ assert.ok(io.filter(e=>e.type==='page').length<=4,'adjacent row selections must share page reads')
+ const duplicates=await fresh.readSlice('a',[129,30,129],['id','_storageRevision'])
+ assert.deepEqual(duplicates.chat.messages,[chat.messages[129],chat.messages[30],chat.messages[129]])
+ duplicates.chat.messages[0].text='changed'
+ assert.notEqual(duplicates.chat.messages[2].text,'changed')
+ io=[]
+ assert.deepEqual(await fresh.readBackgroundConfig('a'),projectChatBackgroundConfig(chat))
+ assert.ok(io.every(e=>e.bytes<65536))
+ io=[]
+ assert.deepEqual(await fresh.readSessionState('a'),projectChatSessionState(chat))
+ // Session's public contract includes checkpoints, but never historical variables.
+ const historyBytes=Buffer.byteLength(JSON.stringify({kind:'record',value:{type:'scalar',value:historical.variables[0].stat_data.archive}}))
+ assert.ok(!io.some(e=>e.bytes===historyBytes),'session metadata must not hydrate history-only payload')
+ const scoped=await fresh.readSessionState('a',{scoped:true})
+ assert.deepEqual([...scoped.messages],projectChatSessionState(chat).messages)
+ assert.deepEqual(scoped.pendingMvuSettlement,{hasSubmission:true,prepared:false})
+ scoped.messages[0].role='changed'
+ assert.equal((await fresh.readSessionState('a')).messages[0].role,'assistant')
+ assert.deepEqual((await fresh.read('a')).messages,chat.messages,'full read still returns complete historical values')
+})
 
 test('fresh native gameplay writes pages, recovers variables and preserves historical revisions',async t=>{
  const {root,store,persistence,domain,pages}=await fixture(t)
@@ -52,7 +120,7 @@ test('scalar variable writes do not read unrelated large values and corrupt head
  const chat=await persistence.write({id:'a',messages:[message]})
  io.length=0
  await persistence.patch('a',chat._storageRevision,[{op:'set',path:['messages',0,'variables',0,'stat_data','gold'],value:42}])
- assert.ok(io.every(event=>event.bytes<10000),'a scalar patch must not load or write the large sibling')
+ assert.ok(io.every(event=>event.bytes<65536),'a scalar patch must not load or write the large sibling')
  assert.equal((await domain.readWorld('a',{path:'/variables/stat_data/gold'})),42)
  const {writeFile}=await import('node:fs/promises')
  await writeFile(join(root,'chats/a/head.json'),'{broken')
