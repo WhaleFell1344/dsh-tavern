@@ -1,0 +1,76 @@
+name: SQLite compatibility probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - tests/fixtures/sqlite-platform-probe.cjs
+      - .github/workflows/sqlite-compatibility.yml
+  pull_request:
+    paths:
+      - tests/fixtures/sqlite-platform-probe.cjs
+      - .github/workflows/sqlite-compatibility.yml
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node: [22.19.0, 24.18.1]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Run unchanged probe with Node
+        shell: bash
+        run: node tests/fixtures/sqlite-platform-probe.cjs > sqlite-result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sqlite-${{ matrix.os }}-node-${{ matrix.node }}
+          path: sqlite-result.json
+
+  electron:
+    # Same Electron version as Desktop 2.0.13. This checks the runtime,
+    # not the installed Desktop application, its loader, or user filesystem.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+      - name: Prepare isolated Electron 43.3.0
+        shell: bash
+        run: npm install --prefix "$RUNNER_TEMP/sqlite-electron" --no-save --package-lock=false electron@43.3.0
+      - name: Run unchanged probe with Electron
+        shell: bash
+        run: |
+          node <<'NODE' > sqlite-result.json
+          const path = require('node:path')
+          const { spawnSync } = require('node:child_process')
+          const executable = require(path.join(process.env.RUNNER_TEMP, 'sqlite-electron/node_modules/electron'))
+          const result = spawnSync(executable, ['tests/fixtures/sqlite-platform-probe.cjs'], {
+            stdio: 'inherit', timeout: 120000,
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+          })
+          if (result.error) console.error(result.error)
+          process.exit(result.status ?? 1)
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sqlite-${{ matrix.os }}-electron-43.3.0
+          path: sqlite-result.json

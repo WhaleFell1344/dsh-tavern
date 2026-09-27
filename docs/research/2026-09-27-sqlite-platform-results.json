@@ -1,0 +1,120 @@
+{
+  "scope": "Runtime compatibility probe, not production Tavern persistence or full platform certification",
+  "results": {
+    "macos-cli-minimum.json": {
+      "ok": true,
+      "runtime": {
+        "node": "22.19.0",
+        "electron": null,
+        "sqlite": "3.50.4",
+        "platform": "darwin",
+        "arch": "arm64"
+      },
+      "checks": [
+        "wal-file-write",
+        "unicode-json-blob-bigint",
+        "foreign-key",
+        "transaction-rollback",
+        "cross-process-lock-and-reader",
+        "reopen-persistence",
+        "exit-without-close-recovery",
+        "integrity-check",
+        "worker-thread"
+      ],
+      "payloadSha256": "b785ae3de25f1846f3bd0e0e4168deea665d655ede3071a5f7f3250dcd1fc000",
+      "probeSha256": "889f0576d4fdb2284451239402c54c0e6b8acf5b7e21accd516804c7a97bb802"
+    },
+    "macos-cli-node22.json": {
+      "ok": true,
+      "runtime": {
+        "node": "22.22.0",
+        "electron": null,
+        "sqlite": "3.50.4",
+        "platform": "darwin",
+        "arch": "arm64"
+      },
+      "checks": [
+        "wal-file-write",
+        "unicode-json-blob-bigint",
+        "foreign-key",
+        "transaction-rollback",
+        "cross-process-lock-and-reader",
+        "reopen-persistence",
+        "exit-without-close-recovery",
+        "integrity-check",
+        "worker-thread"
+      ],
+      "payloadSha256": "b785ae3de25f1846f3bd0e0e4168deea665d655ede3071a5f7f3250dcd1fc000",
+      "probeSha256": "889f0576d4fdb2284451239402c54c0e6b8acf5b7e21accd516804c7a97bb802"
+    },
+    "macos-desktop.json": {
+      "ok": true,
+      "runtime": {
+        "node": "24.18.1",
+        "electron": "43.3.0",
+        "sqlite": "3.53.1",
+        "platform": "darwin",
+        "arch": "arm64"
+      },
+      "checks": [
+        "wal-file-write",
+        "unicode-json-blob-bigint",
+        "foreign-key",
+        "transaction-rollback",
+        "cross-process-lock-and-reader",
+        "reopen-persistence",
+        "exit-without-close-recovery",
+        "integrity-check",
+        "worker-thread"
+      ],
+      "payloadSha256": "b785ae3de25f1846f3bd0e0e4168deea665d655ede3071a5f7f3250dcd1fc000",
+      "probeSha256": "889f0576d4fdb2284451239402c54c0e6b8acf5b7e21accd516804c7a97bb802"
+    },
+    "android-dsha.txt": {
+      "ok": true,
+      "runtime": {
+        "node": "24.19.0",
+        "electron": null,
+        "sqlite": "3.53.3",
+        "platform": "linux",
+        "arch": "arm64"
+      },
+      "checks": [
+        "wal-file-write",
+        "unicode-json-blob-bigint",
+        "foreign-key",
+        "transaction-rollback",
+        "cross-process-lock-and-reader",
+        "reopen-persistence",
+        "exit-without-close-recovery",
+        "integrity-check",
+        "worker-thread"
+      ],
+      "payloadSha256": "b785ae3de25f1846f3bd0e0e4168deea665d655ede3071a5f7f3250dcd1fc000",
+      "probeSha256": "889f0576d4fdb2284451239402c54c0e6b8acf5b7e21accd516804c7a97bb802"
+    },
+    "android-apk.txt": {
+      "ok": true,
+      "runtime": {
+        "node": "24.19.0",
+        "electron": null,
+        "sqlite": "3.53.3",
+        "platform": "linux",
+        "arch": "arm64"
+      },
+      "checks": [
+        "wal-file-write",
+        "unicode-json-blob-bigint",
+        "foreign-key",
+        "transaction-rollback",
+        "cross-process-lock-and-reader",
+        "reopen-persistence",
+        "exit-without-close-recovery",
+        "integrity-check",
+        "worker-thread"
+      ],
+      "payloadSha256": "b785ae3de25f1846f3bd0e0e4168deea665d655ede3071a5f7f3250dcd1fc000",
+      "probeSha256": "889f0576d4fdb2284451239402c54c0e6b8acf5b7e21accd516804c7a97bb802"
+    }
+  }
+}
