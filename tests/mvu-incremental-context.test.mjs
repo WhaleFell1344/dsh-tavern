@@ -89,3 +89,13 @@ test('dispatch can use an already synchronized target revision without fetching 
  assert.equal(helperClient.applyTavernVariableReceipt({...before,stateRevision:7},delta),null,'never overwrite a newer committed revision')
  assert.equal(helperClient.applyTavernVariableReceipt({...before,stateRevision:4},delta),null,'missing revisions still require recovery')
 })
+
+test('committed append requires a complete dense tail and retains truncation recovery',()=>{
+ const before={chatId:'c',stateRevision:1,lifecycleRevision:0,messages:[{message_id:0,role:'assistant',message:'old'}]}
+ const delta={version:2,kind:'committed',chatId:'c',baseRevision:1,stateRevision:2,lifecycleRevision:0,messageCount:2,messages:[{message_id:1,role:'assistant',message:'new'}]}
+ const after=helperClient.applyTavernVariableReceipt(before,delta)
+ assert.equal(after.messages.length,2)
+ assert.equal(after.messages[0],before.messages[0])
+ assert.equal(helperClient.applyTavernVariableReceipt(before,{...delta,messages:[]}),null,'missing appended rows require recovery')
+ assert.equal(helperClient.applyTavernVariableReceipt(before,{...delta,messageCount:0,messages:[]}),null,'truncation must use full lifecycle recovery')
+})

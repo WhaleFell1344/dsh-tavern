@@ -4667,7 +4667,8 @@ window.__ModuleLoader__.load({
                 });
                 if (delta.kind === 'committed') delete context.transaction;
                 const api = applyTavernVariableReceipt.indexApi;
-                const length = delta.kind === 'dispatch' ? delta.messageCount : (previous.messages || []).length;
+                const length = delta.kind === 'dispatch' ? delta.messageCount : delta.kind === 'committed' ? (delta.messageCount ?? (previous.messages || []).length) : (previous.messages || []).length;
+                if (delta.kind === 'committed' && length < (previous.messages || []).length) return null;
                 if (!Number.isInteger(length) || length < 0 || length > 0xffffffff) return null;
                 const entries = [];
                 for (const source of delta.messages || []) {
@@ -6600,7 +6601,7 @@ window.__ModuleLoader__.load({
                 const api = applyTavernVariableReceipt.indexApi, before = record.context;
                 const changed = before && before.chatId === context.chatId
                     && before.lifecycleRevision === context.lifecycleRevision
-                    && before.messages.length === context.messages.length
+                    && before.messages.length <= context.messages.length
                     ? api.changed(before.messages,context.messages) : null;
                 record.context = context;
                 if (changed === null) { post(record,{type:"dsh-tavern-helper-context",context}); return; }
@@ -6608,7 +6609,7 @@ window.__ModuleLoader__.load({
                 if (header.turnMessageIds === before.turnMessageIds) delete header.turnMessageIds;
                 post(record,{type:"dsh-tavern-helper-context",contextDelta:{
                     version:2,kind:"committed",chatId:context.chatId,lifecycleRevision:context.lifecycleRevision,
-                    baseRevision:before.stateRevision,stateRevision:context.stateRevision,header,
+                    baseRevision:before.stateRevision,stateRevision:context.stateRevision,messageCount:context.messages.length,header,
                     messages:changed.map(id=>context.messages[id])
                 }});
             }
@@ -6630,7 +6631,7 @@ window.__ModuleLoader__.load({
                     && String(view.card?.name || "角色") === record.committedContext?.characterName
                     && Array.isArray(source.messages) && Array.isArray(record.sourceHelper.messages)
                     && record.sourceHelper.lifecycleRevision === source.lifecycleRevision
-                    && record.sourceHelper.messages.length === source.messages.length
+                    && record.sourceHelper.messages.length <= source.messages.length
                     ? sourceIndex.changed(record.sourceHelper.messages,source.messages) : null;
                 let context;
                 if (sourceChanges !== null && record.committedContext) {
@@ -6639,7 +6640,7 @@ window.__ModuleLoader__.load({
                     if (sameTurns) delete helper.turnMessageIds;
                     const partial = helperContext({...view,tavernHelper:helper},scripts);
                     context = {...partial,messages:applyTavernVariableReceipt.indexApi.update(record.committedContext.messages,
-                        sourceChanges.map((id,at)=>[id,partial.messages[at]]))};
+                        sourceChanges.map((id,at)=>[id,partial.messages[at]]),source.messages.length)};
                     if (sameTurns) context.turnMessageIds = record.committedContext.turnMessageIds;
                 } else context = helperContext(view,scripts);
 				const nextSnapshot = snapshot(context);

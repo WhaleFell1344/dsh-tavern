@@ -63,6 +63,18 @@ for(const count of [20,400,10000]) test(`wire merge and parent refresh avoid unc
  runtime.sync('s',request.accept(sync('s',fourth,request.cursor,{revision:4,dirtyMessageIndices:new Set([count-1])})).view)
  assert.equal(reads,0)
  assert.equal(sent.find(m=>m.contextDelta)?.contextDelta.messages.length,1,'ordinary refresh is incremental too')
+ const appended={...fourth,tavernHelper:{...fourth.tavernHelper,stateRevision:5,messages:[...fourth.tavernHelper.messages,{message_id:count,role:'assistant',message:'appended',variables:{hp:6}}]}}
+ request=begin('s');sent.length=0
+ runtime.sync('s',request.accept(sync('s',appended,request.cursor,{revision:5,dirtyMessageIndices:new Set([count])})).view)
+ const appendDelta=sent.find(m=>m.contextDelta)?.contextDelta
+ assert.ok(appendDelta,'append must not serialize a full iframe context')
+ assert.equal(appendDelta.messageCount,count+1)
+ assert.equal(appendDelta.messages.length,1,'old floors must stay shared during append')
+ const appendIframe=helperHostHarness(fourth.tavernHelper)
+ appendIframe.receive({type:'dsh-tavern-helper-context',contextDelta:appendDelta})
+ await new Promise(r=>setImmediate(r))
+ assert.equal(appendIframe.window.getChatMessages(count)[0].message,'appended')
+ assert.equal(appendIframe.window.getVariables({type:'message',message_id:0}).hp,10)
  const switched={...fourth,tavernHelper:{...fourth.tavernHelper,stateRevision:5,lifecycleRevision:1}}
  request=begin('s');sent.length=0
  runtime.sync('s',request.accept(sync('s',switched,request.cursor,{revision:5,dirtyMessageIndices:new Set()})).view)

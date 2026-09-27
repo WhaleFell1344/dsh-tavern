@@ -23,7 +23,8 @@ function applyTavernVariableReceipt(previous, delta) {
         });
         if (delta.kind === 'committed') delete context.transaction;
         const api = applyTavernVariableReceipt.indexApi;
-        const length = delta.kind === 'dispatch' ? delta.messageCount : (previous.messages || []).length;
+        const length = delta.kind === 'dispatch' ? delta.messageCount : delta.kind === 'committed' ? (delta.messageCount ?? (previous.messages || []).length) : (previous.messages || []).length;
+        if (delta.kind === 'committed' && length < (previous.messages || []).length) return null;
         if (!Number.isInteger(length) || length < 0 || length > 0xffffffff) return null;
         const entries = [];
         for (const source of delta.messages || []) {
