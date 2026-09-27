@@ -1,3 +1,4 @@
+import { readSettlementInput } from './domain/settlement-input.js'
 import { createHelperHistoryAccess } from './domain/helper-history-access.js'
 import { createInputFieldsProjection } from './domain/input-fields-projection.js'
 import { createScopedMessages } from './domain/scoped-messages.js'
@@ -2455,7 +2456,7 @@ export async function apply(ctx) {
   async function runSettlement(chatId, signal) {
     while (true) {
       signal?.throwIfAborted()
-      let snapshot = await readChat(chatId)
+      let snapshot = await readSettlementInput(chatId, {readWindow:chatPersistence.readWindow,readChat})
       signal?.throwIfAborted()
       if (snapshot === undefined) return
       snapshot = await prepareNextWorldBookContext(snapshot, signal)
