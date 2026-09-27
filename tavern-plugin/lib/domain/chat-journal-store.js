@@ -882,19 +882,23 @@ export function createChatJournalStore(options = {}) {
 
   // Explicit cutover only: original journals and compatible history remain intact.
   // All current writers share serialize()'s cross-process conversation lock.
-  async function migrateNative(chatId){
+  async function migrateNative(chatId,{onProgress=()=>{},assertCanMigrate=()=>{}}={}){
     safeChatId(chatId)
     if(!compatible)throw new Error('Migration requires the shared conversation lock')
     await flushMaintenance()
     return serialize(chatId,async()=>{
       if(await native.version(chatId))return {status:'native',alreadyActive:true}
       await mkdir(layout(chatId).root,{recursive:true})
+      onProgress('reading')
       const captured=await version(chatId)
       const state=await materialize(chatId)
       if(!state)return {status:'missing'}
       if(state.chat.mode==='card')throw new Error('Card configuration is not a playable conversation')
       if(!Number.isSafeInteger(state.chat._storageRevision)||state.chat._storageRevision<1)throw new Error('Legacy Chat has no valid storage revision')
+      await assertCanMigrate(state.chat)
+      onProgress('converting')
       await native.create(chatId,state.chat,undefined,{migration:true,verifyBeforePublish:async restored=>{
+        onProgress('verifying')
         if(!isDeepStrictEqual(restored,state.chat))throw new Error('Native migration round-trip verification failed')
         if(await version(chatId)!==captured)throw new Error('Source changed during native migration')
       }})

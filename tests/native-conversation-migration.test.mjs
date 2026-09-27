@@ -78,3 +78,26 @@ test('source mutation and disk failure during import leave the legacy authority 
   assert.equal((await old.read('old')).afterFailure,true)
  }
 })
+
+for(const separate of [false,true])test(`online migration rejects busy games and protects concurrent writers (separate store: ${separate})`,async t=>{
+ const dataRoot=await mkdtemp(join(tmpdir(),'native-migration-online-'));t.after(()=>rm(dataRoot,{recursive:true,force:true}))
+ const store=createChatJournalStore({dataRoot}),writer=separate?createChatJournalStore({dataRoot}):store
+ const chat={id:'old',_storageRevision:1,messages:[],variables:{gold:1}}
+ await store.update('old',()=>chat)
+ await writer.read('old') // A second client has the old representation cached.
+ await assert.rejects(store.migrateNative('old',{assertCanMigrate:()=>{throw Error('busy')}}),/busy/)
+ assert.equal(await createNativeConversationStorage({dataRoot}).version('old'),null)
+ let write
+ await store.migrateNative('old',{onProgress:stage=>{
+  if(stage==='converting')write=writer.patch('old',1,[{op:'set',path:['variables','gold'],value:2},{op:'set',path:['_storageRevision'],value:2}]).then(()=>null,error=>error)
+ }})
+ const conflict=await write
+ if(separate){
+  assert.equal(conflict.code,'DSH_TAVERN_WRITE_CONFLICT')
+  await writer.patch('old',1,[{op:'set',path:['variables','gold'],value:2},{op:'set',path:['_storageRevision'],value:2}])
+ }else assert.equal(conflict,null)
+ const reopened=createChatJournalStore({dataRoot})
+ assert.equal((await reopened.read('old')).variables.gold,2)
+ assert.deepEqual(await reopened.readRevision('old',1),chat)
+ assert.ok((await reopened.version('old')).startsWith('native:'))
+})

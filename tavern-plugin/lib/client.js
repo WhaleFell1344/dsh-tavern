@@ -13551,6 +13551,51 @@ window.__ModuleLoader__.load({
 			            h("button", { type: "button", disabled: loading || saving || page.to >= page.totalChunks, onClick: () => load(Math.min(page.totalChunks, page.from + 14)) }, "剧本块 →"))) : null);
 			}
 
+        function TavernStorageMigration(props) {
+            const [state, setState] = React.useState(null);
+            const [error, setError] = React.useState("");
+            const [started, setStarted] = React.useState(false);
+            const [requestBusy, setRequestBusy] = React.useState(false);
+            const [refresh, setRefresh] = React.useState(0);
+            React.useEffect(function () {
+                let disposed = false, timer;
+                async function read() {
+                    try {
+                        const next = await rpc("getStorageMigration", {}, props.sessionId);
+                        if (disposed) return;
+                        setState(next); setError("");
+                        if (next.phase === "running") timer = setTimeout(read, 1000);
+                        else if (next.phase === "completed" && started) liveTavernView.invalidate(props.sessionId);
+                    } catch (err) { if (!disposed) setError(String(err.message || err)); }
+                }
+                read();
+                return function () { disposed = true; clearTimeout(timer); };
+            }, [props.sessionId, refresh, started]);
+            async function migrate() {
+                if (requestBusy || state?.phase === "running") return;
+                setRequestBusy(true); setError("");
+                try {
+                    await rpc("migrateStorage", {}, props.sessionId);
+                    setStarted(true); setRefresh(value => value + 1);
+                } catch (err) { setError(String(err.message || err)); }
+                finally { setRequestBusy(false); }
+            }
+            if (!state && !error || state?.format === "native" && !started) return null;
+            const h = React.createElement;
+            const busy = requestBusy || state?.phase === "running";
+            const complete = state?.format === "native" && state.phase === "completed";
+            const stage = {reading:"正在读取旧存档…",converting:"正在转换并读回存档…",verifying:"正在校验并切换存档…"}[state?.stage] || "正在迁移…";
+            return h("section", {className:"dsh-tavern-status-section", "aria-label":"存档格式"},
+                h("div", {className:"dsh-tavern-status-label"}, "存档格式"),
+                h("div", {className:"dsh-tavern-status-empty"}, complete ? "已迁移为新版存档，旧文件和历史版本已保留。" : "本局使用旧格式。迁移后使用新版存储，剧情、变量和历史版本保留。旧文件也会保留，但不包含迁移后的新进度。"),
+                busy ? h("div", {role:"status"}, stage + " 大存档可能需要较长时间，暂时不要关闭或重启酒馆。") : null,
+                error || state?.phase === "failed" ? h("div", {className:"dsh-card-error",role:"alert"}, error || state.error) : null,
+                !state ? h("button", {className:"dsh-tavern-btn",onClick:()=>setRefresh(value=>value+1)}, "重新检查存档格式") :
+                !complete ? h("button", {type:"button",className:"dsh-tavern-btn",disabled:busy || props.busy,onClick:migrate}, busy ? "迁移中…" : state.phase === "failed" ? "重试迁移" : "迁移旧存档") : null,
+                !busy && props.busy && !complete ? h("div", {className:"dsh-tavern-status-empty"}, "请等待本轮游玩和后台结算完成后再迁移。") : null
+            );
+        }
+
 			function TavernStatusPanel(props) {
             const askConfirm = useTavernConfirm(props.sessionId || props.scope?.sessionId);
 			const [error, setError] = usePersistentError("酒馆状态");
@@ -13655,6 +13700,7 @@ window.__ModuleLoader__.load({
 				),
 					h("div", { className: "dsh-tavern-status-body" },
                         h(TavernBackgroundWait, {sessionId:props.sessionId, activity:view.activity}),
+                        h(TavernStorageMigration, {key:props.sessionId,sessionId:props.sessionId,busy:running || view.activity?.busy || view.settleStatus === "running"}),
 					["story", "script"].includes(view.mode || "story") && view.requestMode !== "sillytavern" && view.cardUpdate ? h("section", { className: "dsh-tavern-status-section" },
 						h("div", { className: "dsh-tavern-card-reload" },
 							h("button", { className: "dsh-tavern-btn", disabled: running || cardUpdateBusy || !!view.cardUpdate.error || view.settleStatus === "running", onClick: applyUpdatedCard }, cardUpdateBusy ? "正在重新加载人物卡和世界书…" : "重新加载人物卡和世界书"),

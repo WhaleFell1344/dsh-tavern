@@ -303,9 +303,11 @@ try {
     assert.deepEqual(errors, [], '浏览器不得出现未捕获异常')
     await page.screenshot({ path: join(output, 'after-reload.png'), fullPage: true })
   })
-  if(process.argv.includes('--migrate-native'))await step('旧 journal 存档迁移原生分页并重开',async()=>{
+  if(process.argv.includes('--migrate-native'))await step('通过酒馆状态按钮迁移旧 journal 存档',async()=>{
+    let history, original
     await restartServer(async()=>{
-      const original=await savedChat(),old=createChatJournalStore({dataRoot:data}),history=[]
+      original=await savedChat();history=[]
+      const old=createChatJournalStore({dataRoot:data})
       for(let revision=1;revision<=original._storageRevision;revision++)history.push(await old.readRevision(original.id,revision))
       assert.ok(history.every(Boolean),'夹具必须保留全部迁移前版本')
       // Isolated generated fixture only; never alter the host Session log.
@@ -314,12 +316,32 @@ try {
       for(const snapshot of history)await legacy.update(original.id,()=>snapshot)
       await legacy.flushMaintenance()
       assert.deepEqual(await legacy.read(original.id),original)
-      const started=Date.now(),receipt=await legacy.migrateNative(original.id)
-      assert.deepEqual(await legacy.read(original.id),original)
-      for(let i=0;i<history.length;i++)assert.deepEqual(await legacy.readRevision(original.id,i+1),history[i])
-      report.migration={...receipt,elapsedMs:Date.now()-started,retainedRevisions:history.length}
     })
     await inspectScreen()
+    const migration=page.getByRole('region',{name:'存档格式',exact:true})
+    const button=migration.getByRole('button',{name:'迁移旧存档',exact:true})
+    await button.waitFor()
+    await page.screenshot({path:join(output,'migration-before.png'),fullPage:true})
+    await page.setViewportSize({width:390,height:844})
+    await button.scrollIntoViewIfNeeded()
+    const box=await button.boundingBox()
+    assert.ok(box.x>=0&&box.x+box.width<=390,'迁移按钮在窄屏内可见')
+    await page.screenshot({path:join(output,'migration-mobile.png'),fullPage:true})
+    const started=Date.now()
+    await button.click()
+    await migration.getByText('已迁移为新版存档，旧文件和历史版本已保留。',{exact:true}).waitFor()
+    const migrated=createChatJournalStore({dataRoot:data})
+    for(let i=0;i<history.length;i++)assert.deepEqual(await migrated.readRevision(original.id,i+1),history[i])
+    // Live iframe diagnostics can change when the viewport changes; migration
+    // history above remains byte-for-byte equivalent at each original revision.
+    const story=messages=>messages.map(({displayRuntime,...message})=>message)
+    assert.deepEqual(story((await migrated.read(original.id)).messages),story(original.messages))
+    report.migration={status:'native',via:'status-button',elapsedMs:Date.now()-started,retainedRevisions:history.length}
+    await page.setViewportSize({width:1440,height:1000})
+    await page.screenshot({path:join(output,'migration-complete.png'),fullPage:true})
+    await page.reload({waitUntil:'domcontentloaded'})
+    await inspectScreen()
+    assert.equal(await page.getByRole('button',{name:'迁移旧存档',exact:true}).count(),0)
     await assertNativeStorage()
   })
   if (process.argv.includes('--settlement-performance')) {

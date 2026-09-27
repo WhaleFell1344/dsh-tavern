@@ -1,3 +1,4 @@
+import { createConversationMigration } from './domain/conversation-migration.js'
 import { createTaskStateReader } from './domain/task-state-reader.js'
 import { installHostProjectionReplay } from './domain/host-projection-replay.js'
 import { readSettlementInput } from './domain/settlement-input.js'
@@ -3081,9 +3082,28 @@ export async function apply(ctx) {
   const cardResponseTest = createCardResponseTest({ api: gameplayApi, store: profileData, chatForSession })
   ctx.effect(() => () => cardResponseTest.dispose())
 
+  const conversationMigration = createConversationMigration({
+    store: chatJournalStore,
+    assertIdle: chat => {
+      if (chat.mode === 'card' || backgroundTasks.activity(chat).busy || chat.regenInProgress || agentRegistry.get(chat.sessionId)?.phase?.kind === 'running') {
+        throw new Error('请等待本轮游玩和后台结算完成后再迁移')
+      }
+    },
+    notify: id => { void readSessionMap().then(map => {
+      for (const [sessionId, chatId] of Object.entries(map)) if (chatId === id) sessionSignals.publish(sessionId, {kind:'tavern-state',version:'storage-migration:'+Date.now()})
+    }).catch(error => console.warn('dsh-tavern: 迁移状态通知失败:', error.message)) }
+  })
+  ctx.effect(() => () => conversationMigration.dispose())
+
   async function dispatchMethod(method, args, serverTemplate = false) {
     if (method.startsWith('gameplay.')) return await gameplayApi.call(method.slice(9), args || {})
     switch (method) {
+      case 'getStorageMigration':
+      case 'migrateStorage': {
+        const chatId = (await readSessionMap())[str(args?.sessionId)]
+        if (!chatId) throw new Error('找不到当前存档')
+        return method === 'getStorageMigration' ? conversationMigration.status(chatId) : conversationMigration.start(chatId)
+      }
       case 'getCardOrganization': return { groups: (await cardOrganization.read()).groups }
       case 'organizeCards': return { groups: (await cardOrganization.update(args || {}, await fileResources.list('card'))).groups }
       case 'listCards': return { cards: await listCards() }

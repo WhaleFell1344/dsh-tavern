@@ -223,3 +223,5 @@ Task State reader 为候选同步、活动与启动恢复检查提供只读头�
 ## Native Save Migration
 
 显式 `migrateNative` / `bin/migrate-conversation-storage.mjs --native` 将旧 JSON、journal 或兼容增量树转换为新局的原生分页布局。发布前完整读回比对并检查源版本，迁移与当前写入共用 conversation lock。保留旧文件；`legacyInitialRevision` 使迁移前 revision 继续由原存储解析，新进度只写原生布局。原生存档暂不支持 `--restore-legacy`，旧文件不代表最新进度。没有自动批量切换，也没有修改 DSH 本体。真实浏览器迁移后游玩、结算、编辑、回退/撤销、预设切换与重启通过，见 `docs/verification/native-save-migration-20260928.md`。
+
+酒馆状态已提供旧档「迁移旧存档」按钮，通过 `conversation-migration.js` 的后台任务与轮询展示阶段、错误/重试及成功结果。服务端 `migrateNative` 在共享锁内检查当前游戏是否空闲；迁移期间同一服务内的其他存档写入排队，独立进程的并发写入被锁拒绝，可稍后重试。新版存档默认隐藏入口。仅运行中的任务进度保存在内存，重启后通过磁盘 head 判定结果，不影响原子发布/失败重试语义。
