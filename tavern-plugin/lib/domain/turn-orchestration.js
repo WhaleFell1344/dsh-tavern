@@ -1,3 +1,4 @@
+import { captureChatHeader } from './chat-persistence.js'
 import { CARD_MEMORY_TOOLS } from '../../packages/dsh-tavern-card-memory/index.js'
 import { inputAttachments } from './player-input-content.js'
 import { resolveRuntimePresetMacros } from './runtime-presets.js'
@@ -251,6 +252,11 @@ export function createTurnOrchestrator(options) {
         text: '【酒馆状态】\n尚未选择人物卡。请简短提示用户先在界面中选择人物卡。'
       }
     }
+    let preparationBase = store.writeChatHeader ? captureChatHeader(chat) : null
+    async function savePreparation(metadata) {
+      if (store.writeChatHeader) preparationBase = await store.writeChatHeader(chat,preparationBase,metadata)
+      else await store.writeChat(chat,metadata)
+    }
     const turn = Math.max(0, Number(input.turn) || 0)
     const requestId = str(input.requestId).trim()
     const userText = str(input.userText).trim()
@@ -275,12 +281,15 @@ export function createTurnOrchestrator(options) {
     }
 
     if (mode === 'story' || mode === 'script') {
-      const begun = timeline.apply({ chat, intent: { kind: 'body.begin', turn, userText } })
-      chat = begun.chat
+      // body.begin (including legacy timeline normalization) only edits metadata.
+      // Keep the history already detached by chatForSession; full timeline.apply
+      // remains deeply isolated for callers that edit or restore message bodies.
+      const begun = timeline.apply({ chat: { ...chat, messages: [] }, intent: { kind: 'body.begin', turn, userText } })
+      chat = { ...begun.chat, messages: chat.messages }
       foregroundOperation = begun.value
       const cachedFrame = rememberedFrame(chat, foregroundOperation.operationId)
       if (cachedFrame !== null) {
-        if (chatChanged) await store.writeChat(chat, { source: 'foreground.prepare' })
+        if (chatChanged) await savePreparation({ source: 'foreground.prepare' })
         return {
           ready: true,
           mode,
@@ -320,7 +329,7 @@ export function createTurnOrchestrator(options) {
       }
       rememberRuntimeInput(chat, turn, userText, runtimeUserText)
       chatChanged = true
-      if (chat.promptTemplateInput?.turn === turn) await store.writeChat(chat, {source:'prompt-template.input'})
+      if (chat.promptTemplateInput?.turn === turn) await savePreparation({source:'prompt-template.input'})
     }
     let scriptReference = null
 
@@ -355,11 +364,12 @@ export function createTurnOrchestrator(options) {
 
     // Screening can persist a shared background task. Save the pending body and
     // input first, then continue from its latest timeline instead of overwriting it.
-    if (typeof options.projectForegroundWorldbook === 'function') await store.writeChat(chat, { source: 'foreground.prepare-worldbook' })
+    if (typeof options.projectForegroundWorldbook === 'function') await savePreparation({ source: 'foreground.prepare-worldbook' })
     const foregroundWorldBook = typeof options.projectForegroundWorldbook === 'function'
       ? await options.projectForegroundWorldbook({ chat, card, turn, userText: runtimeUserText }) : null
     if (typeof options.projectForegroundWorldbook === 'function') {
       chat = await store.chatForSession(input.sessionId)
+      if (chat && store.writeChatHeader) preparationBase = captureChatHeader(chat)
       const current = chat && timeline.inspect({ chat })
       if (!current || current.branchId !== foregroundOperation.basedOn.branchId || current.revision !== foregroundOperation.basedOn.revision ||
           current.operations[foregroundOperation.operationId]?.status !== 'running') throw new Error('剧情已变化，本次正文准备已过期')
@@ -403,7 +413,7 @@ export function createTurnOrchestrator(options) {
     consumeScriptPrompts(chat)
     rememberFrame(chat, frame)
     chatChanged = true
-    if (chatChanged) await store.writeChat(chat, { source: 'foreground.prepare' })
+    if (chatChanged) await savePreparation({ source: 'foreground.prepare' })
     return { ready: true, mode, cardName: card.name, userText: runtimeUserText, frame }
   }
 

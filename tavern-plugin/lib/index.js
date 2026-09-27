@@ -756,6 +756,15 @@ export async function apply(ctx) {
     if (!str(metadata?.source).startsWith('compaction.')) queueAutoCompaction(saved.sessionId)
     return saved
   }
+  async function writeChatHeader(chat, baseline, metadata) {
+    if (deletedChatIds.has(chat.id)) throw new Error('对话已删除')
+    const saved = await chatPersistence.writeHeader(chat, baseline, metadata)
+    await syncChatSummary(chat)
+    void coordinationEvents?.publish(saved.sessionId)
+    scheduleTemplateSync(saved)
+    queueAutoCompaction(saved.sessionId)
+    return saved
+  }
   async function updateChat(chatId, mutation, metadata) {
     if (deletedChatIds.has(chatId)) throw new Error('对话已删除')
     const saved = await rawUpdateChat(chatId, mutation, metadata)
@@ -2838,6 +2847,7 @@ export async function apply(ctx) {
       readCardExtensions,
       readScript,
       writeChat,
+      writeChatHeader,
       updateChat,
       updateCard,
       createCard: createWorkspaceCard

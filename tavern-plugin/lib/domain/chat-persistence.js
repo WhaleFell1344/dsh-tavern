@@ -1,3 +1,4 @@
+import { diffJson } from './json-mutation.js'
 import { projectSceneImageState, projectDisplayRuntimeState, projectChatBackgroundConfig } from './chat-session-state.js'
 import { isDeepStrictEqual } from 'node:util'
 
@@ -7,6 +8,12 @@ const MISSING = Symbol('missing')
 function clone(value) {
   // Preserve the merge sentinel so the parent omits deleted fields.
   return value === undefined || value === MISSING ? value : structuredClone(value)
+}
+
+// A preparation draft owns metadata only. Full read()/write() isolation is unchanged.
+export function captureChatHeader(chat) {
+  const {messages: _messages, ...head} = chat
+  return clone(head)
 }
 
 function object(value) {
@@ -220,6 +227,55 @@ export function createChatPersistence(options = {}) {
     return normalized
   }
 
+  // Only callers that do not edit history may use this operation. Merge metadata
+  // against its captured baseline, then refresh concurrent historical row edits
+  // before promoting the caller's revision. Never label stale rows as current.
+  async function writeHeader(input, baseline, metadata = {}) {
+    if (!records.readSlice || !records.patch) throw new Error('Chat Store 不支持字段保存')
+    if (!baseline || baseline.id !== input.id || baseline.sessionId !== input.sessionId
+      || !Number.isSafeInteger(baseline[STORAGE_REVISION]) || !Array.isArray(input.messages)
+      || Object.hasOwn(baseline,'messages')) throw new Error('无效的 Chat 字段保存基线')
+    const desired = captureChatHeader(input)
+    for (let attempt=0;attempt<5;attempt++) {
+      let selected = await records.readSlice(input.id, [])
+      if (!selected) throw conflict(input.id,'<deleted>')
+      let fullMessages, entries=[]
+      if (selected.chat[STORAGE_REVISION] !== baseline[STORAGE_REVISION]) {
+        const changed = await records.readChangedSlice?.(input.id,baseline[STORAGE_REVISION])
+        if (changed?.denseMessages) {
+          selected=changed
+          entries=changed.indices.map((id,index)=>[id,changed.chat.messages[index]])
+        } else {
+          // Lost revision evidence is an explicit, safe full-read fallback.
+          const full=await records.read(input.id)
+          if (!full) throw conflict(input.id,'<deleted>')
+          fullMessages=full.messages
+          selected={chat:full,messageCount:fullMessages.length}
+        }
+      }
+      const latest=captureChatHeader(normalize(selected.chat))
+      if (latest.sessionId !== baseline.sessionId) throw conflict(input.id,'sessionId')
+      const next=mergeValue(baseline,latest,desired,'',input.id)
+      // patch() owns storage revision and timestamp, including no-op semantics.
+      next[STORAGE_REVISION]=latest[STORAGE_REVISION]
+      if (Object.hasOwn(latest,'updatedAt')) next.updatedAt=latest.updatedAt
+      else delete next.updatedAt
+      const saved=await patch(input.id,latest[STORAGE_REVISION],diffJson(latest,next),metadata)
+      if (!saved) continue
+      const head=captureChatHeader(saved)
+      if (fullMessages) input.messages=fullMessages
+      else {
+        input.messages.length=selected.messageCount
+        for (const [id,row] of entries) input.messages[id]=row
+      }
+      refreshDraft(input,desired,head)
+      input[STORAGE_REVISION]=head[STORAGE_REVISION]
+      input.updatedAt=head.updatedAt
+      return head
+    }
+    throw conflict(input.id,'<busy>')
+  }
+
   async function update(chatId, mutation, metadata = {}) {
     if (typeof mutation !== 'function') throw new Error('Chat Persistence 缺少 mutation')
     const touchUpdatedAt = metadata.touchUpdatedAt !== false
@@ -299,5 +355,5 @@ export function createChatPersistence(options = {}) {
     await records.remove(chatId)
   }
 
-  return Object.freeze({ read, readSessionState, readSceneImageState, readSettlementCheckpoint, readBackgroundConfig, readDisplayRuntimeState, readSlice, readSettlementBase, readChangedSlice, readChangedIndices, readViewDelta, patch, readRevision, write, update, version, remove })
+  return Object.freeze({ read, readSessionState, readSceneImageState, readSettlementCheckpoint, readBackgroundConfig, readDisplayRuntimeState, readSlice, readSettlementBase, readChangedSlice, readChangedIndices, readViewDelta, patch, readRevision, write, writeHeader, update, version, remove })
 }
