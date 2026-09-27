@@ -1773,7 +1773,7 @@ export async function apply(ctx) {
   async function readOpeningWindow(sessionId) {
     const chatId = (await readSessionMap())[str(sessionId)]
     if (!chatId) return null
-    const window = await chatPersistence.readWindow(chatId,{limit:HELPER_MESSAGE_COLD_WINDOW})
+    const window = await chatPersistence.readWindow(chatId,{limit:HELPER_MESSAGE_COLD_WINDOW,requirePartial:true})
     if (!window || window.from===0 || window.chat.sessionId!==sessionId
       || window.chat.backgroundConfigVersion!==1 || window.chat.conversationFeaturesVersion!==1
       || !['story','script'].includes(window.chat.mode || 'story')

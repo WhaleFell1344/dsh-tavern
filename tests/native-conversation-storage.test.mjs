@@ -386,3 +386,13 @@ test('cold candidate task state reads no history pages and stays detached across
  assert.equal((await reader.read('task-state')).candidates.requestId,'new request')
  assert.equal(io.filter(event=>event.type==='page').length,0)
 })
+
+test('opening eligibility skips materialization when the entire conversation fits in the window',async t=>{
+ const {root,persistence}=await fixture(t)
+ const chat=await persistence.write({id:'short-opening',cardDefinitionSnapshot:{payload:'large-card'.repeat(100000)},messages:[row(1),row(2)]})
+ const io=[],cold=createChatPersistence({store:createChatJournalStore({dataRoot:root,onNativeIO:e=>io.push(e)})})
+ assert.equal(await cold.readWindow(chat.id,{limit:48,requirePartial:true}),null)
+ assert.ok(io.every(e=>e.bytes<65536),'an ineligible opening must not materialize the large card')
+ assert.deepEqual((await cold.readWindow(chat.id,{limit:48})).chat.messages,chat.messages,'ordinary full windows remain available')
+ assert.equal((await cold.readWindow(chat.id,{limit:1,requirePartial:true})).from,1,'partial windows remain available')
+})
