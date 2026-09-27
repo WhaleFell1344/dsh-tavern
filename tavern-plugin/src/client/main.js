@@ -9743,15 +9743,11 @@ window.__ModuleLoader__.load({
 		function createPlayControlsFeatureModule() {
 			const historyProjection = createTurnHistoryProjection();
 			function TavernConversationExportAction(props) {
-                const [available, setAvailable] = React.useState(false);
-				const [busy, setBusy] = React.useState(false);
-				React.useEffect(function () {
-					let stopped = false;
-					rpc("getSession", {}, props.sessionId).then(function (result) {
-						if (!stopped) setAvailable(Boolean(result && result.view));
-					}, function () { if (!stopped) setAvailable(false); });
-					return function () { stopped = true; };
-				}, [props.sessionId]);
+                // The header only needs session membership. Building a complete
+                // Tavern view here delays the button behind templates and history.
+                const owner = props.sessions.subagentAddress(props.sessionId)?.parentSessionId || props.sessionId;
+                const available = Boolean(useTavernSessionMode(owner));
+                const [busy, setBusy] = React.useState(false);
                 const [open, setOpen] = React.useState(false);
                 const root = React.useRef(null);
                 React.useEffect(function () {

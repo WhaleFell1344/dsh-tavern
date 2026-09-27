@@ -303,6 +303,22 @@ try {
     assert.deepEqual(errors, [], '浏览器不得出现未捕获异常')
     await page.screenshot({ path: join(output, 'after-reload.png'), fullPage: true })
   })
+  if(process.argv.includes('--export-readiness'))await step('完整视图未返回时导出按钮仍可立即显示',async()=>{
+    let release
+    const ready=new Promise(resolve=>{release=resolve})
+    const route=async request=>{await ready;await request.continue()}
+    await page.route('**/api/dsh-tavern/getSession',route)
+    try{
+      await page.reload({waitUntil:'domcontentloaded'})
+      const button=page.getByRole('button',{name:'导出 ▾',exact:true})
+      await button.waitFor({timeout:5000})
+      await button.click()
+      await page.getByRole('menuitem',{name:'纯对话 TXT',exact:true}).waitFor({timeout:1000})
+      await page.keyboard.press('Escape')
+      report.exportReadiness={visibleBeforeSessionView:true}
+    }finally{release();await page.unrouteAll({behavior:'wait'})}
+    await inspectScreen()
+  })
   if(process.argv.includes('--migrate-native'))await step('通过酒馆状态按钮迁移旧 journal 存档',async()=>{
     let history, original
     await restartServer(async()=>{
