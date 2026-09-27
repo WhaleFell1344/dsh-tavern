@@ -1,3 +1,4 @@
+import { settlementPerformanceChecks, settlementPerformanceInitialVariables } from './settlement-performance.mjs'
 import {setupRealVariables,realVariableLookupChecks} from './real-variable-lookup.mjs'
 import { incrementalMvuChecks } from './mvu-incremental.mjs'
 import {openingUpdateChecks} from './opening-update.mjs'
@@ -136,7 +137,7 @@ try {
     await writeFile(join(data, 'resources/cards/e2e.json'), JSON.stringify({ spec: 'chara_card_v2', spec_version: '2.0', data: {
       name: 'E2E 奖励验收', description: '固定验收角色', first_mes: (process.argv.includes('--text-colors') ? '她说：“欢迎光临。” *窗外下着雨。*' : '欢迎领取奖励。') + (process.argv.includes('--opening-update') ? '\n<initvar>{"gold":0,"old":1}</initvar>' : '') + '\n\n<StatusPlaceHolderImpl/>',
       mes_example: '', scenario: '', personality: '',
-      character_book: { name: '验收初始变量', entries: [{ id: 1, keys: [], comment: '[initvar]初始值', content: 'gold: 0', enabled: true, constant: true, insertion_order: 1 }] },
+      character_book: { name: '验收初始变量', entries: [{ id: 1, keys: [], comment: '[initvar]初始值', content: process.argv.includes('--settlement-performance') ? JSON.stringify(settlementPerformanceInitialVariables()) : 'gold: 0', enabled: true, constant: true, insertion_order: 1 }] },
       extensions: { mvu: {}, regex_scripts: [{ id: 'e2e-status', scriptName: '金币状态', findRegex: '<StatusPlaceHolderImpl/>',
         replaceString: '```html\n' + status + '\n```', placement: [2], markdownOnly: true, disabled: false }, ...(displayScenario ? displayRegressionRules() : [])] }
     } }))
@@ -147,10 +148,11 @@ try {
       const logOffset = log.length
       // Do not inherit provider credentials or a production profile configuration.
       const env = Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'SYSTEMROOT'].filter(key => process.env[key]).map(key => [key, process.env[key]]))
-      child = spawn(process.execPath, [cli, '--profile', 'tavern', '--host', '127.0.0.1', '--port', '0', '--no-open'], {
+      child = spawn(process.execPath, [...(process.argv.includes('--settlement-performance') ? ['--import', join(source, 'tests/e2e/settlement-perf-register.mjs')] : []), cli, '--profile', 'tavern', '--host', '127.0.0.1', '--port', '0', '--no-open'], {
         cwd: source, env: { ...env, DSH_HOME: root, DSH_CWD: root,
           TAVERN_E2E_COMPACTION_DIR: compactionScenario ? output : '',
           TAVERN_E2E_RECOVERY_DIR: recoveryScenario ? output : '',
+          TAVERN_E2E_PERFORMANCE_DIR: process.argv.includes('--settlement-performance') ? output : '',
           TAVERN_E2E_BACKGROUND_DIR: process.argv.includes('--background-lifecycle') ? output : '',
           TAVERN_E2E_REQUEST_AUDIT: join(output, 'preset-requests.jsonl'),
           TAVERN_E2E_MEMORY_AUDIT: process.argv.includes('--card-memory') ? join(output, 'memory-requests.jsonl') : '',
@@ -194,7 +196,7 @@ try {
     browser = await chromium.launch({ headless: true })
     context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, ...(recoveryScenario ? { hasTouch: true } : {}) })
     context.setDefaultTimeout(timeout)
-    await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
+    if (!process.argv.includes('--settlement-performance')) await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
     page = await context.newPage()
     page.on('pageerror', error => errors.push(error.message))
     // Slot error boundaries catch React failures, so pageerror alone misses them.
@@ -258,7 +260,9 @@ try {
     assert.deepEqual(errors, [], '浏览器不得出现未捕获异常')
     await page.screenshot({ path: join(output, 'after-reload.png'), fullPage: true })
   })
-  if (process.argv.includes('--mvu-incremental')) {
+  if (process.argv.includes('--settlement-performance')) {
+    await settlementPerformanceChecks({page,step,savedChat,output,report,restartServer,root,data,readLog:()=>log})
+  } else if (process.argv.includes('--mvu-incremental')) {
     await incrementalMvuChecks({page,step,savedChat,output,report,restartServer})
   } else if (process.argv.includes('--background-lifecycle')) {
     await backgroundLifecycleChecks({page,step,savedChat,data,output,report,restartServer})
@@ -388,11 +392,11 @@ try {
   report.status = 'failed'; report.error = error.stack; process.exitCode = 1
   if (page) {
     await page.screenshot({ path: join(output, 'failure.png'), fullPage: true }).catch(() => {})
-    await writeFile(join(output, 'failure.txt'), await page.locator('body').innerText()).catch(() => {})
+    await writeFile(join(output, 'failure.txt'), await page.locator('body').innerText().catch(() => 'Page unavailable')).catch(() => {})
   }
 } finally {
   // Read-only evidence, independent of the status iframe and its UI assertions.
-  const chat = await savedChat().catch(error => { report.savedStateError = String(error.message || error); return null })
+  const chat = process.argv.includes('--settlement-performance') ? null : await savedChat().catch(error => { report.savedStateError = String(error.message || error); return null })
   if (chat) await writeFile(join(output, 'saved-state.json'), JSON.stringify({ id: chat.id, posture: chat.posture, contextCompaction: chat.contextCompaction, timeline: chat.timeline,
     messages: chat.messages.map(message => ({ role: message.role, text: message.sourceText ?? message.text, turn: message.turn, variables: message.variables, mvu: message.mvu, ...(displayScenario ? {tavernPluginData:message.tavernPluginData} : {}) })) }, null, 2))
   await context?.tracing.stop({ path: join(output, 'trace.zip') }).catch(() => {})

@@ -1,0 +1,650 @@
+{
+  "environment": {
+    "cpu": "Apple M1",
+    "memoryBytes": 17179869184,
+    "node": "v22.22.0",
+    "dsh": "0.1.5-rc.2",
+    "baseCommit": "46b59f1b",
+    "tracing": false
+  },
+  "runs": [
+    {
+      "artifact": "run-D1DnuO",
+      "scope": "isolated full DSH + native Session + official MVU + journal + React; synthetic history, fixed model; tracing disabled",
+      "size": {
+        "rounds": 20,
+        "messages": 39,
+        "variableFields": 21,
+        "bytes": 938619,
+        "snapshotBytes": 11463
+      },
+      "samples": [
+        {
+          "run": 0,
+          "gold": 100,
+          "clickedAt": 1790488520959,
+          "submittedAt": 1790488521544.4426,
+          "runtimeReturnedAt": 1790488521955.2715,
+          "commitStartedAt": 1790488521980.6233,
+          "journalAppendedAt": 1790488521999.596,
+          "commitAt": 1790488522036.8652,
+          "visibleAt": 1790488522104.2998,
+          "receiptAt": 1790488522054,
+          "browserCompleteAt": 1790488521593,
+          "browserToJournalMs": 406.6,
+          "browserToCommitMs": 443.9,
+          "browserToVisibleMs": 511.3,
+          "submitToCommitMs": 492.4,
+          "submitToVisibleMs": 559.9,
+          "runtimeToCommitMs": 81.6,
+          "runtimeToVisibleMs": 149,
+          "commitMs": 56.2,
+          "commitToVisibleMs": 67.4,
+          "diskReadMs": 17.4,
+          "events": [
+            {
+              "stage": "journal-appended",
+              "at": 1790488521143.747,
+              "source": "settlement.retry",
+              "revision": 23
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488521266.5735,
+              "source": "background.settlement.begin",
+              "revision": 24
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488521337.9531,
+              "source": "background.settlement.bind",
+              "revision": 25
+            },
+            {
+              "stage": "submitted",
+              "at": 1790488521544.4426
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488521546.95,
+              "source": "background.settlement.checkpoint",
+              "revision": 26
+            },
+            {
+              "stage": "runtime-start",
+              "at": 1790488521562.8857
+            },
+            {
+              "stage": "dispatch-start",
+              "at": 1790488521564.8496,
+              "eventId": "mvu-work:67b76f80-447c-4f9a-a182-edf66f308f3c"
+            },
+            {
+              "stage": "runtime-return",
+              "at": 1790488521955.2715
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488521957.6118,
+              "source": "background.settlement.checkpoint",
+              "revision": 27
+            },
+            {
+              "stage": "settlement-return",
+              "at": 1790488521980.3142
+            },
+            {
+              "stage": "commit-start",
+              "at": 1790488521980.6233
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488521999.596,
+              "source": "background.settlement.commit",
+              "revision": 28
+            },
+            {
+              "stage": "commit-return",
+              "at": 1790488522036.8652
+            }
+          ],
+          "browserEvents": [
+            {
+              "stage": "browser-event-complete",
+              "eventId": "mvu-work:67b76f80-447c-4f9a-a182-edf66f308f3c",
+              "at": 1790488521593
+            }
+          ]
+        },
+        {
+          "run": 1,
+          "gold": 101,
+          "clickedAt": 1790488522861,
+          "submittedAt": 1790488523429.7288,
+          "runtimeReturnedAt": 1790488523835.8235,
+          "commitStartedAt": 1790488523868.152,
+          "journalAppendedAt": 1790488523886.9783,
+          "commitAt": 1790488523917.9885,
+          "visibleAt": 1790488524121.7,
+          "receiptAt": 1790488523923.7,
+          "browserCompleteAt": 1790488523476.3,
+          "browserToJournalMs": 410.7,
+          "browserToCommitMs": 441.7,
+          "browserToVisibleMs": 645.4,
+          "submitToCommitMs": 488.3,
+          "submitToVisibleMs": 692,
+          "runtimeToCommitMs": 82.2,
+          "runtimeToVisibleMs": 285.9,
+          "commitMs": 49.8,
+          "commitToVisibleMs": 203.7,
+          "diskReadMs": 41.7,
+          "events": [
+            {
+              "stage": "journal-appended",
+              "at": 1790488522953.5874,
+              "source": "settlement.retry",
+              "revision": 29
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488523064.1987,
+              "source": "worldbook.projection",
+              "revision": 30
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488523176.349,
+              "source": "background.settlement.begin",
+              "revision": 31
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488523234.3313,
+              "source": "background.settlement.bind",
+              "revision": 32
+            },
+            {
+              "stage": "submitted",
+              "at": 1790488523429.7288
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488523431.84,
+              "source": "background.settlement.checkpoint",
+              "revision": 33
+            },
+            {
+              "stage": "runtime-start",
+              "at": 1790488523450.8325
+            },
+            {
+              "stage": "dispatch-start",
+              "at": 1790488523451.9448,
+              "eventId": "mvu-work:d99b2ef5-dccc-4efa-9140-f75ea45c9271"
+            },
+            {
+              "stage": "runtime-return",
+              "at": 1790488523835.8235
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488523841.5994,
+              "source": "background.settlement.checkpoint",
+              "revision": 34
+            },
+            {
+              "stage": "settlement-return",
+              "at": 1790488523867.9233
+            },
+            {
+              "stage": "commit-start",
+              "at": 1790488523868.152
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488523886.9783,
+              "source": "background.settlement.commit",
+              "revision": 35
+            },
+            {
+              "stage": "commit-return",
+              "at": 1790488523917.9885
+            }
+          ],
+          "browserEvents": [
+            {
+              "stage": "browser-event-complete",
+              "eventId": "mvu-work:d99b2ef5-dccc-4efa-9140-f75ea45c9271",
+              "at": 1790488523476.3
+            }
+          ]
+        },
+        {
+          "run": 2,
+          "gold": 102,
+          "clickedAt": 1790488524668,
+          "submittedAt": 1790488525262.0518,
+          "runtimeReturnedAt": 1790488525684.0322,
+          "commitStartedAt": 1790488525716.4385,
+          "journalAppendedAt": 1790488525727.1594,
+          "commitAt": 1790488525763.767,
+          "visibleAt": 1790488525905.0999,
+          "receiptAt": 1790488525761.2,
+          "browserCompleteAt": 1790488525326,
+          "browserToJournalMs": 401.2,
+          "browserToCommitMs": 437.8,
+          "browserToVisibleMs": 579.1,
+          "submitToCommitMs": 501.7,
+          "submitToVisibleMs": 643,
+          "runtimeToCommitMs": 79.7,
+          "runtimeToVisibleMs": 221.1,
+          "commitMs": 47.3,
+          "commitToVisibleMs": 141.3,
+          "diskReadMs": 25.3,
+          "events": [
+            {
+              "stage": "journal-appended",
+              "at": 1790488524870.53,
+              "source": "settlement.retry",
+              "revision": 36
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488524949.2588,
+              "source": "worldbook.projection",
+              "revision": 37
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488525019.333,
+              "source": "background.settlement.begin",
+              "revision": 38
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488525070.2412,
+              "source": "background.settlement.bind",
+              "revision": 39
+            },
+            {
+              "stage": "submitted",
+              "at": 1790488525262.0518
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488525263.644,
+              "source": "background.settlement.checkpoint",
+              "revision": 40
+            },
+            {
+              "stage": "runtime-start",
+              "at": 1790488525278.1865
+            },
+            {
+              "stage": "dispatch-start",
+              "at": 1790488525279.316,
+              "eventId": "mvu-work:b7a4b4f9-50e6-4c12-9ae1-9239c85a00de"
+            },
+            {
+              "stage": "runtime-return",
+              "at": 1790488525684.0322
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488525688.792,
+              "source": "background.settlement.checkpoint",
+              "revision": 41
+            },
+            {
+              "stage": "settlement-return",
+              "at": 1790488525716.2288
+            },
+            {
+              "stage": "commit-start",
+              "at": 1790488525716.4385
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488525727.1594,
+              "source": "background.settlement.commit",
+              "revision": 42
+            },
+            {
+              "stage": "commit-return",
+              "at": 1790488525763.767
+            }
+          ],
+          "browserEvents": [
+            {
+              "stage": "browser-event-complete",
+              "eventId": "mvu-work:b7a4b4f9-50e6-4c12-9ae1-9239c85a00de",
+              "at": 1790488525326
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "artifact": "run-T7NHNS",
+      "scope": "isolated full DSH + native Session + official MVU + journal + React; synthetic history, fixed model; tracing disabled",
+      "size": {
+        "rounds": 1000,
+        "messages": 1999,
+        "variableFields": 21,
+        "bytes": 47626487,
+        "snapshotBytes": 11463
+      },
+      "samples": [
+        {
+          "run": 0,
+          "gold": 100,
+          "clickedAt": 1790488413088,
+          "submittedAt": 1790488424113.721,
+          "runtimeReturnedAt": 1790488436791.13,
+          "commitStartedAt": 1790488436831.145,
+          "journalAppendedAt": 1790488436844.9685,
+          "commitAt": 1790488436870.0972,
+          "visibleAt": 1790488437375.9,
+          "receiptAt": 1790488437339.9,
+          "browserCompleteAt": 1790488436428.9,
+          "browserToJournalMs": 416.1,
+          "browserToCommitMs": 441.2,
+          "browserToVisibleMs": 947,
+          "submitToCommitMs": 12756.4,
+          "submitToVisibleMs": 13262.2,
+          "runtimeToCommitMs": 79,
+          "runtimeToVisibleMs": 584.8,
+          "commitMs": 39,
+          "commitToVisibleMs": 505.8,
+          "diskReadMs": 490.5,
+          "events": [
+            {
+              "stage": "journal-appended",
+              "at": 1790488414801.565,
+              "source": "settlement.retry",
+              "revision": 21
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488419242.3123,
+              "source": "background.settlement.begin",
+              "revision": 22
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488419879.353,
+              "source": "background.settlement.bind",
+              "revision": 23
+            },
+            {
+              "stage": "submitted",
+              "at": 1790488424113.721
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488424351.9692,
+              "source": "background.settlement.checkpoint",
+              "revision": 24
+            },
+            {
+              "stage": "runtime-start",
+              "at": 1790488424369.4407
+            },
+            {
+              "stage": "dispatch-start",
+              "at": 1790488424371.748,
+              "eventId": "mvu-work:170ff5f0-e9f8-4700-916f-f777f6c9f1f1"
+            },
+            {
+              "stage": "runtime-return",
+              "at": 1790488436791.13
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488436797.5002,
+              "source": "background.settlement.checkpoint",
+              "revision": 25
+            },
+            {
+              "stage": "settlement-return",
+              "at": 1790488436830.763
+            },
+            {
+              "stage": "commit-start",
+              "at": 1790488436831.145
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488436844.9685,
+              "source": "background.settlement.commit",
+              "revision": 26
+            },
+            {
+              "stage": "commit-return",
+              "at": 1790488436870.0972
+            }
+          ],
+          "browserEvents": [
+            {
+              "stage": "browser-event-complete",
+              "eventId": "mvu-work:170ff5f0-e9f8-4700-916f-f777f6c9f1f1",
+              "at": 1790488436428.9
+            }
+          ]
+        },
+        {
+          "run": 1,
+          "gold": 101,
+          "clickedAt": 1790488438546,
+          "submittedAt": 1790488448294.1733,
+          "runtimeReturnedAt": 1790488455658.9626,
+          "commitStartedAt": 1790488455698.786,
+          "journalAppendedAt": 1790488455712.1892,
+          "commitAt": 1790488455742.4155,
+          "visibleAt": 1790488456347.6,
+          "receiptAt": 1790488456242.7,
+          "browserCompleteAt": 1790488455297.6,
+          "browserToJournalMs": 414.6,
+          "browserToCommitMs": 444.8,
+          "browserToVisibleMs": 1050,
+          "submitToCommitMs": 7448.2,
+          "submitToVisibleMs": 8053.4,
+          "runtimeToCommitMs": 83.5,
+          "runtimeToVisibleMs": 688.6,
+          "commitMs": 43.6,
+          "commitToVisibleMs": 605.2,
+          "diskReadMs": 457.6,
+          "events": [
+            {
+              "stage": "journal-appended",
+              "at": 1790488440188.4155,
+              "source": "settlement.retry",
+              "revision": 27
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488442399.3386,
+              "source": "worldbook.projection",
+              "revision": 28
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488444863.8442,
+              "source": "background.settlement.begin",
+              "revision": 29
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488445335.677,
+              "source": "background.settlement.bind",
+              "revision": 30
+            },
+            {
+              "stage": "submitted",
+              "at": 1790488448294.1733
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488448512.4353,
+              "source": "background.settlement.checkpoint",
+              "revision": 31
+            },
+            {
+              "stage": "runtime-start",
+              "at": 1790488448539.7896
+            },
+            {
+              "stage": "dispatch-start",
+              "at": 1790488448541.3972,
+              "eventId": "mvu-work:5b1d94a6-7401-4ddf-9377-7e541a6406f5"
+            },
+            {
+              "stage": "runtime-return",
+              "at": 1790488455658.9626
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488455665.0264,
+              "source": "background.settlement.checkpoint",
+              "revision": 32
+            },
+            {
+              "stage": "settlement-return",
+              "at": 1790488455698.4673
+            },
+            {
+              "stage": "commit-start",
+              "at": 1790488455698.786
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488455712.1892,
+              "source": "background.settlement.commit",
+              "revision": 33
+            },
+            {
+              "stage": "commit-return",
+              "at": 1790488455742.4155
+            }
+          ],
+          "browserEvents": [
+            {
+              "stage": "browser-event-complete",
+              "eventId": "mvu-work:5b1d94a6-7401-4ddf-9377-7e541a6406f5",
+              "at": 1790488455297.6
+            }
+          ]
+        },
+        {
+          "run": 2,
+          "gold": 102,
+          "clickedAt": 1790488457381,
+          "submittedAt": 1790488466220.4736,
+          "runtimeReturnedAt": 1790488472240.1846,
+          "commitStartedAt": 1790488472273.4128,
+          "journalAppendedAt": 1790488472294.9114,
+          "commitAt": 1790488472318.653,
+          "visibleAt": 1790488478225.8,
+          "receiptAt": 1790488475983.2,
+          "browserCompleteAt": 1790488471879.9,
+          "browserToJournalMs": 415,
+          "browserToCommitMs": 438.8,
+          "browserToVisibleMs": 6345.9,
+          "submitToCommitMs": 6098.2,
+          "submitToVisibleMs": 12005.3,
+          "runtimeToCommitMs": 78.5,
+          "runtimeToVisibleMs": 5985.6,
+          "commitMs": 45.2,
+          "commitToVisibleMs": 5907.1,
+          "diskReadMs": 475.3,
+          "events": [
+            {
+              "stage": "journal-appended",
+              "at": 1790488458734.2283,
+              "source": "settlement.retry",
+              "revision": 34
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488461534.5,
+              "source": "worldbook.projection",
+              "revision": 35
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488463902.5222,
+              "source": "background.settlement.begin",
+              "revision": 36
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488464399.2246,
+              "source": "background.settlement.bind",
+              "revision": 37
+            },
+            {
+              "stage": "submitted",
+              "at": 1790488466220.4736
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488466460.6538,
+              "source": "background.settlement.checkpoint",
+              "revision": 38
+            },
+            {
+              "stage": "runtime-start",
+              "at": 1790488466478.2156
+            },
+            {
+              "stage": "dispatch-start",
+              "at": 1790488466479.6008,
+              "eventId": "mvu-work:3b65ad36-1265-4e5b-8e1b-392da6b7929a"
+            },
+            {
+              "stage": "runtime-return",
+              "at": 1790488472240.1846
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488472245.115,
+              "source": "background.settlement.checkpoint",
+              "revision": 39
+            },
+            {
+              "stage": "settlement-return",
+              "at": 1790488472272.8574
+            },
+            {
+              "stage": "commit-start",
+              "at": 1790488472273.4128
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488472294.9114,
+              "source": "background.settlement.commit",
+              "revision": 40
+            },
+            {
+              "stage": "commit-return",
+              "at": 1790488472318.653
+            },
+            {
+              "stage": "journal-appended",
+              "at": 1790488478296.9463,
+              "source": "prompt-template.state",
+              "revision": 41
+            }
+          ],
+          "browserEvents": [
+            {
+              "stage": "browser-event-complete",
+              "eventId": "mvu-work:3b65ad36-1265-4e5b-8e1b-392da6b7929a",
+              "at": 1790488471879.9
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

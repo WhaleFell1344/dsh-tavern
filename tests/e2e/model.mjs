@@ -53,8 +53,9 @@ export function apply(ctx) {
       const text = JSON.stringify(input.messages)
       const presetRound = [70, 60, 50].find(value => text.includes(`E2E 预设验收 ${value}`) || text.includes(`预设切换后继续游玩，金币 ${value}。`))
       const cardUpdate = (text.includes('E2E 更新后继续') || text.includes('更新后的世界中，你又获得十枚金币'))
-      const gold = cardUpdate ? 20 : presetRound || (text.includes('E2E 修正金币为四十') ? 40 : (text.includes('雨夜重写') || text.includes('雨夜里')) ? 30 : (text.includes('再次领取奖励') || text.includes('金币累计二十枚')) ? 20 : 10)
-      const goldId = 'e2e-gold-' + gold, postureId = 'e2e-posture-' + gold
+      const perf = process.env.TAVERN_E2E_PERFORMANCE_DIR ? JSON.parse(await readFile(process.env.TAVERN_E2E_PERFORMANCE_DIR + '/performance-control.json', 'utf8').catch(() => 'null')) : null
+      const gold = perf?.gold ?? (cardUpdate ? 20 : presetRound || (text.includes('E2E 修正金币为四十') ? 40 : (text.includes('雨夜重写') || text.includes('雨夜里')) ? 30 : (text.includes('再次领取奖励') || text.includes('金币累计二十枚')) ? 20 : 10))
+      const goldId = perf ? 'perf-gold-' + perf.id : 'e2e-gold-' + gold, postureId = 'e2e-posture-' + gold
       const blocks = []
       if (tools.has('candidate_submit_choices')) blocks.push({ type: 'tool-call', id: 'e2e-choices', name: 'candidate_submit_choices', arguments: JSON.stringify({ actions: ['再次领取奖励', '向店主道谢', '查看任务告示', '清点背包'], scene: '夜幕降临酒馆' }) })
       if (tools.has('mvu_submit_update') && !done.has(goldId)) blocks.push({

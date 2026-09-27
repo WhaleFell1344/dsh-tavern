@@ -1,5 +1,17 @@
 # 游玩验收 E2E
 
+## 超长存档结算计时
+
+`TAVERN_E2E_TIMEOUT_MS=120000 node tests/e2e/gameplay.mjs --settlement-performance`
+在隔离 Profile 中生成匹配的 Chat 与原生 Session，使用真实官方 MVU、浏览器和日志存储，只有模型输出固定。
+默认 1000 轮、20 个合成字段加金币、连续 5 次重新结算；可用 `TAVERN_PERF_ROUNDS`、`TAVERN_PERF_FIELDS`、`TAVERN_PERF_RUNS` 调整。
+合成字段从人物卡初始变量正常进入 MVU，每次独立读档验证所有字段和结算回执。
+
+`settlement-performance.json` 区分浏览器 MVU 事件完成、服务端 runtime 返回、结算日志 append 完成、commit 返回和状态栏显示。
+跨进程时间使用同机 epoch 时钟；日志 append 表示操作系统可读写入，不代表 fsync。
+计时关闭 Playwright tracing，避免长历史快照采集干扰。探针只通过隔离子进程的 ESM loader 注入；生产代码不变。
+超大变量快照可能使冷加载或 UI 超时，失败不能作为成功耗时样本。
+
 自动执行：启动酒馆 → 选择角色卡 → 新开一局 → 发消息玩一轮 → 检查正文、金币和人物姿势 → 刷新页面 → 确认同一局的数据仍然保留 → 生成 4+1 候选项并选择行动 → 再玩一轮 → 重新生成正文 → 编辑正文并刷新 → 回退并刷新 → 撤销回退 → Guide 添加/删除 → 重新结算变量 → 导出纯对话 → 切换本局预设并继续游玩。
 
 ## 运行

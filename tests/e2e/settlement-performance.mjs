@@ -1,0 +1,138 @@
+import assert from 'node:assert/strict'
+import { readFile, writeFile, readdir, rm } from 'node:fs/promises'
+import { join, dirname } from 'node:path'
+import { createChatJournalStore } from '../../tavern-plugin/lib/domain/chat-journal-store.js'
+import { createChatPersistence } from '../../tavern-plugin/lib/domain/chat-persistence.js'
+import { encodeMigratedSessionLog, parseSessionLog } from '../../tavern-plugin/lib/domain/legacy-session-migration.js'
+
+export function settlementPerformanceInitialVariables() {
+  const state = { gold: 0 }
+  for (let i = 0; i < Number(process.env.TAVERN_PERF_FIELDS || 20); i++) state['perfField' + i] = { value: i, label: '合成长档状态'.repeat(6), enabled: true }
+  return state
+}
+
+export async function settlementPerformanceChecks({ page, step, savedChat, output, report, restartServer, root, data, readLog }) {
+  const rounds = Number(process.env.TAVERN_PERF_ROUNDS || 1000)
+  const fields = Number(process.env.TAVERN_PERF_FIELDS || 20)
+  const runs = Number(process.env.TAVERN_PERF_RUNS || 5)
+  assert.ok(Number.isInteger(rounds) && rounds >= 2 && rounds <= 5000)
+  assert.ok(Number.isInteger(fields) && fields >= 0 && fields <= 2000)
+  assert.ok(Number.isInteger(runs) && runs >= 1 && runs <= 100)
+  const fixture = await savedChat()
+  const chatId = fixture.id
+  let size
+  report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + journal + React; synthetic history, fixed model; tracing disabled', size: { rounds, fields }, samples: [] }
+  await step(`构造 ${rounds} 轮隔离长档并重新打开`, async () => {
+    await restartServer(async () => {
+      const next = structuredClone(fixture), greeting = next.messages[0], user = next.messages.find(m => m.role === 'user'), assistant = next.messages.at(-1)
+      const state = structuredClone(assistant.variables[0])
+      assert.equal(Object.keys(state.stat_data).length, fields + 1, 'large variable schema must come from real card initialization')
+      const body = '这是性能测试的合成剧情，不对应真实存档。'.repeat(60) + '\n\n<StatusPlaceHolderImpl/>'
+      next.messages = [{ ...greeting, variables: [structuredClone(state)] }]
+      const rows = []
+      const event = (type, d, surfaceOp) => rows.push({ seq: rows.length, time: 1, type, data: d, ...(surfaceOp ? { surfaceOp } : {}) })
+      for (let turn = 1; turn <= rounds; turn++) {
+        event('turn/start', { turn }); event('step/start', { turn, step: 1 })
+        if (turn > 1) {
+          next.messages.push({ ...structuredClone(user), turn, text: '性能测试输入 ' + turn, sourceText: '性能测试输入 ' + turn })
+          event('user/message', { id: 'perf-u-' + turn, role: 'user', content: [{ type: 'text', text: '性能测试输入 ' + turn }], source: { kind: 'user' } }, 'append')
+          const message = { ...structuredClone(assistant), turn, text: body, sourceText: body, swipes: [body], variables: [structuredClone(state)] }
+          message.mvuBaseline = { swipeId: 0, variables: structuredClone(state) }
+          next.messages.push(message)
+        }
+        event('assistant/message', { turn, step: 1, message: { id: 'perf-a-' + turn, role: 'assistant', content: [{ type: 'text', text: turn === 1 ? greeting.text : body }], source: { kind: 'model', provider: 'tavern-e2e', model: 'fixed' } } }, 'append')
+        event('step/end', { turn, step: 1 }); event('turn/end', { turn, reason: { kind: 'completed' } })
+      }
+      size = { rounds, messages: next.messages.length, variableFields: fields + 1, bytes: Buffer.byteLength(JSON.stringify(next)), snapshotBytes: Buffer.byteLength(JSON.stringify(state)) }
+      report.settlementPerformance.size = size
+      const persistence = createChatPersistence({ store: createChatJournalStore({ dataRoot: data }) })
+      await persistence.write(next)
+      const sessions = join(root, 'profile-data/tavern/sessions')
+      let found = false
+      for (const file of (await readdir(sessions, { recursive: true })).filter(x => x.endsWith('session.v3.jsonl.zstd'))) {
+        const path = join(sessions, file), saved = parseSessionLog(await readFile(path))
+        if (saved.header.id !== fixture.sessionId) continue
+        const header = { type: 'session', delegationDepth: 0, version: 0, id: fixture.sessionId, createdAt: saved.header.createdAt, cwd: saved.header.cwd }
+        await writeFile(join(dirname(path), 'session.jsonl.zstd'), encodeMigratedSessionLog(JSON.stringify(header), rows))
+        await rm(path)
+        found = true; break
+      }
+      assert.ok(found, 'synthetic Chat and native Session must have matching turn coordinates')
+    })
+    await page.frameLocator('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame').locator('#e2e-gold').filter({ hasText: /^金币：10$/ }).waitFor({ timeout: 120000 })
+    // Exclude cold initialization and allow snapshot maintenance to settle.
+    await page.waitForTimeout(3000)
+  })
+  const samples = []
+  report.settlementPerformance = { scope: 'isolated full DSH + native Session + official MVU + journal + React; synthetic history, fixed model; tracing disabled', size, samples }
+  for (let run = 0; run < runs; run++) await step(`长档结算采样 ${run + 1}/${runs}`, async () => {
+    const gold = 100 + run
+    await writeFile(join(output, 'performance-control.json'), JSON.stringify({ id: run, gold }))
+    const offset = readLog().length
+    const clickedAt = Date.now()
+    await page.evaluate(() => {
+      window.__perfSettlementObserver?.disconnect()
+      window.__perfSettlement = { events: [] }
+      window.__perfSettlementObserver = new MutationObserver(() => {
+        const receipt = [...document.querySelectorAll('.dsh-tavern-mvu-receipt')].filter(node => node.getClientRects().length).at(-1)
+        if (!receipt) return
+        if (receipt.dataset.status !== 'updated') window.__perfSettlement.pendingSeen = true
+        if (receipt.dataset.status === 'updated' && window.__perfSettlement.pendingSeen && !window.__perfSettlement.receiptAt) window.__perfSettlement.receiptAt = performance.timeOrigin + performance.now()
+      })
+      window.__perfSettlementObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-status'] })
+      if (!window.__perfSettlementListening) {
+        window.__perfSettlementListening = true
+        addEventListener('message', event => { if (event.data?.type === 'dsh-tavern-helper-event-complete' && String(event.data.eventId).startsWith('mvu-work:')) window.__perfSettlement.events.push({ stage: 'browser-event-complete', eventId: event.data.eventId, at: performance.timeOrigin + performance.now() }) })
+      }
+    })
+    const receipt = page.locator('.dsh-tavern-mvu-receipt').filter({ visible: true }).last()
+    if (await receipt.getAttribute('open') === null) await receipt.locator('summary').click()
+    await receipt.getByRole('button', { name: '重新结算变量', exact: true }).click()
+    await page.getByPlaceholder('例如：这轮还没有交付物品，不要扣除库存。').fill('性能测试：本次金币更新为 ' + gold)
+    await page.getByRole('button', { name: '重新结算', exact: true }).click()
+    const statusFrame = await (await page.locator('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame').elementHandle()).contentFrame()
+    const visiblePromise = statusFrame.evaluate(gold => new Promise(resolve => {
+      const node = document.querySelector('#e2e-gold')
+      const check = () => { if (node.textContent === '金币：' + gold) { observer.disconnect(); requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.timeOrigin + performance.now()))) } }
+      const observer = new MutationObserver(check); observer.observe(node, { subtree: true, characterData: true, childList: true }); check()
+    }), gold).then(value => ({ value }), error => ({ error }))
+    await page.frameLocator('.dsh-tavern-status-runtime iframe.dsh-tavern-message-frame').locator('#e2e-gold').filter({ hasText: new RegExp('^金币：' + gold + '$') }).waitFor({ timeout: 120000 })
+    const observation = await visiblePromise
+    if (observation.error) throw observation.error
+    const visibleAt = observation.value
+    await page.locator('.dsh-tavern-mvu-receipt[data-status="updated"]').filter({ visible: true }).last().waitFor()
+    const receiptAt = await page.evaluate(() => window.__perfSettlement.receiptAt || null)
+    // Fresh store, independent of the running server's hot cache. Read only target.
+    const readStart = performance.now()
+    const disk = await createChatJournalStore({ dataRoot: data }).readSlice(chatId, [size.messages - 1], 'settlement')
+    const saved = disk.chat.messages[0]
+    assert.equal(saved.variables[0].stat_data.gold, gold)
+    assert.equal(Object.keys(saved.variables[0].stat_data).length, fields + 1)
+    for (let i = 0; i < fields; i++) assert.deepEqual(saved.variables[0].stat_data['perfField' + i], { value: i, label: '合成长档状态'.repeat(6), enabled: true })
+    assert.equal(saved.mvu.receipt.status, 'updated')
+    assert.equal(saved.mvu.pending, false)
+    const diskReadMs = performance.now() - readStart
+    const events = [...readLog().slice(offset).matchAll(/\[settlement-perf\](\{[^\n]+\})/g)].map(match => JSON.parse(match[1]))
+    const at = stage => events.find(x => x.stage === stage)?.at
+    const commitStart = at('commit-start'), commitAt = at('commit-return')
+    const submitted = at('submitted'), runtime = at('runtime-return')
+    assert.ok(submitted && runtime && commitStart && commitAt, 'all real settlement boundaries must be measured')
+    const journal = events.filter(x => x.stage === 'journal-appended' && x.source === 'background.settlement.commit' && x.at >= commitStart && x.at <= commitAt).at(-1)?.at
+    assert.ok(journal, 'final commit must append a journal frame (OS-visible write, not fsync)')
+    const browserEvents = await page.evaluate(() => window.__perfSettlement.events)
+    const eventId = events.find(x => x.stage === 'dispatch-start')?.eventId
+    const browserCompleteAt = browserEvents.find(x => x.eventId === eventId)?.at
+    assert.ok(browserCompleteAt, 'observe completion of the exact MVU browser event')
+    const round = n => Math.round(n * 10) / 10
+    const sample = { run, gold, clickedAt, submittedAt: submitted, runtimeReturnedAt: runtime, commitStartedAt: commitStart, journalAppendedAt: journal, commitAt, visibleAt, receiptAt, browserCompleteAt,
+      browserToJournalMs: round(journal - browserCompleteAt), browserToCommitMs: round(commitAt - browserCompleteAt), browserToVisibleMs: round(visibleAt - browserCompleteAt),
+      submitToCommitMs: round(commitAt - submitted), submitToVisibleMs: round(visibleAt - submitted), runtimeToCommitMs: round(commitAt - runtime),
+      runtimeToVisibleMs: round(visibleAt - runtime), commitMs: round(commitAt - commitStart), commitToVisibleMs: round(visibleAt - commitAt),
+      diskReadMs: round(diskReadMs), events, browserEvents }
+    samples.push(sample)
+    console.log('PERF ' + JSON.stringify({ ...size, ...Object.fromEntries(Object.entries(sample).filter(([key]) => key.endsWith('Ms'))) }))
+    await writeFile(join(output, 'settlement-performance.json'), JSON.stringify(report.settlementPerformance, null, 2))
+    await page.waitForTimeout(500)
+  })
+  await page.screenshot({ path: join(output, 'long-archive-settled.png') })
+}
