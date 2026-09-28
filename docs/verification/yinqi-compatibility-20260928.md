@@ -119,3 +119,9 @@ Validation: 93 focused tests passed, including placeholder padding, live positio
 自检的“未找到 8 个”并非可忽略建议。执行器早已展开 {type:'script',value:{name,...}}，但 characters[id].data.extensions.TavernHelper_scripts 仍返回包装对象，自检读取顶层 name 得到 undefined。现将此只读人物卡投影按执行器同样的规则展开，并合并外层与内层启用标志；原卡不变。
 
 新增回归先失败后通过；95 项相关测试通过。直接读取原始 V24.4 卡，通过实际 Helper facade 按卡片自检的同一路径查找，返回 9 个脚本，所需 8 个全部存在且启用（missing=[]、disabled=[]）。本轮未再次完整点击浏览器向导。
+
+## 向导结束时替换草稿开场
+
+原卡结束流程依次保存 MVU 数据、setChatMessages([{message_id:0,message:...}]) 替换启动提示、触发发送。预览桥接只准选择原卡已有 swipe，导致第二步提前拒绝，生成步骤不执行。现允许已启用运行时的预览将无 swipe 切换的消息修改交给草稿宿主；宿主只允许修改第 0 条开场及其变量。resolve 返回每个开场的草稿正文，初始化新局时按选择映射进入原有宏/正则/原生会话提交路径，源卡不变。
+
+新增测试先失败后通过；桥接到草稿、草稿到原生会话的集成回归通过。链路集合 53 通过、9 跳过；此前开场集合 27 通过。没有实际完成原卡整个长向导并发送模型请求。未重启服务：当前用户向导内容保存在旧进程内存，重启会丢失尚未提交草稿。

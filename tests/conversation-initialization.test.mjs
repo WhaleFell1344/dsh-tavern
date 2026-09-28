@@ -502,3 +502,12 @@ test('新游戏复制全局 Skill 开关，本局调整和后续全局修改互�
   const card = await h.make().start({ ...h.input, sessionId: 'card-skills', mode: 'card', cardPath: '' })
   assert.deepEqual(card.disabledWritingSkills, [])
 })
+
+test('wizard draft greeting becomes native opening without changing source card', async () => {
+  const h=initializationFixture(), original=h.card.first_mes
+  const chat=await h.make().start({...h.input,preparation:{openingMessages:{primary:'**Ready** {{user}}'},variables:{},worldbookSnapshot:{version:1,document:{entries:[]}}}})
+  assert.equal(chat.messages[0].sourceText,'**Ready** {{user}}')
+  assert.match(chat.messages[0].text,/\*\*Ready\*\*/)
+  assert.equal(h.card.first_mes,original)
+  assert.ok(messages(h.session()).some(event=>JSON.stringify(event).includes('**Ready**')))
+})

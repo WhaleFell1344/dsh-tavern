@@ -105,7 +105,7 @@ export function createConversationInitialization(options) {
     const macroState = { userName: str(userName).trim().slice(0, 80) || '你', local: {}, global: {} }
     const runtimePresetSnapshot = groupOfMode(chatMode) === 'play' ? await playPresetSnapshot() : null
     const cardEditExperiment = chatMode === 'card' && cardTask === 'edit' && card !== null
-    const openingSourceText = chatMode === 'card' ? (cardEditExperiment ? '' : cardGreeting()) : resolveCardOpening(card, openingId)
+    let openingSourceText = chatMode === 'card' ? (cardEditExperiment ? '' : cardGreeting()) : resolveCardOpening(card, openingId)
     const openingExtensions = chatMode === 'card' ? null : await cards.extensions(cardPath)
     const openingChoices = chatMode === 'card' ? [] : cardOpeningChoices(card)
     const selectedOpeningIndex = str(openingId) === '' ? 0 : Math.max(0, openingChoices.findIndex(function (choice) { return choice.id === str(openingId) }))
@@ -113,6 +113,13 @@ export function createConversationInitialization(options) {
       (Array.isArray(openingExtensions && openingExtensions.mvuResources) && openingExtensions.mvuResources.some(function (item) { return item.enabled !== false }))
       || openingChoices.some(function (choice) { return /<(?:initvar|json_?patch)>|_\.(?:set|insert|assign|remove|unset|delete|add)\(/i.test(choice.text) })
     )
+    if (preparation?.openingMessages && groupOfMode(chatMode) === 'play') {
+      for (const choice of openingChoices) {
+        const preparedText = preparation.openingMessages[choice.id];
+        if (typeof preparedText === 'string') choice.text = preparedText;
+      }
+      openingSourceText = openingChoices[selectedOpeningIndex]?.text ?? openingSourceText;
+    }
     const openingRegexScripts = (Array.isArray(openingExtensions && openingExtensions.regexScripts) ? openingExtensions.regexScripts : []).concat(
       Array.isArray(runtimePresetSnapshot && runtimePresetSnapshot.regexScripts) ? runtimePresetSnapshot.regexScripts : []
     )

@@ -104,7 +104,7 @@ function installOpeningPreviewBridge(token, preview) {
     return function () { return Promise.resolve().then(() => callback.apply(this, arguments)).catch(console.error); };
   };
   window.setChatMessages = async function (patches) {
-    if (original && Array.isArray(patches) && patches.every(patch => patch.swipe_id === undefined && patch.message === undefined)) return original.setChatMessages(patches);
+    if (original && Array.isArray(patches) && patches.every(patch => patch.swipe_id === undefined)) return original.setChatMessages(patches);
     if (!Array.isArray(patches) || patches.length !== 1) throw new Error('开场预览只能选择一条开场');
     const patch = patches[0];
     const index = Number(patch && patch.swipe_id);

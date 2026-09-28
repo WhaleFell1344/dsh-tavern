@@ -121,9 +121,9 @@ export function createOpeningPreparation({ readCard, worldBooks, generateRaw, re
         else if (type === 'character') draft.characterVariables = copy(args.variables)
         else replaceTavernHelperVariables(draft.chat, args)
       } else if (method === 'updateTavernHelperMessages') {
-        // The variable framework may write data, but cannot invent a story floor.
+        // Interactive wizards may edit the existing draft greeting, never add story floors.
         for (const patch of args.messages || []) {
-          if (Number(patch.message_id) !== 0 || Object.keys(patch).some(key => !['message_id', 'data', 'swipes_data'].includes(key))) throw new Error('准备阶段变量运行时只能更新开场变量')
+          if (Number(patch.message_id) !== 0 || Object.keys(patch).some(key => !['message_id', 'message', 'data', 'swipes_data'].includes(key))) throw new Error('准备阶段只能更新已有开场内容和变量')
         }
         replaceTavernHelperMessages(draft.chat, args.messages)
       } else if (method === 'saveTavernExtensionSettings') {
@@ -163,7 +163,7 @@ export function createOpeningPreparation({ readCard, worldBooks, generateRaw, re
       const selected = openingId || 'primary'
       const selectedIndex = draft.openings.findIndex(opening => opening.id === selected)
       if (selectedIndex < 0) throw new Error('人物卡开场白不存在')
-      return copy({ openingVariables: Object.fromEntries(draft.openings.map((opening, index) => [opening.id, draft.chat.messages[0]?.variables?.[index] || {}])), variables: draft.chat.variables || {}, messageVariables: draft.chat.messages[0]?.variables?.[selectedIndex] || {}, openingId: selected, sourceSessionId: draft.sourceSessionId, sourceLifecycleRevision: draft.sourceLifecycleRevision, worldbookSnapshot: { version: 1, libraryDigest: draft.libraryDigest, source: draft.source, document: draft.document } })
+      return copy({ openingMessages: Object.fromEntries(draft.openings.map((opening,index)=>[opening.id,draft.chat.messages[0]?.swipes?.[index] ?? opening.text])), openingVariables: Object.fromEntries(draft.openings.map((opening, index) => [opening.id, draft.chat.messages[0]?.variables?.[index] || {}])), variables: draft.chat.variables || {}, messageVariables: draft.chat.messages[0]?.variables?.[selectedIndex] || {}, openingId: selected, sourceSessionId: draft.sourceSessionId, sourceLifecycleRevision: draft.sourceLifecycleRevision, worldbookSnapshot: { version: 1, libraryDigest: draft.libraryDigest, source: draft.source, document: draft.document } })
     }
   }
 }

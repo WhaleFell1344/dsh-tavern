@@ -105,7 +105,7 @@ test('准备页运行时变量和插件设置均隔离保存', async () => {
   assert.deepEqual(saved.extensionSettings, settings)
   const second = await service.create('card', { runtime: true })
   assert.equal(second.runtime.context.extensionSettings.mvu, undefined)
-  await assert.rejects(service.callRuntime(draft.id, 'updateTavernHelperMessages', { messages: [{ message_id: 0, message: '改写剧情' }] }), /只能更新开场变量/)
+  await assert.rejects(service.callRuntime(draft.id, 'updateTavernHelperMessages', { messages: [{ message_id: 1, message: '改写剧情' }] }), /已有开场/)
 })
 
 
@@ -292,4 +292,25 @@ test('session opening bridge preserves live settings identity and character gett
   context.installSessionOpeningBridge('test',{swipes:['start'],selectedIndex:0,openingIds:['primary'],extensionSettings:{}})
   assert.equal(context.window.SillyTavern.extensionSettings,settings)
   name='second';assert.equal(context.window.SillyTavern.characters[0].name,'second')
+})
+
+test('runtime wizard can replace draft greeting without changing the card or another opening', async () => {
+  const service=createOpeningPreparation({readCard:async()=>structuredClone(card),worldBooks:{bound:async()=>null}})
+  const draft=await service.create('card',{runtime:true})
+  await service.callRuntime(draft.id,'updateTavernHelperMessages',{messages:[{message_id:0,message:'Setup complete'}]})
+  assert.equal(service.resolve(draft.id,'card','primary').openingMessages.primary,'Setup complete')
+  assert.equal(service.resolve(draft.id,'card','alternate:0').openingMessages['alternate:0'],'第二幕')
+  assert.equal(card.first_mes,'首页')
+  await assert.rejects(service.callRuntime(draft.id,'updateTavernHelperMessages',{messages:[{message_id:1,message:'invalid'}]}),/开场/)
+})
+
+test('runtime preview forwards wizard greeting replacement to its draft host', async () => {
+  const service=createOpeningPreparation({readCard:async()=>structuredClone(card),worldBooks:{bound:async()=>null}})
+  const draft=await service.create('card',{runtime:true})
+  const host={extensionSettings:{},getContext(){return this}}
+  const context=vm.createContext({window:{SillyTavern:host,TavernHelper:{},setChatMessages:messages=>service.callRuntime(draft.id,'updateTavernHelperMessages',{messages})},parent:{},console,addEventListener(){},setTimeout,clearTimeout})
+  vm.runInContext(await readFile(new URL('../tavern-plugin/src/client/opening-preview.js',import.meta.url),'utf8'),context)
+  context.installOpeningPreviewBridge('test',{runtime:true,preparationId:draft.id,swipes:['首页','第二幕'],openingIds:['primary','alternate:0'],selectedIndex:0})
+  await context.window.setChatMessages([{message_id:0,message:'Setup complete'}],{refresh:'affected'})
+  assert.equal(service.resolve(draft.id,'card','primary').openingMessages.primary,'Setup complete')
 })
