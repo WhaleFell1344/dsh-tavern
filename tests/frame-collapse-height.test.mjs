@@ -4,7 +4,7 @@ import {readFile,mkdir} from 'node:fs/promises'
 import vm from 'node:vm'
 import {chromium} from 'playwright'
 
-for(const width of [900,390]) test(`embedded status panel shrinks after collapse at width ${width}`,async()=>{
+for(const width of [900,390]) for(const opening of [false,true]) test(`embedded panel shrinks after collapse at width ${width}, opening=${opening}`,async()=>{
  let descriptor
  vm.runInNewContext(await readFile('tavern-plugin/lib/client.js','utf8'),{window:{__ModuleLoader__:{load(value){descriptor=value}}},console})
  const client=descriptor.factory(()=>({})),browser=await chromium.launch()
@@ -12,7 +12,7 @@ for(const width of [900,390]) test(`embedded status panel shrinks after collapse
   const page=await browser.newPage({viewport:{width,height:900}})
   await page.route('**/*',route=>route.abort())
   const content='<style>body{min-height:100vh}summary{height:64px;background:#112244;color:white}.inside{height:700px}</style><details open><summary>平行事件 · 3 则</summary><div class="inside">事件内容</div></details>'
-  const doc=client.buildTavernFrameDocument({content,token:'collapse'})
+  const doc=client.buildTavernFrameDocument({content,token:'collapse',...(opening ? {openingPreview:{runtime:{context:{},scripts:[]}}} : {})})
   await page.setContent('<iframe style="display:block;width:100%;height:900px;border:0"></iframe><p id="after">下段正文应紧接状态栏</p>')
   await page.evaluate(doc=>{window.heights=[];window.onmessage=e=>{if(e.data.type==='dsh-tavern-frame-height'){heights.push(e.data.height);document.querySelector('iframe').style.height=e.data.height+'px'}};document.querySelector('iframe').srcdoc=doc},doc)
   const frame=page.frames()[1]
