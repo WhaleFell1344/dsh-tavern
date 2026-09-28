@@ -1947,3 +1947,30 @@ test('legacy chat mount accepts panel padding without creating its own layout bo
     release();assert.equal(chat.isConnected,false)
   } finally {dom.window.close()}
 })
+
+test('opening submit helper uses native start, deduplicates and retries failures', async () => {
+  const listeners = new Map(), replies = [], sent = []
+  const frame = { contentWindow: { postMessage(data) { replies.push(data) } } }
+  const host = { sessionStorage: { getItem() { return null } }, document: null, setTimeout, clearTimeout,
+    addEventListener(name, fn) { listeners.set(name, fn) }, removeEventListener(name) { listeners.delete(name) } }
+  let fail = true
+  const lifecycle = client.createTavernMessageFrameLifecycle({ sessionId: '', content: 'opening',
+    openingPreview: { preparationId: 'draft' }, onSubmitOpening(text) {
+      sent.push(text); if (fail) throw Error('retry'); return { started: true }
+    }
+  }, { window: host, rpc() { throw Error('must not route submit to draft RPC') } })
+  const doc = lifecycle.snapshot().visibleDocument; doc.ref(frame)
+  const stop = lifecycle.start(() => {}), receive = listeners.get('message')
+  const data = { type: 'dsh-tavern-helper-call', token: doc.token, requestId: '1', method: 'submitTavernHelperInput', args: { text: 'start story' } }
+  receive({ source: {}, data }); assert.equal(sent.length, 0)
+  receive({ source: frame.contentWindow, data })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(replies.at(-1).ok, false)
+  fail = false
+  receive({ source: frame.contentWindow, data: { ...data, requestId: '2' } })
+  receive({ source: frame.contentWindow, data: { ...data, requestId: '3' } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(sent, ['start story', 'start story'])
+  assert.equal(replies.at(-1).ok, true)
+  stop()
+})

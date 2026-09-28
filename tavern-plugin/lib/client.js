@@ -8397,6 +8397,13 @@ window.__ModuleLoader__.load({
 				height = value;
 				try { hostWindow.sessionStorage.setItem(document.heightKey, value); } catch (_) {}
 			}
+            function submitOpening(document, text) {
+                if (!listener || document !== visible || document.key !== desired.key || typeof props.onSubmitOpening !== "function") return Promise.reject(new Error("开场预览已失效，请重新打开"));
+                if (!document.openingSubmit) document.openingSubmit = Promise.resolve().then(function () {
+                    return props.onSubmitOpening(String(text || ""));
+                }).catch(function (error) { document.openingSubmit = null; throw error; });
+                return document.openingSubmit;
+            }
 			function receive(event) {
 				const data = event && event.data;
 				const channel = data && channels.get(data.token);
@@ -8476,7 +8483,9 @@ window.__ModuleLoader__.load({
 				} else if (data.type === "dsh-tavern-helper-call" && !props.sessionId && props.openingPreview) {
 					// The pending frame initializes its private draft before it becomes visible.
 					if (sourceDocument.key !== desired.key) return;
-					invoke("callOpeningRuntime", { id: props.openingPreview.preparationId, method: data.method, args: data.args }).then(function (result) {
+					(data.method === "submitTavernHelperInput"
+                        ? submitOpening(sourceDocument, data.args && data.args.text)
+                        : invoke("callOpeningRuntime", { id: props.openingPreview.preparationId, method: data.method, args: data.args })).then(function (result) {
 						if (current()) event.source.postMessage({ type: "dsh-tavern-helper-response", token: data.token, requestId: data.requestId, ok: true, result }, "*");
 					}, function (error) {
 						if (current()) event.source.postMessage({ type: "dsh-tavern-helper-response", token: data.token, requestId: data.requestId, ok: false, error: String(error.message || error) }, "*");
@@ -8541,7 +8550,6 @@ window.__ModuleLoader__.load({
 					const openingArtifacts = props.openingPreview && props.trustedCardMode
 						? createTavernHostArtifactScope({ document: hostWindow.document }) : null;
 					hostWindow.addEventListener("message", receive);
-                    let openingSubmitted = false;
                     const releaseComposer = props.trustedCardMode && hostWindow.document
                         ? installFrameHostComposer(hostWindow.document, function (node) {
                             const channel = channels.get(visible.token);
@@ -8549,9 +8557,7 @@ window.__ModuleLoader__.load({
                         }, function (text) {
                             if (!listener || visible.key !== desired.key) throw new Error("卡片已失效，请重新打开");
                             if (props.openingPreview) {
-                                if (openingSubmitted) return;
-                                if (typeof props.onSubmitOpening !== "function") throw new Error("开场预览已失效，请重新打开");
-                                return Promise.resolve(props.onSubmitOpening(text)).then(function (result) { openingSubmitted = true; return result; });
+                                return submitOpening(visible, text);
                             }
                             const executeSlash = configuredSlashExecutor || props.executeSlash;
                             if (!props.sessionId || typeof executeSlash !== "function") throw new Error("当前界面无法触发生成，请刷新页面后重试");
