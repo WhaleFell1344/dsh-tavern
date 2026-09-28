@@ -3811,7 +3811,7 @@ window.__ModuleLoader__.load({
 		  const jq = frame.jQuery;
 		  const anchors = new Map();
 		  let observedViewport = null;
-		  const layoutObserver = host?.ResizeObserver ? new host.ResizeObserver(function () {
+		  function notifyLayout() {
 		    const rect = observedViewport?.getBoundingClientRect();
 		    if (!rect) return;
 		    // Legacy scripts observe their layout anchor's style/class changes.
@@ -3819,8 +3819,21 @@ window.__ModuleLoader__.load({
 		      const value = `--dsh-layout:${rect.left},${rect.top},${rect.width},${rect.height}`;
 		      if (node.getAttribute('style') !== value) node.setAttribute('style', value);
 		    }
-		  }) : null;
-		  if (layoutObserver) frame.addEventListener?.('pagehide', () => layoutObserver?.disconnect(), {once:true});
+		  }
+		  const layoutObserver = host?.ResizeObserver ? new host.ResizeObserver(notifyLayout) : null;
+		  let layoutFrame = null;
+		  function onLayoutScroll() {
+		    if (layoutFrame !== null) return;
+		    layoutFrame = host.requestAnimationFrame(function () { layoutFrame = null; notifyLayout(); });
+		  }
+		  if (layoutObserver) {
+		    host.addEventListener('scroll', onLayoutScroll, true);
+		    frame.addEventListener?.('pagehide', function () {
+		      layoutObserver.disconnect();
+		      host.removeEventListener('scroll', onLayoutScroll, true);
+		      if (layoutFrame !== null) host.cancelAnimationFrame(layoutFrame);
+		    }, {once:true});
+		  }
 		  function layoutAnchor(id) {
 		    if (!['sheld', 'top-settings-holder'].includes(id)) return null;
 		    const doc = host.document;
@@ -6421,6 +6434,9 @@ window.__ModuleLoader__.load({
 			if (!chatRoot && host.document && host.document.createElement) {
 				chatRoot = host.document.createElement('div');
 				chatRoot.id = 'chat';
+                // This compatibility mount is not another chat viewport. Legacy
+                // panel padding must not add a second, page-level scroll range.
+                if (chatRoot.style) chatRoot.style.setProperty('display', 'contents', 'important');
 				chatRoot.tavernCompatibilityOwners = 0;
 				host.document.body.appendChild(chatRoot);
 			}

@@ -1931,3 +1931,18 @@ test('module loader preserves card self-checks and message text', async () => {
   await load('function _yqDiagCheckExtraModel(){return false;} result.push(_yqDiagCheckExtraModel(), "正在生成专属开场白...");','arbitrary-card',false)
   assert.deepEqual(result,[false,'正在生成专属开场白...'])
 })
+
+test('legacy chat mount accepts panel padding without creating its own layout box', async () => {
+  const { JSDOM } = await import('jsdom')
+  const dom = new JSDOM('<main>Native conversation</main>')
+  try {
+    const release=client.installTavernTrustedHostFacade(dom.window,{})
+    const chat=dom.window.document.getElementById('chat')
+    chat.style.setProperty('padding-top','46px','important')
+    assert.equal(dom.window.getComputedStyle(chat).display,'contents')
+    assert.equal(chat.style.getPropertyPriority('display'),'important')
+    const child=dom.window.document.createElement('div');chat.append(child)
+    assert.equal(child.isConnected,true)
+    release();assert.equal(chat.isConnected,false)
+  } finally {dom.window.close()}
+})

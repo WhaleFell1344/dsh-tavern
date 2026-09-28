@@ -113,7 +113,7 @@ function createTavernComposerWindow(frame, host = frame.parent) {
   const jq = frame.jQuery;
   const anchors = new Map();
   let observedViewport = null;
-  const layoutObserver = host?.ResizeObserver ? new host.ResizeObserver(function () {
+  function notifyLayout() {
     const rect = observedViewport?.getBoundingClientRect();
     if (!rect) return;
     // Legacy scripts observe their layout anchor's style/class changes.
@@ -121,8 +121,21 @@ function createTavernComposerWindow(frame, host = frame.parent) {
       const value = `--dsh-layout:${rect.left},${rect.top},${rect.width},${rect.height}`;
       if (node.getAttribute('style') !== value) node.setAttribute('style', value);
     }
-  }) : null;
-  if (layoutObserver) frame.addEventListener?.('pagehide', () => layoutObserver?.disconnect(), {once:true});
+  }
+  const layoutObserver = host?.ResizeObserver ? new host.ResizeObserver(notifyLayout) : null;
+  let layoutFrame = null;
+  function onLayoutScroll() {
+    if (layoutFrame !== null) return;
+    layoutFrame = host.requestAnimationFrame(function () { layoutFrame = null; notifyLayout(); });
+  }
+  if (layoutObserver) {
+    host.addEventListener('scroll', onLayoutScroll, true);
+    frame.addEventListener?.('pagehide', function () {
+      layoutObserver.disconnect();
+      host.removeEventListener('scroll', onLayoutScroll, true);
+      if (layoutFrame !== null) host.cancelAnimationFrame(layoutFrame);
+    }, {once:true});
+  }
   function layoutAnchor(id) {
     if (!['sheld', 'top-settings-holder'].includes(id)) return null;
     const doc = host.document;

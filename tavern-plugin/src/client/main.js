@@ -3562,6 +3562,9 @@ window.__ModuleLoader__.load({
 			if (!chatRoot && host.document && host.document.createElement) {
 				chatRoot = host.document.createElement('div');
 				chatRoot.id = 'chat';
+                // This compatibility mount is not another chat viewport. Legacy
+                // panel padding must not add a second, page-level scroll range.
+                if (chatRoot.style) chatRoot.style.setProperty('display', 'contents', 'important');
 				chatRoot.tavernCompatibilityOwners = 0;
 				host.document.body.appendChild(chatRoot);
 			}

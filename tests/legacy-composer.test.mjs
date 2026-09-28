@@ -155,3 +155,32 @@ test('legacy layout anchors track the conversation viewport below native navigat
     assert.equal(host.window.document.getElementById('sheld'),null)
   } finally {host.window.close();frame.window.close()}
 })
+
+test('layout anchors notify position changes on scroll and release listeners on frame exit', async () => {
+  const { JSDOM } = await import('jsdom')
+  const host=new JSDOM('<div style="overflow-y:auto"><div class="dsh-tavern-assistant"></div></div>',{pretendToBeVisual:true})
+  const frame=new JSDOM('<body></body>')
+  let disconnected=0
+  host.window.ResizeObserver=class {observe(){} disconnect(){disconnected++}}
+  let rect=new host.window.DOMRect(0,82,500,600)
+  host.window.document.body.firstElementChild.getBoundingClientRect=()=>rect
+  try {
+    const scope=helperClient.createTavernComposerWindow(frame.window,host.window)
+    const anchor=scope.parent.document.getElementById('top-settings-holder')
+    host.window.dispatchEvent(new host.window.Event('scroll'))
+    await new Promise(r=>host.window.requestAnimationFrame(r))
+    const before=anchor.getAttribute('style')
+    rect=new host.window.DOMRect(0,35,500,600)
+    host.window.dispatchEvent(new host.window.Event('scroll'))
+    await new Promise(r=>host.window.requestAnimationFrame(r))
+    assert.notEqual(anchor.getAttribute('style'),before)
+    assert.equal(anchor.getBoundingClientRect().bottom,35)
+    const finalStyle=anchor.getAttribute('style')
+    frame.window.dispatchEvent(new frame.window.Event('pagehide'))
+    assert.ok(disconnected>0)
+    rect=new host.window.DOMRect(0,12,500,600)
+    host.window.dispatchEvent(new host.window.Event('scroll'))
+    await new Promise(r=>host.window.requestAnimationFrame(r))
+    assert.equal(anchor.getAttribute('style'),finalStyle)
+  }finally{host.window.close();frame.window.close()}
+})
