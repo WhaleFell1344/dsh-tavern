@@ -335,6 +335,7 @@ window.__ModuleLoader__.load({
 
         // @include helper-history.js
         // @include helper-resources.js
+        // @include helper-model.js
 
         function expandTavernOpeningWindow(view) {
             const range=view && view.historyWindow, helper=view && view.tavernHelper;
@@ -3151,6 +3152,7 @@ window.__ModuleLoader__.load({
 					.replace(/{{\s*user\s*}}/gi, String(state.playerName || "你"))
 					.replace(/{{\s*char\s*}}/gi, String(state.characterName || "角色"));
 			};
+			modules.installBackgroundModel({ window: window, request: call });
 			facade = modules.installFacade({ installCompatibility: modules.installCompatibility, currentScript: currentScript, post: transport.post, createChatData: modules.createChatData, readMessage:readMessage, readCharacter:readCharacter, createLocalVariables: modules.createLocalVariables, window: window, copy: copy, request: call, context: function () { return state; },
 				Popup: modules.createPopup({ document: window.document, parent: parent, token: token }) });
 			let regexSaveTimer = null;
@@ -3704,6 +3706,7 @@ window.__ModuleLoader__.load({
                 + 'createResourceReader:' + createTavernResourceReader.toString() + ','
                 + 'createChatData:' + createTavernChatDataFacade.toString() + ','
                 + 'createLocalVariables:' + createTavernLocalVariables.toString() + ','
+				+ 'installBackgroundModel:' + installTavernBackgroundModel.toString() + ','
 				+ 'installFacade:' + installTavernHelperFacade.toString() + '});';
             if (input && input.deferContext === true) bootstrap = '(' + startTavernHelperFromMessage.toString() + ')(' + safeMetadata + ',function(initialContext){' + bootstrap + '});';
 			const modules = scripts.map(function (script) {
@@ -6199,7 +6202,7 @@ window.__ModuleLoader__.load({
                 return React.createElement("div", {className:"mes", mesid:"0", is_user:"false"},
                     React.createElement("div", {ref:native}, props.children),
                     React.createElement("div", {ref:node, "data-dsh-legacy-message":"0"}),
-                    props.managedMvu ? React.createElement("p", {ref:note, hidden:true, role:"note", className:"dsh-tavern-hint"}, "变量更新使用本局后台模型，可在“本局设置”更换；无需填写卡内的额外模型 API。") : null);
+                    props.managedMvu ? React.createElement("p", {ref:note, hidden:true, role:"note", className:"dsh-tavern-hint"}, "额外模型调用自动使用本局后台模型，可在“本局设置”更换，无需填写卡内 API。") : null);
             }
 
 			function TavernAssistantNodeView(props) {
@@ -11557,6 +11560,7 @@ window.__ModuleLoader__.load({
 		exports.ensureTavernHostJQuery = ensureTavernHostJQuery;
 		exports.ensureTavernHostJQueryUi = ensureTavernHostJQueryUi;
 		exports.installTavernTrustedHostFacade = installTavernTrustedHostFacade;
+        exports.installTavernBackgroundModel = installTavernBackgroundModel;
         exports.mountTavernLegacyMessage = mountTavernLegacyMessage;
 		exports.releaseTavernHostJQueryHandlers = releaseTavernHostJQueryHandlers;
 		exports.tavernScriptRuntimeReady = tavernScriptRuntimeReady;

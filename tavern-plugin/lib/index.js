@@ -64,7 +64,7 @@ import { ensureCardWorkspaceMessage } from './domain/card-workspace-message.js'
 import { createPromptTemplateGlobalVariables } from './domain/prompt-template-global-variables.js'
 import { FULL_PROMPT_TEMPLATE_ASSET_PREFIX, readFullPromptTemplateAsset } from './domain/full-prompt-template-assets.js'
 import { createTavernApiDiagnostics } from './domain/tavern-api-diagnostics.js'
-import { generateHelperRaw } from './domain/helper-generation.js'
+import { generateHelperRaw, generateHelperCompletion } from './domain/helper-generation.js'
 import { createBodyEditor, synchronizeBodyEdits } from './domain/body-editor.js'
 import { appendHelperUserSessionContext } from './domain/helper-user-session-context.js'
 import { sessionOpeningDescriptor, prepareSessionOpening } from './domain/session-opening.js'
@@ -536,7 +536,7 @@ export async function apply(ctx) {
     return groups.filter(function (group) { return group.models.length > 0 })
   }
   async function callModel(opts) {
-    const sel = modelSelection(opts.sessionId)
+    const sel = opts.background === true ? backgroundModelSelection(await backgroundConfigForSession(opts.sessionId)) : modelSelection(opts.sessionId)
     if (sel === null) throw new Error('没有可用的模型配置，请先在当前会话的模型选择器中选择模型')
     const cfg = { provider: sel.provider, model: sel.model }
     if (sel.reasoningEffort !== undefined) cfg.reasoningEffort = sel.reasoningEffort
@@ -969,7 +969,7 @@ export async function apply(ctx) {
       diagnostics: await resourceDiagnosticProjection(chat)
     })
   }
-  const openingPreparation = createOpeningPreparation({ readCard, worldBooks, readRuntimeExtensions: async cardPath => tavernRemoteAssets.pinExtensions(await readCardExtensions(cardPath)), generateRaw: (config, context) => generateHelperRaw(config, { ...context, callModel }) })
+  const openingPreparation = createOpeningPreparation({ readCard, worldBooks, readRuntimeExtensions: async cardPath => tavernRemoteAssets.pinExtensions(await readCardExtensions(cardPath)), generateRaw: (config, context) => generateHelperRaw(config, { ...context, callModel: opts => callModel({ ...opts, background: true }) }) })
   async function getCardOpenings(cardPath, userName, requestMode, previewTransport) {
     const startedAt = performance.now(), stages = {}
     let success = false
@@ -3151,7 +3151,9 @@ export async function apply(ctx) {
       case 'generateTavernHelperRaw': {
         const chat = await chatForSession(args && args.sessionId)
         if (!chat) throw new Error('找不到当前游戏')
-        return { text: await generateHelperRaw(args.config, { callModel, sessionId: chat.sessionId,
+        const backgroundCall = opts => callModel({ ...opts, background: true })
+        if (args.completion) return { text: await generateHelperCompletion(args.completion, { callModel: backgroundCall, sessionId: chat.sessionId }) }
+        return { text: await generateHelperRaw(args.config, { callModel: backgroundCall, sessionId: chat.sessionId,
           history: projectTavernHelperContext(chat).messages.map(message => ({ role: message.role, text: message.message })) }) }
       }
       case 'callOpeningRuntime': return await openingPreparation.callRuntime(args && args.id, args && args.method, args && args.args)

@@ -2,7 +2,7 @@
 export async function generateHelperRaw(config, { callModel, sessionId = '', history = [] }) {
   if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('generateRaw 参数必须是对象')
   // 此处一次性返回全文；客户端根据 should_stream 补发兼容流式事件。
-  const allowed = new Set(['ordered_prompts', 'user_input', 'max_chat_history', 'should_stream', 'should_silence', 'overrides', 'generation_id'])
+  const allowed = new Set(['ordered_prompts', 'user_input', 'max_chat_history', 'should_stream', 'should_silence', 'overrides', 'generation_id', 'custom_api'])
   for (const key of Object.keys(config)) if (!allowed.has(key)) throw new Error('generateRaw 暂不支持参数：' + key)
   if (!Array.isArray(config.ordered_prompts) || !config.ordered_prompts.length) throw new Error('generateRaw 需要显式 ordered_prompts')
   const overrides = config.overrides || {}
@@ -37,5 +37,34 @@ export async function generateHelperRaw(config, { callModel, sessionId = '', his
   }
   if (!explicitUser && !config.ordered_prompts.includes('chat_history')) append('user', config.user_input || '')
   if (!messages.length) throw new Error('generateRaw 提示词不能为空')
-  return await callModel({ sessionId, messages, system: '' })
+  return await callModel({ sessionId, messages, system: '', ...helperSampling(config.custom_api) })
+}
+
+// Connection/model fields are intentionally ignored: selection belongs to the host.
+function helperSampling(config) {
+  const result = {}
+  if (!config || typeof config !== 'object') return result
+  if (config.temperature !== undefined) {
+    if (!Number.isFinite(config.temperature) || config.temperature < 0 || config.temperature > 2) throw new Error('temperature 必须在 0 到 2 之间')
+    result.temperature = config.temperature
+  }
+  const maxTokens = config.max_tokens ?? config.max_completion_tokens
+  if (maxTokens !== undefined) {
+    if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0) throw new Error('max_tokens 必须是正整数')
+    result.maxTokens = maxTokens
+  }
+  return result
+}
+
+export async function generateHelperCompletion(config, { callModel, sessionId = '' }) {
+  if (!config || !Array.isArray(config.messages) || !config.messages.length) throw new Error('模型请求需要 messages')
+  if (config.tools?.length || config.functions?.length) throw new Error('后台模型兼容接口暂不支持工具调用')
+  if (config.n !== undefined && config.n !== 1) throw new Error('后台模型兼容接口只支持单个结果')
+  const messages = config.messages.map(message => {
+    if (!['system', 'user', 'assistant'].includes(message.role)) throw new Error('不支持的模型消息角色')
+    const content = typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : message.content
+    if (!Array.isArray(content) || content.some(part => part?.type !== 'text' || typeof part.text !== 'string')) throw new Error('后台模型兼容接口只接受文本消息')
+    return { role: message.role, content: content.map(part => ({ type: 'text', text: part.text })) }
+  })
+  return callModel({ sessionId, messages, system: '', ...helperSampling(config) })
 }
