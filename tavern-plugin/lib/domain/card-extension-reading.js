@@ -64,7 +64,13 @@ function buttonCount(value) {
 
 function helperScriptsOf(extensions) {
   const helper = object(extensions.tavern_helper) ? extensions.tavern_helper : {}
-  const scripts = Array.isArray(helper.scripts) ? helper.scripts : []
+  // Prefer an explicit tavern_helper.scripts list, including an empty one.
+  // Some exports store scripts as {type, value} in TavernHelper_scripts.
+  const scripts = Array.isArray(helper.scripts) ? helper.scripts
+    : (Array.isArray(extensions.TavernHelper_scripts) ? extensions.TavernHelper_scripts : [])
+      .filter(entry => object(entry) && entry.type === 'script' && object(entry.value))
+      .map(entry => ({ ...entry.value, type: entry.type,
+        enabled: entry.enabled !== false && entry.disabled !== true && entry.value.enabled !== false && entry.value.disabled !== true }))
   return scripts.filter(object).map(function (script, index) {
     const id = str(script.id).trim() || 'helper-' + (index + 1)
     const content = str(script.content)
@@ -132,7 +138,7 @@ function extensionType(value) {
 }
 
 function otherExtensionsOf(extensions) {
-  const known = new Set(['regex_scripts', 'tavern_helper', 'mvu', 'mvu_data', 'stat_data'])
+  const known = new Set(['regex_scripts', 'tavern_helper', 'tavernhelper_scripts', 'mvu', 'mvu_data', 'stat_data'])
   return Object.keys(extensions).filter(function (key) { return !known.has(key.toLowerCase()) }).map(function (key) {
     const text = pretty(extensions[key])
     return { ref: 'extension:' + key, name: key, type: extensionType(extensions[key]), chars: text.length, text }
