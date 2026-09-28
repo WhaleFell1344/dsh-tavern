@@ -1791,3 +1791,9 @@ header .nL4_yW_moreButton { display: none !important; }
 .dsh-tavern-script-code-scroll pre { flex: 1 0 auto; margin: 0; padding: 12px; color: var(--dsw-alias-label-primary); font: inherit; white-space: pre; overflow-wrap: normal; word-break: normal; }
 .dsh-tavern-script-code-scroll code { font: inherit; }
 .dsh-tavern-script-code > summary:focus-visible, .dsh-tavern-script-code-scroll:focus-visible { outline: 2px solid var(--dsh-tavern-accent); outline-offset: -2px; }
+
+/* Native navigation portals must remain reachable above imported card overlays.
+   Card-owned roots are marked by the artifact scope, regardless of card format. */
+body.dsh-tavern-shell-active > :is([role="tree"], [role="menu"], [role="listbox"]):not([data-dsh-tavern-host-artifact]) {
+  z-index: 2147483647 !important;
+}

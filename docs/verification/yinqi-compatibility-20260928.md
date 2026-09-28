@@ -93,3 +93,9 @@ Validation: 93 focused tests passed, including placeholder padding, live positio
 - 实测发现原先以 body/head 新增节点推断脚本归属，会误收集原生子代理菜单，导致 React removeChild 报错。改为只管理 scoped jQuery 挂载及脚本文档代理明确创建的节点，保留宿主界面。
 - 实际已有游戏连续两次“前台 → 酒馆后台 Agent → 前台”：子代理页面状态条、手机按钮均为 0，父会话入口可点击；返回后均为 1。没有新增 removeChild 错误。仅导航，没有发送消息或触发模型请求。
 - 回归覆盖同根子代理与嵌套子代理、后台任务继续完成、冷开子代理、原生节点不被移走、直接 DOM 与延迟挂载的脚本节点隐藏/恢复/清理。
+
+## 子代理下拉菜单被状态条遮挡
+
+- 补充复现的是切换前的菜单：原生 tree portal z-index 为 100，卡片固定条为 500，实际矩形重叠。
+- 系统 CSS 将原生顶层 tree/menu/listbox 导航弹层置于卡片浮层之上；脚本归属节点统一标记并排除，不修改卡片内容。
+- 实际页面重叠区域 elementFromPoint 命中菜单（hitMenu=true），成功选择后台子代理并返回前台。30 项会话/节点归属测试通过，客户端构建一致性检查通过。

@@ -1195,6 +1195,7 @@ window.__ModuleLoader__.load({
                 if (owned.has(node) || owners.has(node) || node.hasAttribute?.("data-tavern-retained-frames")
                     || node.hasAttribute?.("data-dsh-tavern-text-colors")) return;
                 owners.set(node, identity);
+                node.setAttribute?.("data-dsh-tavern-host-artifact", "");
                 owned.set(node, { hidden: node.hidden, disabled: node.disabled, body: root === hostDocument.body,
                     root: root, nextSibling: node.nextSibling, parked: false });
             }
