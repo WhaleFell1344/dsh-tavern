@@ -118,6 +118,12 @@ test('旧版 Desktop 经最新安装脚本走 CDN 覆盖升级：运行文件落
     return true
   })
   // Failed CDN verification must not overwrite installed resources or report success.
+  // Advertise a new revision of this file so checksum-valid installed bytes cannot
+  // satisfy the update through Windows' local reuse path.
+  const updatedBytes = Buffer.concat([files.get(integrityFile), Buffer.from('\n')])
+  Object.assign(manifest.files.find(file => file.path === integrityFile), {
+    size: updatedBytes.length, sha256: createHash('sha256').update(updatedBytes).digest('hex')
+  })
   corruptFile = true
   await assert.rejects(run())
   for (const file of [...patches, integrityFile]) assert.deepEqual(await readFile(path.join(app, file)), files.get(file))
