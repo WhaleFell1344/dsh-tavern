@@ -237,6 +237,13 @@ export function createLiveCardUpdate({readGlobals = async () => ({})} = {}) {
       collectRemoved(oldShape, defaults)
     }
     const migrated = clone(chat)
+    // Explicit resource reload refreshes ordinary display formatting. Keep real
+    // template output and processing markers: replaying EJS could repeat effects.
+    for (const message of migrated.messages || []) {
+      if (typeof message.tavernPluginData?.template_display?.formattingText === 'string') {
+        delete message.tavernPluginData.template_display
+      }
+    }
     migrated.cardStateDefaults = clone(defaults)
     migrated.cardStateMigrationIds = plans.map(plan => plan.id)
     const selected=chat.messages.find(message=>message.greeting)?.swipeId||0

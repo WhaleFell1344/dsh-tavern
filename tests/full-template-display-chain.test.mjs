@@ -134,3 +134,13 @@ test('转换卡开场 initvar 经真实模板渲染后不进入正文，源初�
   assert.doesNotMatch(c.first.chat[0].template_display.html,/<%|&lt;%/)
   assert.equal(display(c.first,[]).projections[0].mode,'html')
  })
+
+test('原始 ST 禁用正则不能覆盖已启用的远程界面', async () => {
+ const online='<body><script>window.panelSource="https://example.com/panel.html"</script></body>'
+ const local='<body><script>window.panelSource="http://localhost:5500/dist/panel.html"</script></body>'
+ const rules=[{disabled:false,replaceString:online},{disabled:true,replaceString:local}].map(rule=>({...rule,placement:[2],markdownOnly:true,findRegex:'/.+/s'}))
+ const result=await runtime.lifecycle({settings,regexScripts:rules,transcript:[{role:'assistant',content:'开场正文'}]})
+ assert.match(result.first.chat[0].template_display.html,/https:\/\/example.com\/panel.html/)
+ assert.doesNotMatch(result.first.chat[0].template_display.html,/localhost:5500/)
+ assert.equal(result.first.chat[0].mes,'开场正文')
+})

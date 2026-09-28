@@ -19,7 +19,7 @@ function regexFromString(value) {
 }
 
 function enabledFor(script, options) {
-  if (!script || script.enabled === false) return false
+  if (!script || script.enabled === false || script.disabled === true) return false
   const placement = Number(options.placement === undefined ? 2 : options.placement)
   if (!Array.isArray(script.placement) || !script.placement.map(Number).includes(placement)) return false
   // SillyTavern treats these as ephemerality targets, not mutually exclusive

@@ -95,3 +95,22 @@ test('frame sizing is applied as card configuration while preserving earned vari
     assert.deepEqual(original.cardDefinitionSnapshot.extensions, {})
   } finally { runtime.dispose() }
 })
+
+test('explicit card reload clears ordinary regex display caches without replaying template effects', async () => {
+  const runtime=createLiveCardUpdate()
+  try {
+    const definition=card({hp:10}), original=chat(definition,{hp:7})
+    original.messages[0].text='开场正文'
+    original.messages[0].tavernPluginData={template_display:{source:'开场正文',swipe:0,html:'旧界面',formattingText:'旧界面'},template_rendered:{hash:'saved',swipe:0},is_ejs_processed:[true]}
+    original.messages.push({text:'剧情',tavernPluginData:{template_display:{source:'剧情',swipe:0,html:'历史模板结果'}}})
+    const before=structuredClone(original)
+    const updated=await runtime.prepare(original,definition,original)
+    assert.equal(updated.messages[0].tavernPluginData.template_display,undefined)
+    assert.deepEqual(updated.messages[0].tavernPluginData.template_rendered,before.messages[0].tavernPluginData.template_rendered)
+    assert.deepEqual(updated.messages[0].tavernPluginData.is_ejs_processed,[true])
+    assert.deepEqual(updated.messages[0].variables,before.messages[0].variables)
+    assert.deepEqual(updated.messages[1],before.messages[1])
+    assert.equal(updated.messages[0].text,'开场正文')
+    assert.deepEqual(original,before)
+  } finally {runtime.dispose()}
+})
