@@ -1,3 +1,4 @@
+import { helperLoaderSource } from './fixtures/helper-loader-source.mjs'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -381,8 +382,7 @@ test('官方 MVU owner 作为共享沙箱首个系统模块本地加载', () => 
   assert.equal(frames.length, 1)
   assert.match(frames[0].srcdoc, /"officialMvu":true/)
   assert.ok(frames[0].srcdoc.indexOf('__dsh_official_mvu__') < frames[0].srcdoc.indexOf('guard'))
-  const loaderUrl = frames[0].srcdoc.match(/data:text\/javascript;base64,([^"]+)"/)[1]
-  const loader = Buffer.from(loaderUrl, 'base64').toString('utf8')
+  const loader = helperLoaderSource(frames[0].srcdoc)
   const modules = JSON.parse(loader.match(/const scripts=(\[[^\n]*\]);\n/)[1])
   assert.equal(modules[0].assetUrl, '/api/dsh-tavern/vendor/magvarupdate/bundle.js')
   const officialModule = modules[0].content
@@ -425,9 +425,7 @@ test('人物卡 Helper 脚本使用独立不透明 iframe，并获得脚本、�
     script: { id: 'dynamic-worldbook', name: '动态世界书', content: "import 'https://example.test/动态世界书.js'", data: { auto_apply: true }, buttons: [] },
     context: { messages: [], scriptVariables: { 'dynamic-worldbook': { auto_apply: true } }, worldbook: { name: '灯火阑珊', entries: [] } }
   })
-  const encoded = document.match(/data:text\/javascript;base64,([^"']+)/)
-  assert.ok(encoded)
-  const loader = Buffer.from(encoded[1], 'base64').toString('utf8')
+  const loader = helperLoaderSource(document)
   const modules = JSON.parse(loader.match(/const scripts=(\[.*\]);/)[1])
   const source = modules[0].content
   assert.equal(source, "import 'https://example.test/动态世界书.js'")
@@ -457,9 +455,7 @@ test('官方 MVU 与人物卡脚本共用沙箱时仍先提供全局 Zod 与 YAM
     ],
     context: { messages: [] }
   })
-  const encoded = document.match(/data:text\/javascript;base64,([^"']+)/)
-  assert.ok(encoded)
-  const loader = Buffer.from(encoded[1], 'base64').toString('utf8')
+  const loader = helperLoaderSource(document)
 
   assert.match(document, /const officialMvuEnabled = metadata\.officialMvu === true/)
   assert.match(document, /import\(new URL\("\/api\/dsh-tavern\/vendor\/runtime-assets\/zod\/index\.mjs",document\.baseURI\)\.href\)/)
@@ -1382,7 +1378,7 @@ test('Host acknowledgements confirm liveness without imposing a total event dead
 test('trusted scripts await host jQuery before executing; isolated scripts do not access host', () => {
   for (const trustedCardMode of [true, false]) {
     const document = client.buildTavernHelperScriptDocument({ trustedCardMode, scripts: [{ id: 'ball', content: 'void 0' }] });
-    const loader = Buffer.from(document.match(/data:text\/javascript;base64,([^"]+)"/)[1], 'base64').toString();
+    const loader = helperLoaderSource(document);
     assert.equal(loader.includes('await ensureHostJQuery(window.parent)'), trustedCardMode);
     if (trustedCardMode) assert.ok(loader.indexOf('await ensureHostJQuery(window.parent)') < loader.indexOf('for(const script of scripts)'));
   }
@@ -1457,7 +1453,7 @@ test('trusted script UI uses host body and its installed draggable; isolation re
     const window = { parent: { jQuery: hostJQuery }, $: localJQuery, jQuery: localJQuery,
       __dshTavernHelperReady: Promise.resolve(), addEventListener() {}, __dshTavernResolveCompanionScriptsReady() {} }
     const document = client.buildTavernHelperScriptDocument({ trustedCardMode, scripts: [] })
-    const loader = Buffer.from(document.match(/data:text\/javascript;base64,([^"]+)"/)[1], 'base64').toString()
+    const loader = helperLoaderSource(document)
     await vm.runInNewContext('(async()=>{' + loader + '})()', { window })
     assert.equal(window.$('body'), trustedCardMode ? hostBody : localBody)
     if (trustedCardMode) assert.equal(typeof window.$.fn.draggable, 'function')
@@ -1497,7 +1493,7 @@ test('trusted opening exposes live MVU and EJS to original parent-window checks'
       addEventListener(name, handler) { events[name] = handler },
       __dshTavernResolveCompanionScriptsReady() {} }
     const html = client.buildTavernFrameDocument({ trustedCardMode, openingPreview: { runtime: { context: {}, scripts: [] } } })
-    const loader = Buffer.from(html.match(/data:text\/javascript;base64,([^"]+)"/)[1], 'base64').toString()
+    const loader = helperLoaderSource(html)
     await vm.runInNewContext('(async()=>{' + loader + '})()', { window: frame })
     const bridge = html.match(/<script data-dsh-tavern-opening-host>([\s\S]*?)<\/script>/)
     if (bridge) vm.runInNewContext(bridge[1], { window: frame })
@@ -1530,7 +1526,7 @@ test('preparation host APIs retain priority over a background session runtime', 
 
 test('managed MVU keeps jQuery when a card declares its own lexical dollar helper', async () => {
   const html = client.buildTavernHelperScriptDocument({ scripts: [] })
-  const loader = Buffer.from(html.match(/data:text\/javascript;base64,([^"]+)"/)[1], 'base64').toString()
+  const loader = helperLoaderSource(html)
   const source = loader.slice(loader.indexOf('const loadModule=') + 17, loader.indexOf(';\nconst createMvuLoader='))
   const sandbox = { window: { jQuery: callback => callback(), addEventListener() {}, removeEventListener() {} }, document: {
     getElementById: () => null,

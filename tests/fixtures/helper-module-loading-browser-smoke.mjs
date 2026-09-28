@@ -58,7 +58,7 @@ const server = createServer((request, response) => {
     response.end(source ?? 'not found')
     return
   }
-  response.writeHead(200, { 'Content-Type': 'text/html' })
+  response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
   response.end(`<!doctype html><title>Helper module smoke</title><pre id="result">RUNNING</pre>
     <script>addEventListener('message',e=>{if(e.data.type!=='module-smoke')return;const r=e.data;
     const pass=r.tail && JSON.stringify(r.results.map(x=>x.ok))===JSON.stringify([true,true,false,false,false,false,false,true,true,true]);

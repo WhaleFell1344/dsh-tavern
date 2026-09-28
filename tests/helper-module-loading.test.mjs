@@ -1,3 +1,4 @@
+import { helperLoaderSource, helperLoaderBootstrap } from './fixtures/helper-loader-source.mjs'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
@@ -11,8 +12,7 @@ const client = descriptor.factory(() => ({}))
 
 function loader(scripts) {
   const html = client.buildTavernHelperScriptDocument({ token: 'test', scripts, context: {} })
-  const encoded = html.match(/data:text\/javascript;base64,([^"]+)"/)[1]
-  return Buffer.from(encoded, 'base64').toString()
+  return helperLoaderSource(html)
 }
 
 test('脚本宿主的固定运行时依赖全部使用随包本地资源', () => {
@@ -186,3 +186,40 @@ test('动态 import 网络错误保留行动提示，原始地址查询参数不
  assert.match(failure[2],/查看详情/);
  assert.doesNotMatch(JSON.stringify(failure),/PRIVATE/);
 });
+
+test('large Unicode script loading stays within a bounded heap and preserves source', async () => {
+  const {execFile} = await import('node:child_process')
+  const {promisify} = await import('node:util')
+  const result = await promisify(execFile)(process.execPath, ['--max-old-space-size=256', new URL('./fixtures/helper-large-script-loading.mjs', import.meta.url).pathname], {timeout:30000,maxBuffer:4096})
+  assert.match(result.stdout,/PASS large Unicode script roundtrip/)
+})
+
+test('Blob loader preserves Unicode and script-closing text', () => {
+  const content='😀中文\u2028\u2029</script><script>throw Error("escaped")</script>'
+  const html=client.buildTavernHelperScriptDocument({scripts:[{id:'unicode',content}],context:{}})
+  const source=helperLoaderSource(html)
+  assert.equal(JSON.parse(source.match(/const scripts=([\s\S]*);\nconst token=/)[1])[0].content,content)
+  assert.doesNotMatch(html, /data:text\/javascript;base64/)
+  assert.doesNotMatch(helperLoaderBootstrap(html), /<script>/)
+})
+
+test('Blob loader releases its URL on success, failure and frame disposal', async () => {
+  for (const outcome of ['success','failure','dispose']) {
+    let settle, listener, blob, created=0, released=0
+    const pending=new Promise((resolve,reject)=>{settle=()=>outcome==='failure'?reject(new Error('module failed')):resolve()})
+    const html=client.buildTavernHelperScriptDocument({scripts:[],context:{}})
+    const result=vm.runInNewContext(helperLoaderBootstrap(html).replace('import(url)', 'load(url)'), {
+      Blob, URL:{createObjectURL(value){blob=value;created++;return 'blob:test'},revokeObjectURL(url){assert.equal(url,'blob:test');released++}},
+      window:{addEventListener(type,fn){assert.equal(type,'pagehide');listener=fn},removeEventListener(type,fn){assert.equal(fn,listener)}},
+      load(url){assert.equal(url,'blob:test');return pending}
+    })
+    assert.equal(created,1)
+    assert.equal(await blob.text(),helperLoaderSource(html))
+    assert.equal(released,0)
+    if(outcome==='dispose')listener()
+    settle()
+    if(outcome==='failure')await assert.rejects(result,/module failed/)
+    else await result
+    assert.equal(released,1)
+  }
+})

@@ -1824,21 +1824,20 @@ window.__ModuleLoader__.load({
 				+ '</head><body class="no-blur">' + (input && input.helperContext ? '<script data-dsh-tavern-legacy-composer>(' + installLegacyTavernComposer.toString() + ')();<\/script>' : '') + (preparationRuntime ? preparationRuntime.body : '') + html + sizingRuntime + layoutNormalizer + fontRuntime + (input && input.persistent ? "" : textColorRuntime) + reporter + '<script data-dsh-tavern-touch>(' + installTavernFrameTouch.toString() + ')(' + token + ',' + scrollTavernTouchChain.toString() + ');<\/script>' + readyReporter + '</body></html>';
 		}
 
-		function encodeTavernScriptSource(value) {
-			const binary = encodeURIComponent(String(value || "")).replace(/%([0-9A-F]{2})/g, function (_, hex) { return String.fromCharCode(parseInt(hex, 16)); });
-			if (typeof btoa === "function") return btoa(binary);
-			const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-			let result = "";
-			for (let index = 0; index < binary.length; index += 3) {
-				const a = binary.charCodeAt(index);
-				const b = index + 1 < binary.length ? binary.charCodeAt(index + 1) : 0;
-				const c = index + 2 < binary.length ? binary.charCodeAt(index + 2) : 0;
-				result += alphabet[a >> 2] + alphabet[((a & 3) << 4) | (b >> 4)]
-					+ (index + 1 < binary.length ? alphabet[((b & 15) << 2) | (c >> 6)] : "=")
-					+ (index + 2 < binary.length ? alphabet[c & 63] : "=");
-			}
-			return result;
-		}
+        function startTavernHelperLoader(source) {
+            // A multi-MB data URL can crash Chromium before the frame load event.
+            // Keep the URL small and release its backing storage after evaluation.
+            const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+            let released = false;
+            function release() {
+                if (released) return;
+                released = true;
+                URL.revokeObjectURL(url);
+                window.removeEventListener("pagehide", release);
+            }
+            window.addEventListener("pagehide", release, { once: true });
+            return import(url).finally(release);
+        }
 
 		function createTavernHelperTransport(options) {
 			const { parent, token, copy, identity, onContext, onEvent } = options;
@@ -3694,13 +3693,13 @@ window.__ModuleLoader__.load({
 				+ 'if(script.system==="official-mvu")await window.waitGlobalInitialized("Mvu");window.__dshTavernHelperSubscriptionsReady(script.id);'
 				+ '}catch(error){window.__dshTavernHelperSubscriptionsFailed(script.id,error);if(script.system==="official-mvu")break;}}}catch(error){for(const script of scripts)window.__dshTavernHelperSubscriptionsFailed(script.id,error);}finally{window.__dshTavernResolveCompanionScriptsReady();}';
 			// Start now: document.open() can remove deferred module tags before they run.
-			const moduleUrl = "data:text/javascript;base64," + encodeTavernScriptSource(loaderSource);
+			const safeLoader = JSON.stringify(loaderSource).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 			return {
 				head: tavernIconDependencies()
 				+ tavernStaticAssetShim()
 				+ tavernHelperScriptDependencies()
 				+ '<script data-dsh-tavern-helper-script>' + bootstrap + '<\/script>',
-				body: '<div id="extensions_settings2" hidden><select id="world_info_sort_order"><option value="13">自定义排序</option></select></div><div id="tavern_helper" hidden></div><script>void import(' + JSON.stringify(moduleUrl) + ');<\/script>'
+				body: '<div id="extensions_settings2" hidden><select id="world_info_sort_order"><option value="13">自定义排序</option></select></div><div id="tavern_helper" hidden></div><script data-dsh-tavern-helper-loader>(' + startTavernHelperLoader.toString() + ')(' + safeLoader + ');<\/script>'
 			};
         }
 
