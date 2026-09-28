@@ -91,3 +91,45 @@ test('shared sandbox composer sends exact text once without replacing the user d
   finish({submitted:true}); await tick()
   assert.equal(area.value, '')
 })
+
+
+test('parent and top DOM composer APIs submit exact text to their own sandbox', async () => {
+  const { JSDOM } = await import('jsdom')
+  const host = new JSDOM('<p id="host-content">host</p>')
+  const calls = []
+  for (const [id, script] of [
+    ['A', `const arbitraryDocument = parent.document; arbitraryDocument.getElementById('send_textarea').value = 'Neutral A | /cut'; arbitraryDocument.getElementById('send_but').click();`],
+    ['B', `const target = window.top.document.querySelector('#send_textarea'); target.value = 'Neutral B'; window.parent.document.querySelectorAll('#send_but')[0].click();`]
+  ]) {
+    const frame = new JSDOM('<body></body>')
+    const w = frame.window
+    w.submitTavernInput = async text => calls.push([id, text])
+    const html = helperClient.buildTavernFrameDocument({token:'test', content:'', helperContext:{messages:[]}})
+    vm.runInNewContext(html.match(/<script data-dsh-tavern-legacy-composer>([\s\S]*?)<\/script>/)[1], {window:w, document:w.document})
+    const scope = helperClient.createTavernComposerWindow ? helperClient.createTavernComposerWindow(w, host.window) : {parent:host.window, top:host.window}
+    vm.runInNewContext(script, {window:scope, parent:scope.parent})
+    assert.equal(scope.parent.document.getElementById('host-content'), host.window.document.getElementById('host-content'))
+    await tick()
+    frame.window.close()
+  }
+  assert.deepEqual(calls, [['A', 'Neutral A | /cut'], ['B', 'Neutral B']])
+  assert.equal(host.window.document.getElementById('send_but'), null)
+  host.window.close()
+})
+
+test('jQuery composer selection and parent-document find use the local controls', async () => {
+  const { JSDOM } = await import('jsdom')
+  const { readFile } = await import('node:fs/promises')
+  const host = new JSDOM('<p id="ordinary">host</p>', {runScripts:'outside-only'})
+  const frame = new JSDOM('<textarea id="send_textarea"></textarea><button id="send_but"></button>')
+  host.window.eval(await readFile(new URL('../tavern-plugin/lib/vendor/runtime-assets/jquery/jquery.min.js', import.meta.url),'utf8'))
+  frame.window.jQuery = host.window.jQuery
+  const scope = helperClient.createTavernComposerWindow(frame.window,host.window)
+  const jq = scope.jQuery
+  jq('#send_textarea').val('neutral')
+  assert.equal(frame.window.document.querySelector('textarea').value,'neutral')
+  assert.equal(jq(scope.parent.document).find('#send_but')[0],frame.window.document.querySelector('button'))
+  assert.equal(jq('#ordinary',scope.parent.document)[0],host.window.document.querySelector('p'))
+  assert.equal(jq.fn,host.window.jQuery.fn)
+  host.window.close(); frame.window.close()
+})

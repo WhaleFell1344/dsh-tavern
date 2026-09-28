@@ -104,3 +104,51 @@ function installFrameHostComposer(doc, ownsFrame, submit, report) {
     if (!state.owners.size) { state.controls.remove(); tavernHostComposers.delete(doc); }
   };
 }
+
+// Give each module a view of the host DOM whose standard ST composer controls
+// belong to that module's sandbox. Never install a shared, focus-routed sender.
+function createTavernComposerWindow(frame, host = frame.parent) {
+  const ids = new Set(['send_textarea', 'send_but']);
+  const documents = new WeakMap(), windows = new WeakMap();
+  const jq = frame.jQuery;
+  function documentView(doc) {
+    if (documents.has(doc)) return documents.get(doc);
+    const proxy = new Proxy({}, { get(_, key) {
+      if (key === 'getElementById') return id => ids.has(id) ? frame.document.getElementById(id) : doc.getElementById(id);
+      if (key === 'querySelector' || key === 'querySelectorAll') return selector =>
+        /^#(?:send_textarea|send_but)$/.test(selector) ? frame.document[key](selector) : doc[key](selector);
+      if (key === 'defaultView') return windowView(doc.defaultView);
+      const value = doc[key];
+      return typeof value === 'function' ? value.bind(doc) : value;
+    }, set(_, key, value) { doc[key] = value; return true; } });
+    documents.set(doc, proxy);
+    return proxy;
+  }
+  function jquery(selector, context) {
+    if (typeof selector === 'string' && /^#(?:send_textarea|send_but)$/.test(selector)) return jq(frame.document.querySelector(selector));
+    if (context === documentView(host.document)) context = host.document;
+    if (selector === documentView(host.document)) {
+      const result = jq(host.document);
+      const find = result.find;
+      result.find = function (selector) {
+        return /^#(?:send_textarea|send_but)$/.test(selector) ? jq(frame.document.querySelector(selector)) : find.call(this, selector);
+      };
+      return result;
+    }
+    return jq(selector, context);
+  }
+  function windowView(target) {
+    if (windows.has(target)) return windows.get(target);
+    const proxy = new Proxy({}, { get(_, key) {
+      if (key === 'window' || key === 'self' || key === 'globalThis') return proxy;
+      if (key === 'parent' || key === 'top') return windowView(host);
+      if (key === 'document') return target === frame ? frame.document : documentView(target.document);
+      if ((key === '$' || key === 'jQuery') && jq) return new Proxy(jq, {apply(_, receiver, args) { return jquery(...args); }});
+      const value = target[key];
+      return typeof value === 'function' && !value.prototype ? value.bind(target) : value;
+    }, set(_, key, value) { target[key] = value; return true; } });
+    windows.set(target, proxy);
+    return proxy;
+  }
+  return windowView(frame);
+}

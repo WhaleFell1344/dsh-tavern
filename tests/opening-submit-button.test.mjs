@@ -12,8 +12,8 @@ test('opening button sends only on click, awaits acceptance, deduplicates and pe
     useLayoutEffect() {},
     createElement(type,props,...children) {return {type,props:props||{},children}}
   }
-  const start=source.indexOf('function TavernLegacyGreeting(props) {')
-  const end=source.indexOf('function TavernAssistantNodeView(props)',start)
+  const start=source.indexOf('function TavernPreparedScriptMessage(props) {')
+  const end=source.indexOf('function TavernLegacyGreeting(props)',start)
   const component=vm.runInNewContext('('+source.slice(start,end).trim()+')',{React})
   const calls=[]; let resolve,reject
   function render() {
@@ -29,7 +29,7 @@ test('opening button sends only on click, awaits acceptance, deduplicates and pe
   assert.equal(calls[0][2].inputText,'neutral exact prompt')
   b=button(render()); assert.equal(b.children[0],'正在提交…'); assert.equal(b.props.disabled,true)
   reject(new Error('not admitted')); await first
-  b=button(render()); assert.equal(b.children[0],'生成开场白'); assert.equal(b.props.disabled,false)
+  b=button(render()); assert.equal(b.children[0],'发送卡片消息'); assert.equal(b.props.disabled,false)
   const second=b.props.onClick(); resolve({submitted:true}); await second
   b=button(render()); assert.equal(b.children[0],'已提交'); assert.equal(b.props.disabled,true)
 })

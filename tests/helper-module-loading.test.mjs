@@ -41,6 +41,8 @@ function harness(scripts, onAppend, ready = Promise.resolve()) {
     removeEventListener(name, handler) { listeners.delete(handler) }
   }
   const document = {
+    // Composer controls are preinstalled; this harness exercises module loading.
+    getElementById(id) { return ['send_textarea', 'send_but'].includes(id) ? {} : null },
     createElement(tag) {
       assert.equal(tag, 'script')
       const element = { remove() { this.removed = true } }
@@ -69,7 +71,7 @@ const text = "import '/api/dsh-tavern/remote-assets/not-code.js'";
 // import '/api/dsh-tavern/remote-assets/not-code.js'
 // Unicode and markup must survive: 玩家 </script>`
   const run = harness([{ id: 'schema', content: source }], ({ element, complete }) => {
-    assert(element.textContent.startsWith(source + '\n;window['))
+    assert(element.textContent.includes('\n' + source + '\n;window['))
     complete()
   })
   await run.run()

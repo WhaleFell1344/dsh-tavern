@@ -3807,6 +3807,54 @@ window.__ModuleLoader__.load({
 		    if (!state.owners.size) { state.controls.remove(); tavernHostComposers.delete(doc); }
 		  };
 		}
+
+		// Give each module a view of the host DOM whose standard ST composer controls
+		// belong to that module's sandbox. Never install a shared, focus-routed sender.
+		function createTavernComposerWindow(frame, host = frame.parent) {
+		  const ids = new Set(['send_textarea', 'send_but']);
+		  const documents = new WeakMap(), windows = new WeakMap();
+		  const jq = frame.jQuery;
+		  function documentView(doc) {
+		    if (documents.has(doc)) return documents.get(doc);
+		    const proxy = new Proxy({}, { get(_, key) {
+		      if (key === 'getElementById') return id => ids.has(id) ? frame.document.getElementById(id) : doc.getElementById(id);
+		      if (key === 'querySelector' || key === 'querySelectorAll') return selector =>
+		        /^#(?:send_textarea|send_but)$/.test(selector) ? frame.document[key](selector) : doc[key](selector);
+		      if (key === 'defaultView') return windowView(doc.defaultView);
+		      const value = doc[key];
+		      return typeof value === 'function' ? value.bind(doc) : value;
+		    }, set(_, key, value) { doc[key] = value; return true; } });
+		    documents.set(doc, proxy);
+		    return proxy;
+		  }
+		  function jquery(selector, context) {
+		    if (typeof selector === 'string' && /^#(?:send_textarea|send_but)$/.test(selector)) return jq(frame.document.querySelector(selector));
+		    if (context === documentView(host.document)) context = host.document;
+		    if (selector === documentView(host.document)) {
+		      const result = jq(host.document);
+		      const find = result.find;
+		      result.find = function (selector) {
+		        return /^#(?:send_textarea|send_but)$/.test(selector) ? jq(frame.document.querySelector(selector)) : find.call(this, selector);
+		      };
+		      return result;
+		    }
+		    return jq(selector, context);
+		  }
+		  function windowView(target) {
+		    if (windows.has(target)) return windows.get(target);
+		    const proxy = new Proxy({}, { get(_, key) {
+		      if (key === 'window' || key === 'self' || key === 'globalThis') return proxy;
+		      if (key === 'parent' || key === 'top') return windowView(host);
+		      if (key === 'document') return target === frame ? frame.document : documentView(target.document);
+		      if ((key === '$' || key === 'jQuery') && jq) return new Proxy(jq, {apply(_, receiver, args) { return jquery(...args); }});
+		      const value = target[key];
+		      return typeof value === 'function' && !value.prototype ? value.bind(target) : value;
+		    }, set(_, key, value) { target[key] = value; return true; } });
+		    windows.set(target, proxy);
+		    return proxy;
+		  }
+		  return windowView(frame);
+		}
 		// The native conversation root survives hero -> active transitions. Derive the
 		// landing marker at those boundaries, not with a descendant :has() on every
 		// message element whenever the composer changes.
@@ -5212,7 +5260,6 @@ window.__ModuleLoader__.load({
             modules.applyVariableReceipt.turnFields = modules.createTurnFieldIndex({createIndex:modules.createOrderedNumericIndex,visit:function(){}});
             const initializationTiming = modules.createInitializationTiming({ report: function (timings) { parent.postMessage({ type: "dsh-tavern-mvu-load-diagnostic", token: metadata.token, diagnostic: { phase: "initialization-timing", timings: timings } }, "*"); } });
             window.__dshTavernInitializationTiming = initializationTiming;
-            window.__dshTavernManagedMvu = initialContext.mvuEnabled === true;
             window.addEventListener("pagehide", initializationTiming.dispose, { once: true });
 			try { void window.localStorage; }
 			catch (_) {
@@ -5922,11 +5969,6 @@ window.__ModuleLoader__.load({
 					.replace(/{{\s*char\s*}}/gi, String(state.characterName || "角色"));
 			};
 			window.submitTavernInput = function (text) { return call("submitTavernHelperInput", { text: String(text || "") }); };
-            window.stageTavernOpening = async function (text) {
-                const ctx = window.SillyTavern.getContext();
-                ctx.chatMetadata.dsh_pending_opening = { text:String(text || ""), lifecycleRevision:Number(state.lifecycleRevision || 0) };
-                await ctx.saveMetadata();
-            };
             modules.installBackgroundModel({ window: window, request: call });
 			facade = modules.installFacade({ installCompatibility: modules.installCompatibility, currentScript: currentScript, post: transport.post, createChatData: modules.createChatData, readMessage:readMessage, readCharacter:readCharacter, createLocalVariables: modules.createLocalVariables, window: window, copy: copy, request: call, context: function () { return state; },
 				Popup: modules.createPopup({ document: window.document, parent: parent, token: token }) });
@@ -6182,38 +6224,11 @@ window.__ModuleLoader__.load({
 		}
 
 		function loadTavernHelperModule(source, scriptId, previewScope) {
-            // This legacy guide diagnoses SillyTavern's client-owned MVU pipeline.
-            // DSH owns settlement and credentials; do not let its repair actions
-            // turn on a second client-side updater merely to satisfy the guide.
-            if (scriptId !== "__dsh_official_mvu__") {
-                // Legacy parent-DOM send controls must belong to the calling
-                // sandbox, never whichever conversation currently has focus.
-                source = source.replace(/topDoc\.getElementById\((['"])(send_textarea|send_but)\1\)/g, 'document.getElementById("$2")');
-                if (source.includes("function _yqBtInit() {")) {
-                    // Saving the guide must never itself submit a model request.
-                    // Preserve its exact prepared prompt for the explicit host button.
-                    source = source.replace("sendBtn.click();", "window.stageTavernOpening(textarea.value).catch(function(error){console.error(error);});");
-                    source = source.replaceAll("正在生成专属开场白...", "配置已保存，请点击下方生成开场白按钮");
-                    source = source.replaceAll("⏳ AI正在根据你的选择生成专属开场白，请稍候...", "开局配置已保存，尚未发送生成请求。");
-                    source = source.replaceAll("（数据库推进完成后AI将自动回复，通常需要10-30秒）", "点击下方生成开场白按钮后开始生成。");
-                }
-                const checks = {
-                    MvuMode: ["mvu_mode", "MVU 更新方式", "由 DSH 后台代理更新变量，无需切换卡内更新方式"],
-                    MvuAutoRequest: ["mvu_autoreq", "额外模型自动请求", "由宿主调度，无需开启卡内自动请求"],
-                    MvuWbFilter: ["mvu_wb_filter", "变量解析减负（世界书过滤）", "由宿主组织变量上下文，不使用此处全局过滤设置"],
-                    MvuNotify: ["mvu_notify", "MVU 通知开关", "变量更新错误由宿主显示，无需修改卡内通知开关"],
-                    ExtraModel: ["extra_model", "额外模型 API 配置", "自动使用本局后台模型，无需填写卡内密钥；此项不代表连接测试"]
-                };
-                for (const [name, [id, title, msg]] of Object.entries(checks)) {
-                    const signature = "function _yqDiagCheck" + name + "() {";
-                    const result = JSON.stringify({ id, title, msg, sev:"red", ok:true, info:true, fixable:false });
-                    source = source.replace(signature, signature + "\nif (window.__dshTavernManagedMvu === true) return " + result + ";\n");
-                }
-            }
 			// Card pages may declare a lexical `$` that shadows window.jQuery.
 			// Bind the managed MVU module to its runtime dependency, not page globals.
 			if (scriptId === "__dsh_official_mvu__") source = "const $ = window.jQuery;\n" + source;
 			if (previewScope && scriptId !== "__dsh_official_mvu__") source = "const window = (" + createTavernPreviewWindow.toString() + ")(globalThis); const parent = window, top = window, self = window;\n" + source;
+            if (!previewScope && scriptId !== "__dsh_official_mvu__" && window.__dshTavernComposerWindow) source = "const window = globalThis.__dshTavernComposerWindow; const parent = window.parent, top = window.top, self = window;\n" + source;
 			const sourceUrl = "dsh-tavern-script:" + encodeURIComponent(String(scriptId || "module"));
 			const startedAt = window.performance && window.performance.now ? window.performance.now() : 0;
 			function loadFailure(event) {
@@ -6526,6 +6541,7 @@ window.__ModuleLoader__.load({
 				+ 'try{'
 				+ (input && input.trustedCardMode ? 'const ensureHostJQuery=' + ensureTavernHostJQuery.toString() + ';await ensureHostJQuery(window.parent);const ensureHostJQueryUi=' + ensureTavernHostJQueryUi.toString() + ';await ensureHostJQueryUi(window.parent);const artifacts=window.frameElement&&window.frameElement.__dshTavernHostArtifacts;window.$=window.jQuery=artifacts?artifacts.bindJQuery(window.parent.jQuery):window.parent.jQuery;const installHostFacade=' + installTavernTrustedHostFacade.toString() + ';const releaseHostFacade=installHostFacade(window.parent,window);window.addEventListener("pagehide",releaseHostFacade,{once:true});window.addEventListener("unload",releaseHostFacade,{once:true});\n' : '')
 				+ '(' + installLegacyTavernComposer.toString() + ')();\n'
+                + 'window.__dshTavernComposerWindow=(' + createTavernComposerWindow.toString() + ')(window);if(window.jQuery){window.$=window.jQuery=window.__dshTavernComposerWindow.jQuery;}\n'
 				+ 'for(const script of scripts){window.__dshTavernHelperSetCurrentScript(script.id);try{'
 				+ 'if(script.system==="official-mvu"&&script.assetUrl){const loader=createMvuLoader({fetch:window.fetch.bind(window),evaluate:source=>loadModule(source,script.id),onDiagnostic(diagnostic){parent.postMessage({type:"dsh-tavern-mvu-load-diagnostic",token,diagnostic},"*");},onState(state){parent.postMessage({type:"dsh-tavern-mvu-load-state",token,state},"*");}});'
 				+ 'const retry=event=>{if(event.source===parent&&event.data?.token===token&&event.data.type==="dsh-tavern-mvu-reload")loader.retry();};'
@@ -9392,29 +9408,31 @@ window.__ModuleLoader__.load({
 					sessionId: props.sessionId, view: state.view, executeSlash: props.executeSlash
 				}) : null;
 			}
-            function TavernLegacyGreeting(props) {
-                const native = React.useRef(null), node = React.useRef(null), note = React.useRef(null);
-                const [submitState, setSubmitState] = React.useState("idle");
+            function TavernPreparedScriptMessage(props) {
+                const [status, setStatus] = React.useState("idle");
                 const sending = React.useRef(false);
                 const [error, setError] = React.useState("");
+                return React.createElement("div", {className:"dsh-tavern-hint", "data-dsh-script-message":true},
+                    React.createElement("p", null, status === "sent" ? "卡片消息已提交。" : "有一条卡片准备的消息尚未发送。"),
+                    React.createElement("button", {type:"button", className:"dsh-tavern-btn", disabled:status !== "idle", onClick:async function () {
+                        if (sending.current) return;
+                        sending.current = true; setStatus("sending"); setError("");
+                        try {
+                            await props.executeSlash("", props.sessionId, {inputText:props.preparedText});
+                            setStatus("sent");
+                        } catch (err) { sending.current = false; setStatus("idle"); setError(String(err && err.message || err)); }
+                    }}, status === "sent" ? "已提交" : status === "sending" ? "正在提交…" : "发送卡片消息"),
+                    error ? React.createElement("p", {role:"alert"}, error) : null);
+            }
+
+            function TavernLegacyGreeting(props) {
+                const native = React.useRef(null), node = React.useRef(null), note = React.useRef(null);
                 React.useLayoutEffect(function () {
-                    return mountTavernLegacyMessage({node:node.current, native:native.current, source:props.pendingOpening ? "开局配置已保存，尚未发送生成请求。" : props.source, note:note.current, showInitial:props.modified});
-                }, [props.source, props.managedMvu, props.modified, props.pendingOpening]);
+                    return mountTavernLegacyMessage({node:node.current, native:native.current, source:props.source, note:note.current, showInitial:props.modified});
+                }, [props.source, props.managedMvu, props.modified]);
                 return React.createElement("div", {className:"mes", mesid:"0", is_user:"false"},
                     React.createElement("div", {ref:native}, props.children),
                     React.createElement("div", {ref:node, "data-dsh-legacy-message":"0"}),
-                    props.pendingOpening ? React.createElement("div", {className:"dsh-tavern-hint"},
-                        React.createElement("p", null, submitState === "sent" ? "开场请求已提交。" : submitState === "sending" ? "正在提交开场请求…" : "点击按钮后才会发送消息并生成开场白。"),
-                        React.createElement("button", {type:"button", className:"dsh-tavern-btn", disabled:submitState !== "idle", onClick:async function () {
-                            if (sending.current) return;
-                            sending.current = true; setSubmitState("sending"); setError("");
-                            try {
-                                await props.executeSlash("", props.sessionId, {inputText:props.preparedText || "请根据已经保存的开局配置，生成开场白并开始游戏。"});
-                                setSubmitState("sent");
-                            } catch (err) { sending.current = false; setSubmitState("idle"); setError(String(err && err.message || err)); }
-                        }}, submitState === "sent" ? "已提交" : submitState === "sending" ? "正在提交…" : "生成开场白"),
-                        error ? React.createElement("p", {role:"alert"}, error) : null) : null,
-
                     props.managedMvu ? React.createElement("p", {ref:note, hidden:true, role:"note", className:"dsh-tavern-hint"}, "额外模型调用自动使用本局后台模型，可在“本局设置”更换，无需填写卡内 API。") : null);
             }
 
@@ -9479,11 +9497,15 @@ window.__ModuleLoader__.load({
                 const legacyGreeting = settled && !sessionTransitioning && greetingId === 0 && liveState.view?.tavernRuntimePolicy?.trustedCardMode;
                 const greetingSource = helper?.messages?.[0]?.message || "";
                 const originalGreeting = (data.blocks || []).filter(block => block?.kind === "text").map(block => String(block.text || "")).join("");
-                const pendingOpening = helper?.messages?.length === 1 && (greetingSource.includes("AI正在根据你的选择生成专属开场白") || greetingSource.includes("开局配置已保存，尚未发送生成请求"));
-                const preparedOpening = helper?.chatMetadata?.dsh_pending_opening;
-                const preparedText = preparedOpening?.lifecycleRevision === Number(helper?.lifecycleRevision || 0) ? preparedOpening.text : "";
-                const body = legacyGreeting ? React.createElement(TavernLegacyGreeting, {key:props.sessionId+":greeting", source:greetingSource, modified:greetingSource !== originalGreeting, pendingOpening:pendingOpening, preparedText:preparedText, sessionId:props.sessionId, executeSlash:props.executeSlash, managedMvu:liveState.view?.tavernMvuRuntime?.owner === "official"}, rendered) : rendered;
-				return React.createElement("div", { ref:historyNode, className: "dsh-tavern-assistant", "data-streaming": data.status === "running" || undefined }, body, illustration, mvuReceiptNode, inlineStatus);
+                // Recover messages staged by earlier system versions, independent
+                // of any card name, wording, or rendered guide DOM.
+                const prepared = helper?.chatMetadata?.dsh_pending_opening;
+                const pendingMessage = greetingId === 0 && helper?.messages?.length === 1
+                    && prepared?.lifecycleRevision === Number(helper?.lifecycleRevision || 0)
+                    && typeof prepared.text === "string" && prepared.text.trim()
+                    ? React.createElement(TavernPreparedScriptMessage, {key:props.sessionId+":"+prepared.lifecycleRevision, sessionId:props.sessionId, preparedText:prepared.text, executeSlash:props.executeSlash}) : null;
+                const body = legacyGreeting ? React.createElement(TavernLegacyGreeting, {key:props.sessionId+":greeting", source:greetingSource, modified:greetingSource !== originalGreeting, sessionId:props.sessionId, executeSlash:props.executeSlash, managedMvu:liveState.view?.tavernMvuRuntime?.owner === "official"}, rendered) : rendered;
+				return React.createElement("div", { ref:historyNode, className: "dsh-tavern-assistant", "data-streaming": data.status === "running" || undefined }, body, pendingMessage, illustration, mvuReceiptNode, inlineStatus);
 			}
 			function TavernForkAssistantAction(props) {
 				const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [["mode"], ["forkTurnsByMessageId", String(props.messageId || "")]]);
@@ -15470,6 +15492,7 @@ window.__ModuleLoader__.load({
 		exports.createSessionListRecoveryModule = createSessionListRecoveryModule;
 		exports.installOpeningHostComposer = installOpeningHostComposer;
         exports.installFrameHostComposer = installFrameHostComposer;
+        exports.createTavernComposerWindow = createTavernComposerWindow;
 		exports.createConversationLifecycleModule = createConversationLifecycleModule;
 		exports.createConversationHostAdapter = createConversationHostAdapter;
 		exports.createConversationPrewarmModule = createConversationPrewarmModule;

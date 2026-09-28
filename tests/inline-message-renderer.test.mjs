@@ -1894,24 +1894,6 @@ test('懒读取的历史楼层保存插件数据时不误判变量被修改', as
   assert.equal(submitted.messages[0].data.note,1)
 })
 
-test('managed MVU self-check reports host ownership without enabling legacy repair actions', async () => {
-  for (const managed of [true, false]) {
-    const window = { __dshTavernManagedMvu: managed, addEventListener() {}, removeEventListener() {}, clearTimeout() {} }
-    const results = []
-    const sandbox = { window, results, console, document: { createElement: () => ({ remove() {} }), body: { appendChild(element) { vm.runInNewContext(element.textContent, sandbox) } } } }
-    const load = vm.runInNewContext('(' + client.loadTavernHelperModule.toString() + ')', sandbox)
-    const checks = ['MvuMode', 'MvuAutoRequest', 'MvuWbFilter', 'MvuNotify', 'ExtraModel']
-    const source = checks.map(name => 'function _yqDiagCheck' + name + '() { return {ok:false, fixable:true}; }\nresults.push(_yqDiagCheck' + name + '());').join('\n')
-    await load(source, 'guide', false)
-    assert.equal(results.length, 5)
-    for (const result of results) {
-      assert.equal(result.ok, managed)
-      assert.equal(result.fixable, !managed)
-      if (managed) assert.ok(!result.fixKind)
-    }
-    assert.match(results[4].msg || '', managed ? /不代表连接测试/ : /^$/)
-  }
-})
 
 test('sandbox text submission targets its original session without parsing slash text or changing draft', async () => {
   const calls = []
@@ -1923,18 +1905,6 @@ test('sandbox text submission targets its original session without parsing slash
   await assert.rejects(execute('', 'original-session', { inputText:'  ' }), /为空/)
 })
 
-test('legacy parent send lookup resolves only to calling sandbox controls', async () => {
-  const result = [], fields = { send_textarea: { value:'neutral' }, send_but: {} }
-  const window = { addEventListener() {}, removeEventListener() {}, clearTimeout() {} }
-  const sandbox = { window, result, topDoc: { getElementById() { assert.fail('must not use another session composer') } }, document: {
-    getElementById: id => fields[id], createElement: () => ({ remove() {} }),
-    body: { appendChild(element) { vm.runInNewContext(element.textContent, sandbox) } }
-  } }
-  const load = vm.runInNewContext('(' + client.loadTavernHelperModule.toString() + ')', sandbox)
-  await load('result.push(topDoc.getElementById("send_textarea").value); result.push(topDoc.getElementById("send_but"));', 'legacy-guide', false)
-  assert.equal(result[0], 'neutral')
-  assert.equal(result[1], fields.send_but)
-})
 
 test('reopening a script-edited greeting shows saved content before scripts mutate DOM', async () => {
   const { JSDOM } = await import('jsdom')
@@ -1952,10 +1922,12 @@ test('reopening a script-edited greeting shows saved content before scripts muta
   stop(); dom.window.close()
 })
 
-test('guide completion stages its exact opening prompt without sending automatically', async () => {
-  const staged = [], window = { addEventListener() {}, removeEventListener() {}, clearTimeout() {}, stageTavernOpening: async text => { staged.push(text) } }
-  const sandbox = { window, console, textarea:{value:'neutral opening\nexact choices'}, sendBtn:{click(){assert.fail('must wait for explicit user action')}}, document:{createElement:()=>({remove(){}}),body:{appendChild(element){vm.runInNewContext(element.textContent,sandbox)}}} }
-  const load = vm.runInNewContext('(' + client.loadTavernHelperModule.toString() + ')', sandbox)
-  await load('function _yqBtInit() { }\nsendBtn.click();', 'guide', false)
-  assert.deepEqual(staged, ['neutral opening\nexact choices'])
+
+test('module loader preserves card self-checks and message text', async () => {
+  const result = []
+  const window = {__dshTavernManagedMvu:true,addEventListener(){},removeEventListener(){},clearTimeout(){}}
+  const sandbox = {window,result,document:{createElement:()=>({remove(){}}),body:{appendChild(element){vm.runInNewContext(element.textContent,sandbox)}}}}
+  const load = vm.runInNewContext('('+client.loadTavernHelperModule.toString()+')',sandbox)
+  await load('function _yqDiagCheckExtraModel(){return false;} result.push(_yqDiagCheckExtraModel(), "正在生成专属开场白...");','arbitrary-card',false)
+  assert.deepEqual(result,[false,'正在生成专属开场白...'])
 })
