@@ -1974,3 +1974,22 @@ test('opening submit helper uses native start, deduplicates and retries failures
   assert.equal(replies.at(-1).ok, true)
   stop()
 })
+
+test('native opening send resolves identity macros using the chosen player name', async () => {
+  const source = await readFile(new URL('../tavern-plugin/src/client/main.js', import.meta.url), 'utf8')
+  const identity = source.slice(source.indexOf('function substituteTavernIdentityMacros('), source.indexOf('// @include modules/frame-touch-scroll.js'))
+  const start = source.slice(source.indexOf('async function newConversation('), source.indexOf('async function preparePlayConversation('))
+  const sent = []
+  const timing = { measure: (_name, fn) => fn(), finish() {} }
+  const sandbox = { uiMode: 'play', openingPicker: null, compatibilityAvailable: false, requestMode: 'dsh',
+    openingPerformance: { begin: () => timing }, tavernSessionTransition: { begin() {}, end() {} },
+    setBusy() {}, setError(error) { if (error) throw Error(error) }, setOpeningPicker() {},
+    playPrewarmRef: { current: { claim: async () => '' } },
+    conversationLifecycle: { start: async () => ({ sessionId: 'new-session' }) },
+    props: { executeSlash: async (line, sessionId) => sent.push({ line, sessionId }) },
+    window: { localStorage: { setItem() {} } }, console: { info() {}, warn() {} }
+  }
+  vm.runInNewContext(identity + start + '\nthis.start = newConversation;', sandbox)
+  await sandbox.start({ name: '角色甲' }, 'play', 'primary', '小林', '{{user}}遇见{{char}}，{{ USER }}继续。')
+  assert.deepEqual(sent, [{ line: '/send 小林遇见角色甲，小林继续。|/trigger', sessionId: 'new-session' }])
+})
