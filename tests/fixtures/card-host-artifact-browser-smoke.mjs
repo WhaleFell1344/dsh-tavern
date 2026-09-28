@@ -25,11 +25,12 @@ const runtime=client.createTavernHelperScriptRuntime({rpc(){return Promise.resol
 function view(content){return {card:{name:'Fixture'},tavernRuntimePolicy:{trustedCardMode:true},tavernHelper:{messages:[],scriptVariables:{}},tavernHelperScripts:[{id:'fixture',name:'fixture',content,data:{},buttons:[]}]};}
 (async()=>{
   check(typeof runtime.sync==='function','production Helper runtime created');
-  runtime.sync('A',view(\`parent.__lateCardMount=()=>{const button=$('<button id="fixture-card-global">A</button>');button.on('click',()=>{parent.__cardClicks=(parent.__cardClicks||0)+1;});$('body').append(button);$('head').append('<style id="fixture-card-style"></style>');};parent.__cardReady=true;\`));
+  runtime.sync('A',view(\`parent.__lateCardMount=async()=>{const button=$('<button id="fixture-card-global">A</button>');$('body').append(button);$('head').append('<style id="fixture-card-style"></style>');await new Promise(resolve=>setTimeout(resolve,0));const mounted=$('#fixture-card-global')[0];mounted.addEventListener('click',()=>{parent.__cardClicks=(parent.__cardClicks||0)+1;});mounted.style.removeProperty('left');};parent.__cardReady=true;\`));
   await waitFor(()=>window.__cardReady);
   runtime.setForeground(false);
   const other=document.createElement('button');other.id='other-card';document.body.append(other);
-  window.__lateCardMount();
+  await window.__lateCardMount();
+  check(true,'background delayed ID lookup binds events and updates style');
   await new Promise(resolve=>setTimeout(resolve,30));
   check(!document.querySelector('#fixture-card-global')&&!document.querySelector('#fixture-card-style'),'late mount stays hidden after switching away');
   check(other.isConnected,'other card UI remains intact');

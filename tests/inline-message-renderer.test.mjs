@@ -484,6 +484,7 @@ test('Helper Host 在受信任人物卡模式中完全移除 sandbox', () => {
     body: { appendChild() {} },
     documentElement: { appendChild() {} },
     createElement(tag) {
+      if (['html', 'head', 'body'].includes(tag)) return { appendChild() {} }
       if (tag === 'div') return root
       const frame = { contentWindow: { postMessage() {} }, addEventListener() {}, remove() { this.removed = true } }
       frames.push(frame)
@@ -543,6 +544,7 @@ test('Helper Host 切换人物卡时清理旧卡注入宿主的顶层节点和�
     head,
     documentElement: body,
     createElement(tag) {
+      if (['html', 'head', 'body'].includes(tag)) return container()
       if (tag === 'div') {
         const root = container()
         root.isConnected = true

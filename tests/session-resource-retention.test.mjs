@@ -47,6 +47,41 @@ test('到期回调重新检查刚开始的脚本任务，不用上次空闲快�
 
 const source = readFileSync(new URL('../tavern-plugin/src/client/main.js', import.meta.url), 'utf8')
 const scopeSource = source.slice(source.indexOf('function createTavernHostArtifactScope(options)'), source.indexOf('const TAVERN_CARD_PHONE_HOST'))
+test('后台手机脚本延迟查询仍能绑定事件和设置样式，不操作前台同名按钮', async () => {
+  const { JSDOM } = await import('jsdom')
+  const dom = new JSDOM('<!doctype html><body></body>', { runScripts: 'outside-only' })
+  try {
+    dom.window.eval(readFileSync(new URL('../tavern-plugin/lib/vendor/runtime-assets/jquery/jquery.min.js', import.meta.url), 'utf8'))
+    dom.window.eval(scopeSource + ';window.makeScope=createTavernHostArtifactScope')
+    const a = dom.window.makeScope({ document: dom.window.document })
+    const $a = a.bindJQuery(dom.window.jQuery)
+    a.setVisible(false)
+    $a('body').append($a('<button>', { id: 'mobile-trigger-btn', text: 'A' }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    // mobile-phone.js binds at 0 ms and resets the position at 100 ms.
+    let clicks = 0
+    $a('#mobile-trigger-btn')[0].addEventListener('click', () => clicks++)
+    $a('#mobile-trigger-btn')[0].style.removeProperty('left')
+    assert.equal(dom.window.document.querySelector('#mobile-trigger-btn'), null)
+    const b = dom.window.makeScope({ document: dom.window.document })
+    const $b = b.bindJQuery(dom.window.jQuery)
+    assert.equal($b('#mobile-trigger-btn').length, 0)
+    $b('body').append('<button id="mobile-trigger-btn">B</button>')
+    assert.equal($a('#mobile-trigger-btn').text(), 'A')
+    assert.equal($a('body').find('#mobile-trigger-btn').text(), 'A')
+    assert.equal($a('body #mobile-trigger-btn').text(), 'A')
+    assert.equal($b('#mobile-trigger-btn').text(), 'B')
+    b.setVisible(false); a.setVisible(true)
+    $a('#mobile-trigger-btn').trigger('click')
+    assert.equal(clicks, 1)
+    assert.equal(dom.window.document.querySelector('#mobile-trigger-btn').textContent, 'A')
+    a.setVisible(false)
+    $a('#mobile-trigger-btn').remove()
+    a.setVisible(true)
+    assert.equal(dom.window.document.querySelector('#mobile-trigger-btn'), null)
+    a.dispose(); b.dispose()
+  } finally { dom.window.close() }
+})
 test('旧会话到期仅清理自己的宿主节点，不能删除新会话或保留页面的容器', () => {
   function root() { return { children: [], append(node) { this.children.push(node); node.parentNode = this }, removeChild(node) { this.children.splice(this.children.indexOf(node),1); node.parentNode = null } } }
   const document = { head: root(), body: root() }

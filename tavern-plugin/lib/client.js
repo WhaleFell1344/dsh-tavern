@@ -2745,13 +2745,31 @@ window.__ModuleLoader__.load({
             const owners = hostDocument.__dshTavernArtifactOwners || (hostDocument.__dshTavernArtifactOwners = new WeakMap());
             const identity = {};
             const host = hostDocument.defaultView;
+            // Keep the card's DOM searchable while it is absent from the shared
+            // document. In particular, delayed callbacks query fixed IDs again.
+            const parking = hostDocument.createElement ? hostDocument.createElement("html") : null;
+            const parkingRoots = new Map();
+            if (parking) for (const root of roots) {
+                const container = hostDocument.createElement(root === hostDocument.head ? "head" : "body");
+                parking.appendChild(container);
+                parkingRoots.set(root, container);
+            }
             let observer = null;
+            function parkNode(node, previous) {
+                previous.nextSibling = node.nextSibling;
+                const container = parkingRoots.get(previous.root);
+                if (container) container.appendChild(node);
+                else previous.root.removeChild(node);
+                previous.parked = true;
+            }
+            function ownerOf(node) {
+                for (; node; node = node.parentNode) if (owners.has(node)) return owners.get(node);
+                return null;
+            }
             function park() {
                 if (visible || disposed) return;
                 for (const [node, previous] of owned) if (node.parentNode === previous.root) {
-                    previous.nextSibling = node.nextSibling;
-                    previous.root.removeChild(node);
-                    previous.parked = true;
+                    parkNode(node, previous);
                 }
             }
             function remember(node, root) {
@@ -2781,6 +2799,16 @@ window.__ModuleLoader__.load({
                 bindJQuery: function (jquery) {
                     const wrappers = new WeakMap();
                     const mutations = new Set(["append", "prepend", "before", "after", "appendTo", "prependTo", "insertBefore", "insertAfter", "replaceWith", "replaceAll", "html"]);
+                    function select(selector, context, result) {
+                        result = result.filter(function () { const owner = ownerOf(this); return !owner || owner === identity; });
+                        if (!parking || disposed) return result;
+                        const contexts = context == null ? [hostDocument] : context.jquery ? context.toArray() : [context];
+                        for (const root of contexts) {
+                            const container = root === hostDocument ? parking : parkingRoots.get(root);
+                            if (container) result = result.add(jquery(container).find(selector).filter(function () { return ownerOf(this) === identity; }));
+                        }
+                        return result;
+                    }
                     function wrap(value) {
                         if (!value || !value.jquery) return value;
                         if (wrappers.has(value)) return wrappers.get(value);
@@ -2789,6 +2817,14 @@ window.__ModuleLoader__.load({
                             if (typeof method !== "function" || key === "constructor") return method;
                             return function () {
                                 const before = mutations.has(key) ? roots.map(root => ({ root, nodes: new Set(root.childNodes) })) : null;
+                                // Explicit removal must not resurrect a parked panel
+                                // when the conversation becomes visible again.
+                                if (key === "remove") {
+                                    const removed = arguments[0] ? target.filter(arguments[0]) : target;
+                                    for (const node of owned.keys()) if (removed.toArray().some(root => root === node || root.contains?.(node))) {
+                                        owned.delete(node); owners.delete(node);
+                                    }
+                                }
                                 let result;
                                 try { result = method.apply(target, arguments); }
                                 finally {
@@ -2796,13 +2832,18 @@ window.__ModuleLoader__.load({
                                         if (!entry.nodes.has(node)) { if (disposed) node.remove(); else remember(node, entry.root); }
                                     }
                                 }
+                                if (key === "find" && typeof arguments[0] === "string") result = select(arguments[0], target, result);
                                 return wrap(result);
                             };
                         } });
                         wrappers.set(value, proxy); wrappers.set(proxy, proxy);
                         return proxy;
                     }
-                    return new Proxy(jquery, { apply(target, receiver, args) { return wrap(Reflect.apply(target, receiver, args)); } });
+                    return new Proxy(jquery, { apply(target, receiver, args) {
+                        let result = Reflect.apply(target, receiver, args);
+                        if (typeof args[0] === "string" && !args[0].trim().startsWith("<")) result = select(args[0], args[1], result);
+                        return wrap(result);
+                    } });
                 },
                 setVisible: function (next) {
                     if (disposed || visible === next) return;
@@ -2814,9 +2855,7 @@ window.__ModuleLoader__.load({
                         // the shared document so another conversation can initialize.
                         // Use native DOM removal: jQuery.remove() discards handlers.
                         if (!next && node.parentNode === previous.root) {
-                            previous.nextSibling = node.nextSibling;
-                            previous.root.removeChild(node);
-                            previous.parked = true;
+                            parkNode(node, previous);
                         }
                         if (previous.body) node.hidden = next ? previous.hidden : true;
                         else if (node.tagName === "STYLE" || node.tagName === "LINK") node.disabled = next ? previous.disabled : true;
@@ -2824,7 +2863,7 @@ window.__ModuleLoader__.load({
                     if (next) for (const [node, previous] of Array.from(owned).reverse()) {
                         if (!previous.parked) continue;
                         previous.parked = false;
-                        if (node.parentNode) continue;
+                        if (node.parentNode && node.parentNode !== parkingRoots.get(previous.root)) continue;
                         if (previous.nextSibling && previous.nextSibling.parentNode === previous.root) {
                             previous.root.insertBefore(node, previous.nextSibling);
                         } else previous.root.append(node);
