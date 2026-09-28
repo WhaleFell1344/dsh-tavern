@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "349c75e0c1da06852ff9065f0d11cdb63cfa836e",
-  "releaseSequence": 417,
+  "revision": "80be9db287297ed2dd7ae5d0328ba95ae4ec1bd7",
+  "releaseSequence": 418,
   "version": "2.4.0",
   "files": [
     {
@@ -891,8 +891,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/live-card-update.js",
-      "sha256": "383dd234ec79b0b67396b6bac35d6e35f47a631d9bc5f4d8feef7433da36675b",
-      "size": 17094
+      "sha256": "1b69d3a340c0458e7d24159d5aea9ad95dd4dba7ef1e5fafdfa6640f1fc1d69c",
+      "size": 17474
     },
     {
       "path": "tavern-plugin/lib/domain/manual-character-design.js",
@@ -1571,8 +1571,8 @@
     },
     {
       "path": "tavern-plugin/lib/domain/tavern-regex-display.js",
-      "sha256": "4b9abd39d0fba4495b3e7c34d7703426ea46252e77af52cd01e0f1c41a698584",
-      "size": 6103
+      "sha256": "679d07dc9b4a90e44ccdbad2f719aa0bd36d9e6e19a57c302f23a4d16be79ca6",
+      "size": 6131
     },
     {
       "path": "tavern-plugin/lib/domain/tavern-remote-assets.js",
@@ -3111,12 +3111,12 @@
     },
     {
       "path": "tavern-plugin/lib/vendor/st-prompt-template/host-build/artifact/index.js",
-      "sha256": "72b6c95aed593fc1aa2659a74920a71309eb23878582b92a5d857f7e7173e7bb",
-      "size": 522914
+      "sha256": "b810a9a90d506681d837e723b286164f10e3879925c7880d5802d5459999bfb9",
+      "size": 522931
     },
     {
       "path": "tavern-plugin/lib/vendor/st-prompt-template/host-build/artifact/manifest.json",
-      "sha256": "b92afac26fc2f35839210b78d011d526ced4439774fdc546bfba8a543aed5d58",
+      "sha256": "5dc28359175ea39e22e022ed3f513c4e3ca1e876b9a270c0b9613b685db0e405",
       "size": 16854
     },
     {
@@ -3231,8 +3231,8 @@
     },
     {
       "path": "tavern-plugin/lib/vendor/st-prompt-template/server-artifact/engine.js",
-      "sha256": "67ee0cf43c15ac918803a965dcacc2a94e238dc1a6b2097112231fc2f24dbf56",
-      "size": 3666650
+      "sha256": "cf291c92cc2278918141458009bf0a58560912a2b06bca866af41a668c63c5dc",
+      "size": 3666667
     },
     {
       "path": "tavern-plugin/lib/vendor/st-prompt-template/server-artifact/engine.js.LICENSE.txt",
@@ -3241,7 +3241,7 @@
     },
     {
       "path": "tavern-plugin/lib/vendor/st-prompt-template/server-artifact/manifest.json",
-      "sha256": "08d20b1078734084f3df401072b5e7ac86b36a52f5b526234be483bb2724b712",
+      "sha256": "15ebc5514c4767f64fea4d2e9a3e16b10cb8f355a19d463e0c5bf8b15bc5fac0",
       "size": 381
     },
     {
