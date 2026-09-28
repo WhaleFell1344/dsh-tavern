@@ -1,3 +1,5 @@
+import { createSessionResourceAccess } from './domain/session-resource-access.js'
+import { worldBookDisplayName } from './domain/worldbook-resource.js'
 import { createConversationMigration } from './domain/conversation-migration.js'
 import { createTaskStateReader } from './domain/task-state-reader.js'
 import { installHostProjectionReplay } from './domain/host-projection-replay.js'
@@ -1460,7 +1462,21 @@ export async function apply(ctx) {
   ctx.effect(() => () => liveCardUpdate.dispose())
   const inputFieldsProjection = createInputFieldsProjection()
   const incrementalReplyView = createIncrementalReplyView({ readChanges: (id, revision) => chatPersistence.readChangedSlice(id, revision, 'settlement') })
+  const sessionResources = createSessionResourceAccess({ read: async ({chatId, revision, kind}) => {
+    if (deletedChatIds.has(chatId)) throw new Error('对话已删除')
+    const chat = await readChatRevision(chatId, revision)
+    if (!chat) return undefined
+    const card = await readChatCard(chat)
+    if (kind === 'card') return cardViewOf(card, chat)
+    const record = await worldBooks.bound(chat.cardPath, card, chat)
+    return record ? projectTavernHelperWorldbook(record.view) : null
+  } })
   async function view(chat, card, persistedProjection = false, options = {}) {
+    const resourceRevision = options.resourceRevision ?? chat._storageRevision
+    const deferResources = options.deferResources === true && chat.mode !== 'card'
+      && Number.isSafeInteger(resourceRevision) && !!chat.cardDefinitionSnapshot
+      && chat.openingWorldbookSnapshot?.version === 1
+
     if (!options.openingWindow) scheduleTemplateSync(chat)
     const runtimeSettings = await requestPerformance.stage('settings', () => readTavernSettings())
     let scriptProgress = null
@@ -1527,8 +1543,15 @@ export async function apply(ctx) {
     let helperWorldbook = null
     if (helperEnabled && str(chat.cardPath) !== '') {
       try {
-        const record = await worldBooks.bound(chat.cardPath, card, chat)
-        if (record !== null) helperWorldbook = projectTavernHelperWorldbook(record.view)
+        if (deferResources) {
+          const document = chat.openingWorldbookSnapshot.document
+          helperWorldbook = document === null ? null : {
+            name: worldBookDisplayName(document), resourceAccess: sessionResources.issue(chat.id, resourceRevision, 'worldbook')
+          }
+        } else {
+          const record = await worldBooks.bound(chat.cardPath, card, chat)
+          if (record !== null) helperWorldbook = projectTavernHelperWorldbook(record.view)
+        }
       } catch (error) {
         helperRuntime.diagnostics.push({ scriptId: '', name: '世界书', status: 'unavailable', message: str(error && error.message || error) })
       }
@@ -1554,7 +1577,8 @@ export async function apply(ctx) {
       },
       bypassPlan: null,
       runtimePreset: activePresetSnapshot === null ? null : { id: activePresetSnapshot.presetPath, name: activePresetSnapshot.presetName },
-      card: cardViewOf(card, chat),
+      card: deferResources ? {path: str(card.path || chat.cardPath), name: card.name, tags: card.tags || []} : cardViewOf(card, chat),
+      ...(deferResources ? {cardResourceAccess:sessionResources.issue(chat.id, resourceRevision, 'card')} : {}),
       cardUpdate,
       statusBarPlacement: chat.statusBarPlacement === 'body' ? 'body' : 'sidebar',
       posture: chat.posture || '',
@@ -1575,7 +1599,7 @@ export async function apply(ctx) {
       tavernStatusView: replyDisplay.statusView || null,
       tavernStatusViews: replyDisplay.statusViews || [],
       mvuReceipts: mvuReceiptsOf(chat),
-      tavernHelper: helperContext ? { ...helperContext, openingHost: sessionOpeningDescriptor(chat, card), worldbook: helperWorldbook, globalVariables: await readPromptTemplateGlobalVariables(), characterVariables: cardExtensions.variables || {}, compatibilityCapabilities: TAVERN_COMPATIBILITY_CAPABILITIES, extensionSettings: await tavernExtensionSettings.read(), regexScripts: { global: cardExtensions.globalRegexScripts || [], character: cardExtensions.characterRegexScripts || [] } } : null,
+      tavernHelper: helperContext ? { ...helperContext, openingHost: sessionOpeningDescriptor(chat, card), ...(deferResources ? {} : {worldbook: helperWorldbook}), globalVariables: await readPromptTemplateGlobalVariables(), characterVariables: cardExtensions.variables || {}, compatibilityCapabilities: TAVERN_COMPATIBILITY_CAPABILITIES, extensionSettings: await tavernExtensionSettings.read(), regexScripts: { global: cardExtensions.globalRegexScripts || [], character: cardExtensions.characterRegexScripts || [] } } : null,
       tavernMvuRuntime: chat.mvu && chat.mvu.enabled === true ? {
         owner: chat.mvu.owner === 'official' ? 'official' : 'legacy',
         commit: OFFICIAL_MVU_VERSION.commit,
@@ -1752,7 +1776,7 @@ export async function apply(ctx) {
     }
     return next
   }
-  async function projectFullSessionView(chat, { windowHelperMessages = false, inputChanges } = {}) {
+  async function projectFullSessionView(chat, { windowHelperMessages = false, inputChanges, deferResources } = {}) {
     const mode = chat.mode || 'story', isCard = mode === 'card', cardPath = str(chat.cardPath)
     let card = null, cardReadError = null
     try { card = isCard && cardPath === '' ? null : await requestPerformance.stage('readCard', () => readChatCard(chat)) }
@@ -1762,7 +1786,7 @@ export async function apply(ctx) {
       card = { name: chat.cardName || chat.cardPath }
     }
     const result = await requestPerformance.stage('projectView', () => view(chat, card, true, {
-      skeletonUntil: windowHelperMessages === true, inputChanges
+      skeletonUntil: windowHelperMessages === true, inputChanges, deferResources
     }))
     if (cardReadError) result.cardReadError = cardReadError
     if (isCard) result.workspace = workspaceViewOf(chat)
@@ -1780,12 +1804,12 @@ export async function apply(ctx) {
       || window.chat.messages.some(message=>message.role==='assistant' && !Number.isSafeInteger(message.turn))) return null
     return window
   }
-  async function projectOpeningWindow(window) {
+  async function projectOpeningWindow(window, options = {}) {
     // Disable revision caches for this partial input. It must never replace a
     // full history projection or be used as an editable Chat baseline.
     const chat={...window.chat,_storageRevision:undefined}
     const card=await readChatCard(chat)
-    const result=await view(chat,card,false,{openingWindow:true})
+    const result=await view(chat,card,false,{openingWindow:true,deferResources:options.deferResources,resourceRevision:window.revision})
     result.historyWindow={onDemand:true,from:window.from,to:window.to,messageCount:window.messageCount,revision:window.revision}
     if(result.tavernHelper){
       const helper=result.tavernHelper
@@ -3773,6 +3797,18 @@ export async function apply(ctx) {
         const readsRuntimeAsset = req.method === 'GET' && pathname.startsWith(TAVERN_RUNTIME_ASSET_PREFIX)
         const readsClientAsset = req.method === 'GET' && pathname.startsWith(TAVERN_CLIENT_ASSET_PREFIX)
         const origin = req.headers.origin
+        if (pathname === '/api/dsh-tavern/session-resource' && req.method === 'GET') {
+          const headers = {'Content-Type':'application/json; charset=utf-8','Cache-Control':'private, max-age=600',
+            'Access-Control-Allow-Origin':'*','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'}
+          try {
+            const json = await sessionResources.read(new URL(req.url, 'http://localhost').searchParams.get('cap'))
+            res.writeHead(200, headers); res.end(json)
+          } catch (_) {
+            res.writeHead(403, {...headers, 'Cache-Control':'no-store'})
+            res.end(JSON.stringify({error:'Resource unavailable; refresh the session'}))
+          }
+          return
+        }
         if (pathname === '/api/dsh-tavern/helper-history' && req.method === 'GET') {
           const target = new URL(req.url, 'http://localhost')
           const headers = {'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Access-Control-Allow-Origin':'*','X-Content-Type-Options':'nosniff'}

@@ -149,3 +149,31 @@ test('narrow variable slices retain routing fields and legacy adoption fallback'
  stored.conversationFeaturesVersion=0
  assert.equal(await read('s',[],['mvu']),undefined)
 })
+
+test('deferred and complete resource views cannot reuse each other', async () => {
+  const f = fixture()
+  const project = f.deps.project.full
+  f.deps.project.full = async (chat, options) => ({...await project(chat), deferred: options.deferResources === true})
+  assert.equal((await f.reader.read('s', {deferResources:true})).deferred, true)
+  assert.equal((await f.reader.read('s')).deferred, false)
+  assert.equal((await f.reader.read('s', {deferResources:true})).deferred, true)
+  assert.equal(f.calls.full, 3)
+})
+
+for (const fields of [undefined, ['openingWorldbookSnapshot'], ['cardDefinitionSnapshot']]) test(`resource snapshot changes rebuild deferred capabilities: ${fields}`, async () => {
+  const f = fixture(), project = f.deps.project.full
+  f.deps.project.full = async chat => ({...await project(chat), cardResourceAccess:{revision:chat._storageRevision}})
+  await f.reader.read('s', {deferResources:true})
+  f.chat = {...f.chat, _storageRevision:2}
+  f.deps.readViewDelta = async () => ({baseRevision:1,revision:2,indices:[],changedHeaderFields:fields,chat:f.chat})
+  const view = await f.reader.read('s', {deferResources:true})
+  assert.equal(view.cardResourceAccess.revision, 2)
+  assert.equal(f.calls.dirty, 0)
+})
+
+test('resource deferral is explicitly negotiated at the response boundary', async () => {
+  const f = fixture(), project = f.deps.project.full
+  f.deps.project.full = async (chat, options) => ({...await project(chat), deferred: options.deferResources === true})
+  assert.equal((await f.reader.response({sessionId:'s',resourceSync:1})).view.deferred, true)
+  assert.equal((await f.reader.response({sessionId:'s'})).view.deferred, false)
+})

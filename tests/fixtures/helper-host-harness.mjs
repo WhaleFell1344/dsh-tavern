@@ -33,6 +33,10 @@ export function helperHostHarness(context = {}, options = {}) {
     }
   }
   window.jQuery = options.jQuery
+  window.XMLHttpRequest = options.XMLHttpRequest
+  window.fetch = options.fetch
+  window.URL = URL
+  window.document = { baseURI: 'http://localhost/' }
   window.window = window
   vm.runInNewContext(source, window)
   function receive(data) { listeners.get('message')({ source: parent, data: { token: 'host-test', ...data } }) }

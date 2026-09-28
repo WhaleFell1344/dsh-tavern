@@ -8,7 +8,10 @@ function identity(chat) {
 function matches(cached, next) {
   return cached && ['cardPath', 'cardContextRevision', 'mode', 'isCard', 'resourceVersion'].every(key => cached[key] === next[key])
 }
-function canProjectDirty(previous, chat, indices) {
+function canProjectDirty(previous, chat, indices, changedHeaderFields) {
+  // A deferred resource must never retain a capability for an outdated snapshot.
+  if (previous?.cardResourceAccess && (!Array.isArray(changedHeaderFields)
+    || changedHeaderFields.some(key => ['cardDefinitionSnapshot', 'openingWorldbookSnapshot'].includes(key)))) return false
   const before = previous?.tavernHelper?.messages, after = chat.messages
   if (!indices || !Array.isArray(before) || !Array.isArray(after) || before.length > after.length
     || !helperMessagesComplete(before)) return false
@@ -39,7 +42,7 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
   }
   async function load(sessionId, options = {}) {
     const state=await readState(sessionId)
-    const resources=state ? await resourceVersion(state) : ''
+    const resources=(state ? await resourceVersion(state) : '') + (options.deferResources ? '\ndeferred-resources' : '')
     const key=JSON.stringify([String(sessionId),state?.id,state && identity(state),resources,options])
     if (pending.has(key)) return pending.get(key)
     const work=loadSnapshot(sessionId,options,state,resources)
@@ -63,7 +66,7 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
           && delta.revision === next.revision && identity(delta.chat).revision === next.revision
           && matches(cached, {...identity(delta.chat), resourceVersion: resources})) {
           verifiedDelta=delta
-          if (canProjectDirty(cached.view, delta.chat, dirty)) return { chat: delta.chat, cached, dirty, layoutChanged:delta.layoutChanged,layoutFrom:delta.layoutFrom, changedHeaderFields:delta.changedHeaderFields,runtimeInputChanges:delta.runtimeInputChanges, resourceVersion: resources }
+          if (canProjectDirty(cached.view, delta.chat, dirty, delta.changedHeaderFields)) return { chat: delta.chat, cached, dirty, layoutChanged:delta.layoutChanged,layoutFrom:delta.layoutFrom, changedHeaderFields:delta.changedHeaderFields,runtimeInputChanges:delta.runtimeInputChanges, resourceVersion: resources }
         }
       }
       const chat = await trace.stage('readFullChat', () => readChat(sessionId))
@@ -81,7 +84,7 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
       rebuild = 'cache'
     } else {
       const dirty = selected.dirty ?? (matches(cached, next) && cached.revision < next.revision ? await changes(chat, cached.revision) : null)
-      if (matches(cached, next) && canProjectDirty(cached?.view, chat, dirty)) {
+      if (matches(cached, next) && canProjectDirty(cached?.view, chat, dirty, selected.changedHeaderFields)) {
         view = await trace.stage('projectViewDirty', () => project.dirty(chat, cached.view, dirty, currentActivity, {layoutChanged:selected.layoutChanged,layoutFrom:selected.layoutFrom,changedHeaderFields:selected.changedHeaderFields,runtimeInputChanges:selected.runtimeInputChanges}))
         rebuild = 'dirty'
       } else {
@@ -113,13 +116,14 @@ export function createSessionViewReader({ readState, readChat, readChanges, read
     if (args.openingWindow === 1 && args.viewSync === 1 && args.fullView !== true && readOpeningWindow && project.opening) {
       const window = await trace.stage('readOpeningWindow', () => readOpeningWindow(sessionId))
       if (window) {
-        const view = await trace.stage('projectOpeningWindow', () => project.opening(window))
+        const view = await trace.stage('projectOpeningWindow', () => project.opening(window, {deferResources:args.resourceSync === 1}))
         trace.state({viewRebuild:'window',helperMessageCount:window.chat.messages.length})
         return synchronize(String(sessionId),view,args.viewCursor,{revision:window.revision,receiptSync:args.receiptSync})
       }
     }
     const previous = args.viewSync === 1 ? synchronize.peek?.(args.viewCursor) : null
     const result = await load(sessionId, {
+      deferResources: args.resourceSync === 1,
       windowHelperMessages: args.fullView !== true && args.viewSync === 1 && (args.viewCursor === undefined || args.viewCursor === null || args.viewCursor === '')
     })
     if (args.viewSync !== 1) return { view: result.view }

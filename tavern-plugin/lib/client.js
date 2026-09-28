@@ -1064,7 +1064,7 @@ window.__ModuleLoader__.load({
 			if (trace) payload._traceId = trace.id;
 			if (sessionId) payload.sessionId = sessionId;
 			const viewRead = method === "getSession" ? beginSessionViewRead(payload.sessionId) : null;
-			if (viewRead) { payload.viewSync = 1; payload.openingWindow = 1; if (completeHistorySessions.has(payload.sessionId)) payload.fullView = true; payload.viewCursor = viewRead.cursor; if (viewRead.receiptSync) payload.receiptSync = 1; }
+			if (viewRead) { payload.viewSync = 1; payload.resourceSync = 1; payload.openingWindow = 1; if (completeHistorySessions.has(payload.sessionId)) payload.fullView = true; payload.viewCursor = viewRead.cursor; if (viewRead.receiptSync) payload.receiptSync = 1; }
 			if (method === "getTavernHelperContext" && !payload.eventId && !payload.fullView && !completeHistorySessions.has(payload.sessionId)) payload.openingWindow = 1;
 			const requestBody = JSON.stringify(payload);
 			if (trace) {
@@ -1632,6 +1632,44 @@ window.__ModuleLoader__.load({
                 install(loaded);
                 return loaded;
             };
+        }
+        // Full card data remains synchronous at the legacy API boundary. Merely opening
+        // a conversation or bootstrapping its scripts does not invoke this reader.
+        function createTavernResourceReader(options) {
+            const cache = new Map(), pending = new Map();
+            function url(access) {
+                const target = new URL('/api/dsh-tavern/session-resource', document.baseURI);
+                target.searchParams.set('cap', access.token);
+                return target.href;
+            }
+            function accept(access, result) {
+                if (!result || result.kind !== access.kind || result.revision !== access.revision || !Object.prototype.hasOwnProperty.call(result, 'value')) throw new Error('人物卡资源版本不匹配，请刷新会话');
+                cache.set(access.token, result.value);
+                while (cache.size > 4) cache.delete(cache.keys().next().value);
+                return result.value;
+            }
+            function read(access) {
+                if (cache.has(access.token)) return cache.get(access.token);
+                if (options && options.request) return accept(access, options.request(access));
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', url(access), false);
+                xhr.send();
+                if (xhr.status !== 200) throw new Error('人物卡资源读取失败，请刷新会话后重试');
+                return accept(access, JSON.parse(xhr.responseText));
+            }
+            async function readAsync(access) {
+                if (cache.has(access.token)) return cache.get(access.token);
+                if (pending.has(access.token)) return pending.get(access.token);
+                const task = Promise.resolve().then(async function () {
+                    if (options && options.requestAsync) return accept(access, await options.requestAsync(access));
+                    const response = await fetch(url(access));
+                    if (!response.ok) throw new Error('世界书读取失败，请刷新会话后重试');
+                    return accept(access, await response.json());
+                }).finally(function () { pending.delete(access.token); });
+                pending.set(access.token, task);
+                return task;
+            }
+            return { read: read, readAsync: readAsync };
         }
 
         function expandTavernOpeningWindow(view) {
@@ -4940,7 +4978,7 @@ window.__ModuleLoader__.load({
 				// These ST rewriting/media restrictions are disabled in Tavern rendering.
 				powerUserSettings: Object.freeze({ auto_fix_generated_markdown: false, trim_sentences: false, forbid_external_media: false, encode_tags: false }),
 				get characters() {
-					const character = context().character;
+					const character = options.readCharacter ? options.readCharacter() : context().character;
 					if (!character || typeof character !== "object") return [];
 					const current = copy(character);
 					if (!current.avatar) current.avatar = String(current.path || "");
@@ -4962,7 +5000,7 @@ window.__ModuleLoader__.load({
 				unregisterFunctionTool: function (name) { functionTools.delete(String(name || "")); },
 				getCurrentChatId: function () { return String(context().chatId || ""); },
 				getCurrentLocale: function () { return "zh-CN"; },
-				getCharacterCardFields: function () { return copy(context().character && (context().character.data || context().character) || {}); },
+				getCharacterCardFields: function () { const character = options.readCharacter ? options.readCharacter() : context().character; return copy(character && (character.data || character) || {}); },
 				loadWorldInfo: async function (name) {
 					const result = await call("loadTavernWorldInfo", { name: name });
 					const document = copy(result.worldInfo);
@@ -5079,6 +5117,12 @@ window.__ModuleLoader__.load({
 				try { Object.defineProperty(window, "localStorage", { configurable: true, value: storage }); } catch (_) {}
 			}
 			let state = initialContext && typeof initialContext === "object" ? initialContext : {};
+            const resources = modules.createResourceReader();
+            function readCharacter() {
+                if (!state.characterResourceAccess) return state.character;
+                const character = resources.read(state.characterResourceAccess);
+                return character && !character.data ? {...character, data: copy(character)} : character;
+            }
             state = {...state, messages:modules.applyVariableReceipt.indexApi.from(state.messages || [])};
             const readMessage = modules.createHistoryReader({context:()=>state,install:row=>{
                 row.mes=row.message; row.is_user=row.role==='user'; row.is_system=row.role==='system';
@@ -5449,7 +5493,7 @@ window.__ModuleLoader__.load({
 				return copy(next);
 			};
 			window.getButtonEvent = buttonEvent;
-			window.getCharData = function () { return copy(state.character || null); };
+			window.getCharData = function () { return copy(readCharacter() || null); };
 			window.getCurrentCharacterName = function () { return String(state.characterName || state.character && state.character.name || ""); };
 			window.getCurrentMessageId = currentId;
 			window.getLastMessageId = lastId;
@@ -5557,7 +5601,13 @@ window.__ModuleLoader__.load({
 			window.getWorldbookNames = function () { return state.worldbook && state.worldbook.name ? [state.worldbook.name] : []; };
 			window.getCharWorldbookNames = function () { return { primary: state.worldbook && state.worldbook.name || null, additional: [] }; };
 			window.getWorldbook = async function (name) {
-				if (state.worldbook && (name === "current" || name === state.worldbook.name)) return copy(state.worldbook.entries || []);
+				if (state.worldbook && (name === "current" || name === state.worldbook.name)) {
+                    const access = state.worldbook.resourceAccess;
+                    if (!access) return copy(state.worldbook.entries || []);
+                    const book = await resources.readAsync(access);
+                    if (state.worldbook?.resourceAccess?.token === access.token) state.worldbook = copy(book);
+                    return copy(book && book.entries || []);
+                }
 				const result = await call("getTavernHelperWorldbook", { name: name });
 				state.worldbook = copy(result.worldbook);
 				return copy(state.worldbook.entries || []);
@@ -5759,7 +5809,7 @@ window.__ModuleLoader__.load({
 					.replace(/{{\s*user\s*}}/gi, String(state.playerName || "你"))
 					.replace(/{{\s*char\s*}}/gi, String(state.characterName || "角色"));
 			};
-			facade = modules.installFacade({ installCompatibility: modules.installCompatibility, currentScript: currentScript, post: transport.post, createChatData: modules.createChatData, readMessage:readMessage, createLocalVariables: modules.createLocalVariables, window: window, copy: copy, request: call, context: function () { return state; },
+			facade = modules.installFacade({ installCompatibility: modules.installCompatibility, currentScript: currentScript, post: transport.post, createChatData: modules.createChatData, readMessage:readMessage, readCharacter:readCharacter, createLocalVariables: modules.createLocalVariables, window: window, copy: copy, request: call, context: function () { return state; },
 				Popup: modules.createPopup({ document: window.document, parent: parent, token: token }) });
 			let regexSaveTimer = null;
 			async function persistGlobalRegexes() {
@@ -6288,6 +6338,7 @@ window.__ModuleLoader__.load({
 				+ 'createPopup:' + createTavernHelperPopup.toString() + ','
 				+ 'installCompatibility:' + installTavernCompatibilityDiagnostics.toString() + ','
 				+ 'createHistoryReader:' + createTavernHistoryReader.toString() + ','
+                + 'createResourceReader:' + createTavernResourceReader.toString() + ','
                 + 'createChatData:' + createTavernChatDataFacade.toString() + ','
                 + 'createLocalVariables:' + createTavernLocalVariables.toString() + ','
 				+ 'installFacade:' + installTavernHelperFacade.toString() + '});';
@@ -6457,7 +6508,7 @@ window.__ModuleLoader__.load({
 			function decorateHelperContext(value, fallback) {
 				const context = clone(value && typeof value === "object" ? value : {});
 				const previous = fallback && typeof fallback === "object" ? fallback : {};
-				for (const key of ["character", "characterVariables", "chatId", "playerName", "characterName", "worldbook"]) {
+				for (const key of ["character", "characterResourceAccess", "characterVariables", "chatId", "playerName", "characterName", "worldbook"]) {
 					if (context[key] === undefined && previous[key] !== undefined) context[key] = clone(previous[key]);
 				}
 				if (!context.scriptVariables || typeof context.scriptVariables !== "object") context.scriptVariables = clone(previous.scriptVariables || {});
@@ -6479,6 +6530,7 @@ window.__ModuleLoader__.load({
 				const character = clone(view && view.card || null);
 				if (character && typeof character === "object" && (!character.data || typeof character.data !== "object")) character.data = clone(character);
 				context.character = character;
+                context.characterResourceAccess = view && view.cardResourceAccess || null;
 				context.chatId = String(view && view.chatId || "");
 				context.playerName = String(view && view.playerName || "你");
 				context.characterName = String(character && character.name || "角色");
