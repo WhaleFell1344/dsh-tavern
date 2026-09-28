@@ -3546,12 +3546,14 @@ window.__ModuleLoader__.load({
             text.textContent = String(options.source || "");
             node.appendChild(text);
             const initial = text.textContent;
-            node.hidden = !options.showInitial;
-            native.hidden = Boolean(options.showInitial);
+            // Source differs from display after macro/regex processing too.
+            // Only an actual script DOM edit may replace the native renderer.
+            node.hidden = true;
+            native.hidden = false;
             text.style.whiteSpace = "pre-wrap";
             const Observer = options.MutationObserver || node.ownerDocument.defaultView.MutationObserver;
             const observer = new Observer(function () {
-                const replaced = Boolean(options.showInitial) || text.childElementCount > 0 || text.textContent !== initial;
+                const replaced = text.childElementCount > 0 || text.textContent !== initial;
                 node.hidden = !replaced;
                 native.hidden = replaced;
             });
@@ -6261,8 +6263,8 @@ window.__ModuleLoader__.load({
             function TavernLegacyGreeting(props) {
                 const native = React.useRef(null), node = React.useRef(null);
                 React.useLayoutEffect(function () {
-                    return mountTavernLegacyMessage({node:node.current, native:native.current, source:props.source, showInitial:props.modified});
-                }, [props.source, props.modified]);
+                    return mountTavernLegacyMessage({node:node.current, native:native.current, source:props.source});
+                }, [props.source]);
                 return React.createElement("div", {className:"mes", mesid:"0", is_user:"false"},
                     React.createElement("div", {ref:native}, props.children),
                     React.createElement("div", {ref:node, "data-dsh-legacy-message":"0"}));
@@ -6328,7 +6330,6 @@ window.__ModuleLoader__.load({
                 const greetingId = helper?.turnMessageIds?.[String(storyTurn)];
                 const legacyGreeting = settled && !sessionTransitioning && greetingId === 0 && liveState.view?.tavernRuntimePolicy?.trustedCardMode;
                 const greetingSource = helper?.messages?.[0]?.message || "";
-                const originalGreeting = (data.blocks || []).filter(block => block?.kind === "text").map(block => String(block.text || "")).join("");
                 // Recover messages staged by earlier system versions, independent
                 // of any card name, wording, or rendered guide DOM.
                 const prepared = helper?.chatMetadata?.dsh_pending_opening;
@@ -6336,7 +6337,7 @@ window.__ModuleLoader__.load({
                     && prepared?.lifecycleRevision === Number(helper?.lifecycleRevision || 0)
                     && typeof prepared.text === "string" && prepared.text.trim()
                     ? React.createElement(TavernPreparedScriptMessage, {key:props.sessionId+":"+prepared.lifecycleRevision, sessionId:props.sessionId, preparedText:prepared.text, executeSlash:props.executeSlash}) : null;
-                const body = legacyGreeting ? React.createElement(TavernLegacyGreeting, {key:props.sessionId+":greeting", source:greetingSource, modified:greetingSource !== originalGreeting, sessionId:props.sessionId, executeSlash:props.executeSlash}, rendered) : rendered;
+                const body = legacyGreeting ? React.createElement(TavernLegacyGreeting, {key:props.sessionId+":greeting", source:greetingSource, sessionId:props.sessionId, executeSlash:props.executeSlash}, rendered) : rendered;
 				return React.createElement("div", { ref:historyNode, className: "dsh-tavern-assistant", "data-streaming": data.status === "running" || undefined }, body, pendingMessage, illustration, mvuReceiptNode, inlineStatus);
 			}
 			function TavernForkAssistantAction(props) {

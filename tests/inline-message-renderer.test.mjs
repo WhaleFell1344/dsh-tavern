@@ -1908,16 +1908,15 @@ test('sandbox text submission targets its original session without parsing slash
 })
 
 
-test('reopening a script-edited greeting shows saved content before scripts mutate DOM', async () => {
+test('saved greeting source never replaces the formatted native body before a DOM edit', async () => {
   const { JSDOM } = await import('jsdom')
-  const dom = new JSDOM('<div id="native">YINQI_BOOT original startup instructions</div><div id="owned"></div>')
+  const dom = new JSDOM('<div id="native"><strong>Opening</strong><p>Hello Player</p></div><div id="owned"></div>')
   const document = dom.window.document, native = document.getElementById('native'), node = document.getElementById('owned')
-  const saved = 'Setup saved. Waiting for opening.'
-  const stop = client.mountTavernLegacyMessage({ node, native, source:saved, showInitial:true })
-  assert.equal(node.hidden, false)
-  assert.equal(native.hidden, true)
-  assert.equal(node.textContent, saved)
-  // A card may deliberately skip boot rendering once setup was saved.
+  const stop = client.mountTavernLegacyMessage({ node, native, source:'**Opening**\nHello {{user}}', showInitial:true })
+  assert.equal(node.hidden, true)
+  assert.equal(native.hidden, false)
+  assert.equal(native.querySelector('strong').textContent, 'Opening')
+  node.querySelector('.mes_text').innerHTML = '<button>Script panel</button>'
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(node.hidden, false)
   assert.equal(native.hidden, true)
