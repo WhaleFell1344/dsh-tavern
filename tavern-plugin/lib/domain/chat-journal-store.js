@@ -713,7 +713,7 @@ export function createChatJournalStore(options = {}) {
   async function patch(chatId, expectedRevision, changes, metadata={}) {
     return serialize(chatId,async()=>{
       if (!readCache.has(chatId)) {
-        const saved = await native.patch(chatId,expectedRevision,changes,metadata.assertCurrent)
+        const saved = await native.patch(chatId,expectedRevision,changes,metadata.assertCurrent,metadata.returnProjection)
         if (saved !== null) return saved ? slice(saved.chat,[],metadata.returnProjection).chat : undefined
       }
       const state=await cachedState(chatId)

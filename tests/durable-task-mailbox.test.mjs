@@ -127,3 +127,24 @@ test('read-only polling avoids full reads; repair rechecks a writable snapshot',
   await mailbox.sync('c', { taskId: 't' }); await mailbox.recover('c')
   assert.equal(fullReads, 1); assert.equal(writes, 1)
 })
+
+test('mailbox scoped writes retry revision conflicts without reading or overwriting story data', async () => {
+  let chat = { id: 'c', _storageRevision: 1, story: 'original' }, conflict = true
+  const mailbox = createDurableTaskMailbox({ store: {
+    readChat() { throw new Error('full read forbidden') },
+    writeChat() { throw new Error('full write forbidden') },
+    async readState() { const { story, ...state } = chat; return structuredClone(state) },
+    async patchChat(id, revision, changes) {
+      if (conflict) { conflict = false; chat.story = 'concurrent'; chat._storageRevision++; return undefined }
+      assert.equal(revision, chat._storageRevision)
+      assert.deepEqual(changes.map(change => change.path), [['taskMailbox']])
+      chat.taskMailbox = structuredClone(changes[0].value); chat._storageRevision++
+      const { story, ...state } = chat; return structuredClone(state)
+    }
+  } })
+  const task = await mailbox.submit('c', { kind: 'candidate', requestId: 'r' })
+  await mailbox.transition('c', task.taskId, {status:'running',stage:'generating'})
+  await mailbox.transition('c', task.taskId, {status:'succeeded',result:{choices:[]}})
+  assert.equal((await mailbox.sync('c',{requestId:'r'})).task.status,'succeeded')
+  assert.equal(chat.story,'concurrent')
+})

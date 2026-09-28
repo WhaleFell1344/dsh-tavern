@@ -466,10 +466,30 @@ export function createNativeConversationStorage({dataRoot,onIO}){
  }
  // Point mutations can be validated against just the header and touched rows.
  // Structural edits and removal of the latest world retain the full fallback.
- async function patch(id,revision,changes,assertCurrent){
+ async function patch(id,revision,changes,assertCurrent,returnProjection){
   const view=await head(id)
   if(!view)return null
   if(view.state.chatRevision!==revision)return undefined
+  // Mailbox lifecycle changes do not touch story rows, world state or indexes.
+  // Apply them directly to the header tree instead of materializing the card.
+  if (Array.isArray(returnProjection) && changes.length && changes.every(change =>
+    change.op === 'set' && change.path?.length === 1 && ['taskMailbox','_storageRevision','updatedAt'].includes(change.path[0]))) {
+   const nextRevision=changes.find(change=>change.path[0]==='_storageRevision')?.value
+   if(nextRevision!==revision+1)throw Error('Invalid journal patch revision')
+   const batch=createBufferedJsonRecords({read:ref=>pages.readRecord(id,ref),writeMany:values=>pages.writeRecords(id,values)})
+   let chatHeaderRef=view.state.chatHeaderRef
+   for(const change of changes)chatHeaderRef=(await batch.tree.apply(chatHeaderRef,[{op:'set',path:pointer(change.path),value:change.value}])).nextRoot
+   const state={...view.state,chatHeaderRef,chatRevision:nextRevision,
+    ...(view.state.sceneIndexRevision===revision?{sceneIndexRevision:nextRevision}:{}),
+    ...(view.state.displayIndexRevision===revision?{displayIndexRevision:nextRevision}:{})}
+   assertCurrent?.()
+   await batch.flush([chatHeaderRef])
+   const changeRef=await pages.writeRecord(id,{baseRevision:revision,revision:nextRevision,indices:[],tail:null,layoutFrom:null})
+   await pages.commit(id,{expectedRevision:view.revision,state,edits:[],append:[],truncateTo:view.messageCount,
+    records:[['chat-revision:'+revision,view.snapshotCursor.snapshotId],['chat-change:'+nextRevision,changeRef]]},{assertCurrent})
+   const saved=await head(id)
+   return result({...await selectedHeader(id,saved,returnProjection),messages:[]},saved)
+  }
   if(changes.some(change=>!change.path?.length || change.path[0]==='messages' &&
     (change.path.length<3 || !Number.isSafeInteger(change.path[1]) || change.path[1]<0 || change.path[1]>=view.messageCount)))return null
   const t=tree(id),originalHeader=await t.get(view.state.chatHeaderRef),rows=new Map()

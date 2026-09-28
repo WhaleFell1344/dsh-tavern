@@ -11,7 +11,7 @@ export function createCandidateTasks({ chats, generator, backgroundTasks, sessio
   const runtimeGeneration = sessions.runtimeGeneration
   const candidateTaskJobs = new Map()
   const taskMailbox = createDurableTaskMailbox({
-    store: { readChat, writeChat, readState: chats.readState },
+    store: { readChat, writeChat, readState: chats.readState, patchChat: chats.patch },
     now,
     reconcile(chat, task) {
       if (task.kind !== 'candidate') return null
@@ -40,10 +40,9 @@ export function createCandidateTasks({ chats, generator, backgroundTasks, sessio
           sessionId: input.sessionId,
           messageId: input.messageId,
           guidance: input.guidance,
-          requestId: task.requestId,
-          async onStage(stage) {
-            await taskMailbox.transition(chatId, taskId, { status: 'running', stage, operationId })
-          }
+          requestId: task.requestId
+          // Validation/commit/publication are one durable completion, not three
+          // additional whole task checkpoints on the result delivery path.
         })
         operationId = str(prepared.operationId)
         await taskMailbox.transition(chatId, taskId, { status: 'running', stage: 'generating', operationId })

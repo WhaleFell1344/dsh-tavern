@@ -2325,7 +2325,7 @@ export async function apply(ctx) {
     logger: console
   })
   const candidateTasks = createCandidateTasks({
-    chats: { read: readChat, write: writeChat, forSession: chatForSession, stateForSession: taskStateReader.forSession, readState: taskStateReader.read },
+    chats: { read: readChat, write: writeChat, patch: patchChat, forSession: chatForSession, stateForSession: taskStateReader.forSession, readState: taskStateReader.read },
     generator: candidateGenerator,
     backgroundTasks,
     sessions: {
