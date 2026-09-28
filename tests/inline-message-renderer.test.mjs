@@ -1912,3 +1912,26 @@ test('managed MVU self-check reports host ownership without enabling legacy repa
     assert.match(results[4].msg || '', managed ? /不代表连接测试/ : /^$/)
   }
 })
+
+test('sandbox text submission targets its original session without parsing slash text or changing draft', async () => {
+  const calls = []
+  const execute = client.createTavernFrameSlashExecutor({ sessions: { binding(id) { return { session: { prompt: async (content, mode) => { calls.push({ id, content, mode }); return { ok:true } } } } } }, get: assert.fail }, {})
+  const text = 'Neutral opening\nLiteral | /cut 0 | /trigger'
+  await execute('', 'original-session', { inputText:text })
+  assert.equal(calls[0].id, 'original-session')
+  assert.equal(calls[0].content[0].text, text)
+  await assert.rejects(execute('', 'original-session', { inputText:'  ' }), /为空/)
+})
+
+test('legacy parent send lookup resolves only to calling sandbox controls', async () => {
+  const result = [], fields = { send_textarea: { value:'neutral' }, send_but: {} }
+  const window = { addEventListener() {}, removeEventListener() {}, clearTimeout() {} }
+  const sandbox = { window, result, topDoc: { getElementById() { assert.fail('must not use another session composer') } }, document: {
+    getElementById: id => fields[id], createElement: () => ({ remove() {} }),
+    body: { appendChild(element) { vm.runInNewContext(element.textContent, sandbox) } }
+  } }
+  const load = vm.runInNewContext('(' + client.loadTavernHelperModule.toString() + ')', sandbox)
+  await load('result.push(topDoc.getElementById("send_textarea").value); result.push(topDoc.getElementById("send_but"));', 'legacy-guide', false)
+  assert.equal(result[0], 'neutral')
+  assert.equal(result[1], fields.send_but)
+})

@@ -3715,6 +3715,7 @@ window.__ModuleLoader__.load({
 		  controls.append(area, button);
 		  document.body.append(controls);
 		  area.addEventListener('input', function () {
+		    if (typeof window.submitTavernInput === 'function') return;
 		    Promise.resolve().then(function () {
 		      if (typeof window.triggerSlash !== 'function') throw new Error('当前对话输入框尚未就绪');
 		      return window.triggerSlash('/setinput ' + String(area.value || ''));
@@ -3729,11 +3730,11 @@ window.__ModuleLoader__.load({
 		  button.addEventListener('click', function () {
 		    const text = String(area.value || '').trim();
 		    if (pending || !text) return;
-		    if (typeof window.triggerSlash !== 'function') throw new Error('当前对话发送入口尚未就绪');
+		    if (typeof window.submitTavernInput !== 'function' && typeof window.triggerSlash !== 'function') throw new Error('当前对话发送入口尚未就绪');
 		    pending = true;
 		    button.disabled = true;
 		    Promise.resolve().then(function () {
-		      return window.triggerSlash('/send ' + text + '|/trigger');
+		      return typeof window.submitTavernInput === 'function' ? window.submitTavernInput(text) : window.triggerSlash('/send ' + text + '|/trigger');
 		    }).then(function () {
 		      if (area.value.trim() === text) area.value = '';
 		    }, function (error) {
@@ -5920,7 +5921,8 @@ window.__ModuleLoader__.load({
 					.replace(/{{\s*user\s*}}/gi, String(state.playerName || "你"))
 					.replace(/{{\s*char\s*}}/gi, String(state.characterName || "角色"));
 			};
-			modules.installBackgroundModel({ window: window, request: call });
+			window.submitTavernInput = function (text) { return call("submitTavernHelperInput", { text: String(text || "") }); };
+            modules.installBackgroundModel({ window: window, request: call });
 			facade = modules.installFacade({ installCompatibility: modules.installCompatibility, currentScript: currentScript, post: transport.post, createChatData: modules.createChatData, readMessage:readMessage, readCharacter:readCharacter, createLocalVariables: modules.createLocalVariables, window: window, copy: copy, request: call, context: function () { return state; },
 				Popup: modules.createPopup({ document: window.document, parent: parent, token: token }) });
 			let regexSaveTimer = null;
@@ -6179,6 +6181,9 @@ window.__ModuleLoader__.load({
             // DSH owns settlement and credentials; do not let its repair actions
             // turn on a second client-side updater merely to satisfy the guide.
             if (scriptId !== "__dsh_official_mvu__") {
+                // Legacy parent-DOM send controls must belong to the calling
+                // sandbox, never whichever conversation currently has focus.
+                source = source.replace(/topDoc\.getElementById\((['"])(send_textarea|send_but)\1\)/g, 'document.getElementById("$2")');
                 const checks = {
                     MvuMode: ["mvu_mode", "MVU 更新方式", "由 DSH 后台代理更新变量，无需切换卡内更新方式"],
                     MvuAutoRequest: ["mvu_autoreq", "额外模型自动请求", "由宿主调度，无需开启卡内自动请求"],
@@ -6505,6 +6510,7 @@ window.__ModuleLoader__.load({
 				+ 'const token=' + JSON.stringify(metadata.token) + ';\n'
 				+ 'try{'
 				+ (input && input.trustedCardMode ? 'const ensureHostJQuery=' + ensureTavernHostJQuery.toString() + ';await ensureHostJQuery(window.parent);const ensureHostJQueryUi=' + ensureTavernHostJQueryUi.toString() + ';await ensureHostJQueryUi(window.parent);const artifacts=window.frameElement&&window.frameElement.__dshTavernHostArtifacts;window.$=window.jQuery=artifacts?artifacts.bindJQuery(window.parent.jQuery):window.parent.jQuery;const installHostFacade=' + installTavernTrustedHostFacade.toString() + ';const releaseHostFacade=installHostFacade(window.parent,window);window.addEventListener("pagehide",releaseHostFacade,{once:true});window.addEventListener("unload",releaseHostFacade,{once:true});\n' : '')
+				+ '(' + installLegacyTavernComposer.toString() + ')();\n'
 				+ 'for(const script of scripts){window.__dshTavernHelperSetCurrentScript(script.id);try{'
 				+ 'if(script.system==="official-mvu"&&script.assetUrl){const loader=createMvuLoader({fetch:window.fetch.bind(window),evaluate:source=>loadModule(source,script.id),onDiagnostic(diagnostic){parent.postMessage({type:"dsh-tavern-mvu-load-diagnostic",token,diagnostic},"*");},onState(state){parent.postMessage({type:"dsh-tavern-mvu-load-state",token,state},"*");}});'
 				+ 'const retry=event=>{if(event.source===parent&&event.data?.token===token&&event.data.type==="dsh-tavern-mvu-reload")loader.retry();};'
@@ -7213,6 +7219,20 @@ window.__ModuleLoader__.load({
 					}
 					return;
 				}
+                if (data.type === "dsh-tavern-helper-call" && data.method === "submitTavernHelperInput") {
+                    Promise.resolve().then(function () {
+                        if (!foreground || records.get(record.id) !== record) throw new Error("对话已切换，开局消息未发送；请返回原对话重试");
+                        if (data.lifecycleRevision !== undefined && Number(data.lifecycleRevision) !== Number(record.context?.lifecycleRevision || 0)) throw new Error("存档版本已变化，开局消息未发送");
+                        if (typeof options.executeSlash !== "function") throw new Error("当前对话发送入口尚未就绪");
+                        return options.executeSlash("", record.sessionId, { inputText: String(data.args?.text || "") });
+                    }).then(function (result) {
+                        post(record, { type:"dsh-tavern-helper-response", requestId:data.requestId, ok:true, result:result });
+                    }, function (error) {
+                        reportError("人物卡发送消息", error);
+                        post(record, { type:"dsh-tavern-helper-response", requestId:data.requestId, ok:false, error:String(error.message || error) });
+                    });
+                    return;
+                }
 				if (data.type !== "dsh-tavern-helper-call" || !allowedMethods.has(data.method)) return;
 				if (data.eventId && (closedEventIds.has(String(data.eventId)) || pendingEvents.get(String(data.eventId))?.finishing)) {
 					post(record, { type: "dsh-tavern-helper-response", requestId: data.requestId, ok: false, error: "事件已经结束，已拒绝迟到写入", errorCode: "TAVERN_SCRIPT_EVENT_CLOSED" });
@@ -7399,7 +7419,7 @@ window.__ModuleLoader__.load({
 				lease = { sessionId: sessionId, id: hostWindow.crypto && typeof hostWindow.crypto.randomUUID === "function" ? hostWindow.crypto.randomUUID() : String(Date.now()) + ":" + String(Math.random()) };
 				const currentLease = lease;
 				runtime = createRuntime({
-					window: hostWindow, rpc: invoke, onMutation: invalidate, foreground: foreground,
+					window: hostWindow, rpc: invoke, onMutation: invalidate, foreground: foreground, executeSlash: options.executeSlash,
 					onMvuLoadState: function (state) {
 						if (lease !== currentLease) return;
 						if (options && options.onMvuLoadState) options.onMvuLoadState(state);
@@ -7826,7 +7846,7 @@ window.__ModuleLoader__.load({
 				const record = { sessionId: sessionId, viewState: null, loadState: null, fresh: false, foregroundRunning: sessions.list.getSnapshot().byId?.[sessionId]?.running === true, stopView: null };
 				record.templatePanel = createServerTemplatePanel({ window: hostWindow, rpc: options.rpc || rpc, isActive: () => current === record });
 				record.execution = (options.createExecution || createTavernScriptExecutionModule)({
-					window: hostWindow, rpc: options.rpc || rpc,
+					window: hostWindow, rpc: options.rpc || rpc, executeSlash: options.executeSlash,
 					signals: options.signals || tavernSessionSignals,
 					invalidate: function (id) { views.invalidate(id); },
 					onIdle: function () { retire(record); },
@@ -9047,6 +9067,15 @@ window.__ModuleLoader__.load({
 		function createTavernFrameSlashExecutor(ctx, hostWindow) {
 			hostWindow = hostWindow || window;
 			return function (line, sessionId, options) {
+                if (options && typeof options.inputText === "string") {
+                    const text = options.inputText.trim();
+                    const binding = ctx.sessions.binding(sessionId);
+                    if (!text || !binding) return Promise.reject(new Error("开局消息为空或原对话已关闭"));
+                    return Promise.resolve(binding.session.prompt([{ type:"text", text:text }], "queue")).then(function (result) {
+                        if (!result?.ok) throw new Error(result?.error?.message || "消息发送失败");
+                        return { submitted:true };
+                    });
+                }
                 if (/^\/ejs(?:-refresh)?(?:\s|$)/.test(String(line))) return rpc("executeFullTemplateCommand", {text:line}, sessionId).then(function(result){return result.pipe;});
 				const draftMatch = /^\/setinput(?: ([\s\S]*))?$/.exec(String(line || ""));
                 // Preflight before touching the composer: otherwise the greedy

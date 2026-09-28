@@ -12,6 +12,7 @@ function installLegacyTavernComposer() {
   controls.append(area, button);
   document.body.append(controls);
   area.addEventListener('input', function () {
+    if (typeof window.submitTavernInput === 'function') return;
     Promise.resolve().then(function () {
       if (typeof window.triggerSlash !== 'function') throw new Error('当前对话输入框尚未就绪');
       return window.triggerSlash('/setinput ' + String(area.value || ''));
@@ -26,11 +27,11 @@ function installLegacyTavernComposer() {
   button.addEventListener('click', function () {
     const text = String(area.value || '').trim();
     if (pending || !text) return;
-    if (typeof window.triggerSlash !== 'function') throw new Error('当前对话发送入口尚未就绪');
+    if (typeof window.submitTavernInput !== 'function' && typeof window.triggerSlash !== 'function') throw new Error('当前对话发送入口尚未就绪');
     pending = true;
     button.disabled = true;
     Promise.resolve().then(function () {
-      return window.triggerSlash('/send ' + text + '|/trigger');
+      return typeof window.submitTavernInput === 'function' ? window.submitTavernInput(text) : window.triggerSlash('/send ' + text + '|/trigger');
     }).then(function () {
       if (area.value.trim() === text) area.value = '';
     }, function (error) {

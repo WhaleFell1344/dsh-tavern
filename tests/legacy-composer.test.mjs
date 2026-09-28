@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import vm from 'node:vm'
 import { helperClient } from './fixtures/helper-host-harness.mjs'
 
-function mount(send) {
+function mount(send, managed = false) {
   const nodes = []
   function element() {
     return { value: '', append(...items) { nodes.push(...items) }, setAttribute() {}, addEventListener(name, fn) { this[name] = fn } }
@@ -12,7 +12,7 @@ function mount(send) {
   const html = helperClient.buildTavernFrameDocument({ token: 'send', content: '<p>opening</p>', helperContext: { messages: [] } })
   const source = html.match(/<script data-dsh-tavern-legacy-composer>([\s\S]*?)<\/script>/)?.[1]
   assert.ok(source)
-  vm.runInNewContext(source, { document, window: { triggerSlash: send }, console: { error() {} } })
+  vm.runInNewContext(source, { document, window: managed ? { submitTavernInput: send } : { triggerSlash: send }, console: { error() {} } })
   return { nodes, area: document.getElementById('send_textarea'), button: document.getElementById('send_but') }
 }
 const tick = () => new Promise(resolve => setImmediate(resolve))
@@ -80,3 +80,14 @@ test('parent composer routes to the focused card, survives replacement and relea
   doc.activeElement = a; area.value = '已经卸载'; button.click(); releaseA(); await tick();
   assert.equal(calls.length, 3); assert.ok(errors.includes('卡片已关闭，请重新打开'));
 });
+
+test('shared sandbox composer sends exact text once without replacing the user draft', async () => {
+  const calls = []; let finish
+  const { area, button } = mount(text => { calls.push(text); return new Promise(resolve => { finish = resolve }) }, true)
+  area.value = 'A neutral opening\nLiteral | /cut is text.'
+  area.input(); await tick(); assert.equal(calls.length, 0)
+  button.click(); button.click(); await tick()
+  assert.deepEqual(calls, [area.value])
+  finish({submitted:true}); await tick()
+  assert.equal(area.value, '')
+})
