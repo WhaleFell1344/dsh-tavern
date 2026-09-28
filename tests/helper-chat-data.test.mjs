@@ -253,3 +253,13 @@ test('远端刷新不掩盖未保存变量的冲突，宿主拒绝旧楼层和�
   await assert.rejects(host.adapter.saveChatData('audit',request),/当前变量快照/)
   assert.equal((await host.open().read('audit')).tavernPluginMetadata,undefined)
 })
+
+test('prepared opening prompt persists as metadata across reopen without creating a message', async t => {
+  const host = await fixture(t), run = await host.connect()
+  const count = run.api.chat.length
+  run.api.chatMetadata.dsh_pending_opening = {text:'neutral opening\nselected options',lifecycleRevision:0}
+  await run.api.saveMetadata()
+  const reopened = await host.connect()
+  assert.equal(reopened.api.chat.length, count)
+  assert.equal(reopened.api.chatMetadata.dsh_pending_opening.text, 'neutral opening\nselected options')
+})

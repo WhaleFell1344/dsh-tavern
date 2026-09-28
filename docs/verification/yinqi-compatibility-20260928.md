@@ -53,3 +53,9 @@ Live DOM inspection distinguished a display regression from script startup failu
 The greeting wrapper now immediately displays persisted text when it differs from the original text blocks. An already-bound, single-message opening that carries the legacy waiting text has an explicit continuation button using the scoped prompt bridge; it retains setup, disables repeat clicks and displays submission errors. This does not replay a gameplay request on reload.
 
 Verification: after service restart, the actual saved session displayed binding-complete text, the continuation button, phone and system panel; the raw YINQI_BOOT fallback was absent. 76 focused tests passed, including reopening with no subsequent script DOM mutation. Build and diff checks passed. Gameplay generation was not triggered during the UI check.
+
+## Explicit opening submission
+
+At the user's request, completing the guide now stages its original prepared opening prompt in chat metadata instead of clicking the legacy send button. Reload retains the staged prompt and its lifecycle revision. Existing completed setups can use the same host button with their saved configuration. The UI states that setup is saved and no request has been sent; it shows submitting while admission is pending and submitted only after acceptance. A synchronous click guard prevents double submission, and rejection restores the button with the error.
+
+Verification: 94 focused tests passed, including prompt staging without generation, metadata persistence without an added message, exact session/prompt dispatch, and button pending/success/failure/double-click behavior. After restarting, the real saved session displayed only the unsent status and the Generate Opening button, without the old generating claim. The gameplay model request was not triggered by this display check.

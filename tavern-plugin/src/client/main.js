@@ -3154,6 +3154,11 @@ window.__ModuleLoader__.load({
 					.replace(/{{\s*char\s*}}/gi, String(state.characterName || "角色"));
 			};
 			window.submitTavernInput = function (text) { return call("submitTavernHelperInput", { text: String(text || "") }); };
+            window.stageTavernOpening = async function (text) {
+                const ctx = window.SillyTavern.getContext();
+                ctx.chatMetadata.dsh_pending_opening = { text:String(text || ""), lifecycleRevision:Number(state.lifecycleRevision || 0) };
+                await ctx.saveMetadata();
+            };
             modules.installBackgroundModel({ window: window, request: call });
 			facade = modules.installFacade({ installCompatibility: modules.installCompatibility, currentScript: currentScript, post: transport.post, createChatData: modules.createChatData, readMessage:readMessage, readCharacter:readCharacter, createLocalVariables: modules.createLocalVariables, window: window, copy: copy, request: call, context: function () { return state; },
 				Popup: modules.createPopup({ document: window.document, parent: parent, token: token }) });
@@ -3416,6 +3421,14 @@ window.__ModuleLoader__.load({
                 // Legacy parent-DOM send controls must belong to the calling
                 // sandbox, never whichever conversation currently has focus.
                 source = source.replace(/topDoc\.getElementById\((['"])(send_textarea|send_but)\1\)/g, 'document.getElementById("$2")');
+                if (source.includes("function _yqBtInit() {")) {
+                    // Saving the guide must never itself submit a model request.
+                    // Preserve its exact prepared prompt for the explicit host button.
+                    source = source.replace("sendBtn.click();", "window.stageTavernOpening(textarea.value).catch(function(error){console.error(error);});");
+                    source = source.replaceAll("正在生成专属开场白...", "配置已保存，请点击下方生成开场白按钮");
+                    source = source.replaceAll("⏳ AI正在根据你的选择生成专属开场白，请稍候...", "开局配置已保存，尚未发送生成请求。");
+                    source = source.replaceAll("（数据库推进完成后AI将自动回复，通常需要10-30秒）", "点击下方生成开场白按钮后开始生成。");
+                }
                 const checks = {
                     MvuMode: ["mvu_mode", "MVU 更新方式", "由 DSH 后台代理更新变量，无需切换卡内更新方式"],
                     MvuAutoRequest: ["mvu_autoreq", "额外模型自动请求", "由宿主调度，无需开启卡内自动请求"],
@@ -6244,21 +6257,25 @@ window.__ModuleLoader__.load({
 			}
             function TavernLegacyGreeting(props) {
                 const native = React.useRef(null), node = React.useRef(null), note = React.useRef(null);
-                const [submitted, setSubmitted] = React.useState(false);
+                const [submitState, setSubmitState] = React.useState("idle");
+                const sending = React.useRef(false);
                 const [error, setError] = React.useState("");
                 React.useLayoutEffect(function () {
-                    return mountTavernLegacyMessage({node:node.current, native:native.current, source:props.source, note:note.current, showInitial:props.modified});
-                }, [props.source, props.managedMvu, props.modified]);
+                    return mountTavernLegacyMessage({node:node.current, native:native.current, source:props.pendingOpening ? "开局配置已保存，尚未发送生成请求。" : props.source, note:note.current, showInitial:props.modified});
+                }, [props.source, props.managedMvu, props.modified, props.pendingOpening]);
                 return React.createElement("div", {className:"mes", mesid:"0", is_user:"false"},
                     React.createElement("div", {ref:native}, props.children),
                     React.createElement("div", {ref:node, "data-dsh-legacy-message":"0"}),
                     props.pendingOpening ? React.createElement("div", {className:"dsh-tavern-hint"},
-                        React.createElement("p", null, submitted ? "开场请求已提交。" : "开局配置已保存。如果之前没有发出生成请求，可在这里继续。"),
-                        React.createElement("button", {type:"button", className:"dsh-tavern-btn", disabled:submitted, onClick:async function () {
-                            setSubmitted(true); setError("");
-                            try { await props.executeSlash("", props.sessionId, {inputText:"请根据已经保存的开局配置，生成开场白并开始游戏。"}); }
-                            catch (err) { setSubmitted(false); setError(String(err && err.message || err)); }
-                        }}, submitted ? "已提交" : "继续生成开场白"),
+                        React.createElement("p", null, submitState === "sent" ? "开场请求已提交。" : submitState === "sending" ? "正在提交开场请求…" : "点击按钮后才会发送消息并生成开场白。"),
+                        React.createElement("button", {type:"button", className:"dsh-tavern-btn", disabled:submitState !== "idle", onClick:async function () {
+                            if (sending.current) return;
+                            sending.current = true; setSubmitState("sending"); setError("");
+                            try {
+                                await props.executeSlash("", props.sessionId, {inputText:props.preparedText || "请根据已经保存的开局配置，生成开场白并开始游戏。"});
+                                setSubmitState("sent");
+                            } catch (err) { sending.current = false; setSubmitState("idle"); setError(String(err && err.message || err)); }
+                        }}, submitState === "sent" ? "已提交" : submitState === "sending" ? "正在提交…" : "生成开场白"),
                         error ? React.createElement("p", {role:"alert"}, error) : null) : null,
 
                     props.managedMvu ? React.createElement("p", {ref:note, hidden:true, role:"note", className:"dsh-tavern-hint"}, "额外模型调用自动使用本局后台模型，可在“本局设置”更换，无需填写卡内 API。") : null);
@@ -6325,8 +6342,10 @@ window.__ModuleLoader__.load({
                 const legacyGreeting = settled && !sessionTransitioning && greetingId === 0 && liveState.view?.tavernRuntimePolicy?.trustedCardMode;
                 const greetingSource = helper?.messages?.[0]?.message || "";
                 const originalGreeting = (data.blocks || []).filter(block => block?.kind === "text").map(block => String(block.text || "")).join("");
-                const pendingOpening = helper?.messages?.length === 1 && greetingSource.includes("AI正在根据你的选择生成专属开场白");
-                const body = legacyGreeting ? React.createElement(TavernLegacyGreeting, {key:props.sessionId+":greeting", source:greetingSource, modified:greetingSource !== originalGreeting, pendingOpening:pendingOpening, sessionId:props.sessionId, executeSlash:props.executeSlash, managedMvu:liveState.view?.tavernMvuRuntime?.owner === "official"}, rendered) : rendered;
+                const pendingOpening = helper?.messages?.length === 1 && (greetingSource.includes("AI正在根据你的选择生成专属开场白") || greetingSource.includes("开局配置已保存，尚未发送生成请求"));
+                const preparedOpening = helper?.chatMetadata?.dsh_pending_opening;
+                const preparedText = preparedOpening?.lifecycleRevision === Number(helper?.lifecycleRevision || 0) ? preparedOpening.text : "";
+                const body = legacyGreeting ? React.createElement(TavernLegacyGreeting, {key:props.sessionId+":greeting", source:greetingSource, modified:greetingSource !== originalGreeting, pendingOpening:pendingOpening, preparedText:preparedText, sessionId:props.sessionId, executeSlash:props.executeSlash, managedMvu:liveState.view?.tavernMvuRuntime?.owner === "official"}, rendered) : rendered;
 				return React.createElement("div", { ref:historyNode, className: "dsh-tavern-assistant", "data-streaming": data.status === "running" || undefined }, body, illustration, mvuReceiptNode, inlineStatus);
 			}
 			function TavernForkAssistantAction(props) {

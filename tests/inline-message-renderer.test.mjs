@@ -1951,3 +1951,11 @@ test('reopening a script-edited greeting shows saved content before scripts muta
   assert.equal(native.hidden, true)
   stop(); dom.window.close()
 })
+
+test('guide completion stages its exact opening prompt without sending automatically', async () => {
+  const staged = [], window = { addEventListener() {}, removeEventListener() {}, clearTimeout() {}, stageTavernOpening: async text => { staged.push(text) } }
+  const sandbox = { window, console, textarea:{value:'neutral opening\nexact choices'}, sendBtn:{click(){assert.fail('must wait for explicit user action')}}, document:{createElement:()=>({remove(){}}),body:{appendChild(element){vm.runInNewContext(element.textContent,sandbox)}}} }
+  const load = vm.runInNewContext('(' + client.loadTavernHelperModule.toString() + ')', sandbox)
+  await load('function _yqBtInit() { }\nsendBtn.click();', 'guide', false)
+  assert.deepEqual(staged, ['neutral opening\nexact choices'])
+})
