@@ -280,3 +280,12 @@ test('request projection keeps exact prompt bytes without a redundant execution 
  assert.deepEqual(await engine.projectRequestProjection(request),{system:request.system,messages:request.messages})
  assert.equal(journals.size,0)
 })
+
+test('connect prepares the isolated engine without evaluating generation templates',async t=>{
+ const {engine,state,runtime,journals}=fixture(t)
+ state('s').environment.worldbooks.book.entries={0:{uid:0,comment:'[GENERATE:BEFORE]',content:'<% window.generated=true %>',constant:true,disable:false,key:[]}}
+ await engine.connect()
+ assert.equal((await runtime.inspect('s')).ready,true)
+ assert.equal(journals.size,0)
+ assert.equal((await engine.renderProjection('<%= typeof window.generated %>')).text,'undefined')
+})

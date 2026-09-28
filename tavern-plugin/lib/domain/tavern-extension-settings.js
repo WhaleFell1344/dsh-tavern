@@ -28,9 +28,10 @@ export function createTavernExtensionSettings(profileData) {
         if (own(next, key)) Object.defineProperty(merged, key, { value: next[key], enumerable: true, configurable: true, writable: true })
         else delete merged[key]
       }
+      if(isDeepStrictEqual(merged,current ?? {}))return undefined
       return merged
     })
-    return project(saved)
+    return project(saved ?? {})
   }
 
   return Object.freeze({ read, save })

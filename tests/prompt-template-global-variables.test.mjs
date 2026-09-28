@@ -19,3 +19,12 @@ test('全局变量持久化、并发合并、删除与原子冲突保护',async 
  await store.save({hp:2},{hp:2,other:3})
  assert.deepEqual(await open().read(),{hp:2})
 })
+
+test('identical global saves preserve the resource version',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'template-global-noop-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const profile=createProfileDataStore({dataRoot:root}),store=createPromptTemplateGlobalVariables(profile)
+ await store.save({hp:1});const version=await profile.version('prompt-template-variables.json')
+ assert.deepEqual(await store.save({hp:1}),{hp:1})
+ assert.deepEqual(await store.save({hp:1},{hp:1}),{hp:1})
+ assert.equal(await profile.version('prompt-template-variables.json'),version)
+})

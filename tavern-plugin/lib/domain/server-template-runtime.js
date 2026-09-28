@@ -128,7 +128,8 @@ export function createServerTemplateRuntime({ rpc, store, timeoutMs = 120000, id
         record = sessions.get(sessionId) || await start(sessionId, generation)
         record.busy = true; clearTimeout(record.idle)
         await record.initialization
-        const result = await request(record, operation === 'synchronize' ? { type: 'synchronize' } : { type: 'project', operation, input })
+        const result = operation === 'connect' ? undefined
+          : await request(record, operation === 'synchronize' ? { type: 'synchronize' } : { type: 'project', operation, input })
         if (disposed || generation !== generations.get(sessionId)) throw new Error('提示词模板任务已取消')
         job.phase = 'completed'; job.completedAt = Date.now()
         await save(sessionId, job)
@@ -155,6 +156,7 @@ export function createServerTemplateRuntime({ rpc, store, timeoutMs = 120000, id
   return {
     forSession: sessionId => ({
       historyContext: 'session',
+      connect: () => invoke(sessionId, 'connect', {}, true),
       renderInput: (text, context = {}) => invoke(sessionId, 'input', { text, context }),
       prepareWorldbook: (entries, context = {}) => invoke(sessionId, 'worldbook', { entries, context }),
       prepareWorldbookProjection: (entries, context = {}) => invoke(sessionId, 'worldbook', { entries, context }, true),

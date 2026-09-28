@@ -95,3 +95,13 @@ test('模板启用设置属于用户偏好，保存和重新加载保留原值',
   assert.deepEqual(await data.readJson('tavern-extension-settings.json'), saved)
   assert.equal((await createTavernExtensionSettings(data).read()).EjsTemplate.enabled, false)
 })
+
+test('identical settings saves preserve the resource version',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'template-settings-noop-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const profile=createProfileDataStore({dataRoot:root}),store=createTavernExtensionSettings(profile)
+ const settings={EjsTemplate:{enabled:true}}
+ await store.save(settings,{});const version=await profile.version('tavern-extension-settings.json')
+ assert.deepEqual(await store.save(settings,settings),settings)
+ assert.deepEqual(await store.save(settings,{}),settings)
+ assert.equal(await profile.version('tavern-extension-settings.json'),version)
+})

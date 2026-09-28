@@ -1,5 +1,6 @@
 import { copyJsonTree } from './domain/copy-json-tree.js'
 import { createCandidateContextReader } from './domain/candidate-context-reader.js'
+import { createCandidateWorldbookPreparation } from './domain/candidate-worldbook-preparation.js'
 import { createTemplateWindowReader, templateStateFields } from './domain/template-window-reader.js'
 import { createSessionResourceAccess } from './domain/session-resource-access.js'
 import { worldBookDisplayName } from './domain/worldbook-resource.js'
@@ -270,8 +271,13 @@ export async function apply(ctx) {
     rpc: (method, args) => dispatchMethod(method, args, true),
     onDiagnostic: diagnostic => console.warn('dsh-tavern: 服务端模板进程异常:', diagnostic)
   })
+  let candidateWorldbookPreparation
   const templateSync = createServerTemplateSync({
-    run: sessionId => fullTemplateRuntime.synchronize(sessionId),
+    run: async sessionId => {
+      const result=await fullTemplateRuntime.synchronize(sessionId)
+      if(!result?.deferred)void candidateWorldbookPreparation?.warm(sessionId)
+      return result
+    },
     onError: error => console.warn('dsh-tavern: 服务端模板显示处理失败:', str(error.message || error))
   })
   // Every scheduling caller already has this committed chat. Do not read a
@@ -766,6 +772,7 @@ export async function apply(ctx) {
   async function writeChat(chat, metadata) {
     if (deletedChatIds.has(chat.id)) throw new Error('对话已删除')
     const saved = await rawWriteChat(chat, metadata)
+    candidateWorldbookPreparation?.changed(saved,metadata)
     if (!str(metadata?.source).startsWith('candidate.mailbox.')) await syncChatSummary(saved)
     void coordinationEvents?.publish(saved.sessionId)
     scheduleTemplateSync(saved, metadata)
@@ -775,6 +782,7 @@ export async function apply(ctx) {
   async function writeChatHeader(chat, baseline, metadata) {
     if (deletedChatIds.has(chat.id)) throw new Error('对话已删除')
     const saved = await chatPersistence.writeHeader(chat, baseline, metadata)
+    candidateWorldbookPreparation?.changed(saved,metadata)
     await syncChatSummary(chat)
     void coordinationEvents?.publish(saved.sessionId)
     scheduleTemplateSync(saved, metadata)
@@ -784,6 +792,7 @@ export async function apply(ctx) {
   async function updateChat(chatId, mutation, metadata) {
     if (deletedChatIds.has(chatId)) throw new Error('对话已删除')
     const saved = await rawUpdateChat(chatId, mutation, metadata)
+    candidateWorldbookPreparation?.changed(saved,metadata)
     await syncChatSummary(saved)
     if (saved !== undefined) {
       void coordinationEvents?.publish(saved.sessionId)
@@ -799,6 +808,7 @@ export async function apply(ctx) {
   async function patchChat(chatId, revision, changes, metadata) {
     if (deletedChatIds.has(chatId)) throw new Error('对话已删除')
     const saved = await chatPersistence.patch(chatId, revision, changes, metadata)
+    candidateWorldbookPreparation?.changed(saved,metadata)
     if (saved) {
       if (!str(metadata?.source).startsWith('candidate.mailbox.')) await syncChatSummary(saved)
       void coordinationEvents?.publish(saved.sessionId)
@@ -1472,6 +1482,7 @@ export async function apply(ctx) {
       && chat.openingWorldbookSnapshot?.version === 1
 
     if (!options.openingWindow) scheduleTemplateSync(chat)
+    else void candidateWorldbookPreparation?.warm(chat.sessionId)
     const runtimeSettings = await requestPerformance.stage('settings', () => readTavernSettings())
     let scriptProgress = null
     if ((chat.mode || 'story') === 'script') {
@@ -2278,6 +2289,29 @@ export async function apply(ctx) {
     }
   }
   const candidateContextReader = createCandidateContextReader({headerForSession:chatHeaderForSession,readWindow:chatPersistence.readWindow,readChat})
+  candidateWorldbookPreparation=createCandidateWorldbookPreparation({
+    ready:sessionId=>fullTemplateRuntime.forSession(sessionId).connect(),
+    async version(sessionId){
+      const [chat,globals,settings]=await Promise.all([
+        chatHeaderForSession(sessionId,['id','sessionId','mode','requestMode','_storageRevision','settleStatus','regenInProgress',
+          'cardDefinitionSnapshot.name','openingWorldbookSnapshot.version']),
+        profileData.version('prompt-template-variables.json'),profileData.version('tavern-extension-settings.json')
+      ])
+      if(!chat || !['story','script'].includes(chat.mode) || chat.requestMode==='sillytavern' || chat.regenInProgress || ['pending','running'].includes(chat.settleStatus)
+        || !chat.cardDefinitionSnapshot || chat.openingWorldbookSnapshot?.version!==1)return null
+      return {revision:chat._storageRevision,resources:JSON.stringify([globals,settings,modelSelection(sessionId)?.model||''])}
+    },
+    async prepare(sessionId){
+      const chat=await candidateContextReader.forSession(sessionId)
+      if(!chat)throw Error('当前会话没有绑定人物卡')
+      const result=await nativeWorldBookTemplateContext(chat,await readChatCard(chat))
+      // A transient template failure is not a prepared empty worldbook.
+      if(result.diagnostics?.some(item=>['worldbook-read-failed','projection-failed'].includes(item.code)))throw Error('候选世界书准备失败，请查看模板诊断')
+      return result
+    },
+    onError:error=>console.warn('dsh-tavern: 候选上下文提前准备失败:',str(error.message||error))
+  })
+  ctx.effect(()=>()=>candidateWorldbookPreparation.dispose())
   const candidateGenerator = createCandidateGenerator({
     backgroundTasks: async chat => normalizeBackgroundTasks((await backgroundConfigForSession(chat.sessionId))?.backgroundTasks),
     store: {
@@ -2294,7 +2328,7 @@ export async function apply(ctx) {
       runCandidate: backgroundAgentRunner.run
     },
     planner: contextPlanner,
-    worldBookContext: nativeWorldBookTemplateContext,
+    worldBookContext: chat => candidateWorldbookPreparation.get(chat.sessionId),
     prompt: runtimePrompt,
     scripts: scriptContinuity,
     timeline: storyTimeline,
@@ -2755,7 +2789,10 @@ export async function apply(ctx) {
   async function onSettlementSettled(chatId, signal) {
     try {
       const latest = await chatPersistence.readSessionState(chatId)
-      if (!signal.aborted && latest) void mvuSettlementReconciler.wake(latest.sessionId)
+      if (!signal.aborted && latest) {
+        void mvuSettlementReconciler.wake(latest.sessionId)
+        void candidateWorldbookPreparation.warm(latest.sessionId)
+      }
     } catch {
       if (!signal.aborted) void mvuSettlementReconciler.scan()
     }

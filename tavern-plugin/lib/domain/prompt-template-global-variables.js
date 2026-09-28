@@ -29,6 +29,7 @@ export function createPromptTemplateGlobalVariables(profileData) {
           if (own(next, key)) Object.defineProperty(merged, key, {value: next[key], enumerable:true, writable:true, configurable:true})
           else delete merged[key]
         }
+        if(isDeepStrictEqual(merged,globals(current)))return undefined
         return {...current, global:merged, updatedAt:Date.now()}
       })
       return globals(saved)
