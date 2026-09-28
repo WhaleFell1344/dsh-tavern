@@ -16,7 +16,7 @@ docs export-ignore
 /claude export-ignore
 /scripts export-ignore
 /packaging export-ignore
-/android export-ignore
+# android/ is required by setup.sh when installing from a source archive.
 /CONTEXT.md export-ignore
 /DESIGN.md export-ignore
 # Bundled plugins also carry development-only material.
