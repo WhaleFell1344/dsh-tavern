@@ -2255,7 +2255,12 @@ window.__ModuleLoader__.load({
 			// Tavern applies enabled card regexes without ST's per-avatar opt-in.
 			// Project that host-owned permission without persisting a fabricated setting.
 			const visibleExtensionSettings = new Proxy(extensionSettings, {
+                set: function (target, key, value) {
+                    target[key] = key === "mvu_settings" && options.normalizeMvuSettings ? options.normalizeMvuSettings(value, target[key]) : value;
+                    return true;
+                },
 				get: function (target, key) {
+                    if (key === "mvu_settings" && options.projectMvuSettings) return options.projectMvuSettings(target[key]);
                     if (key === "regex" && !Array.isArray(target.regex)) return options.readGlobalRegexes ? options.readGlobalRegexes() : [];
 					if (key !== "character_allowed_regex") return target[key];
 					const allowed = Array.isArray(target[key]) ? target[key].slice() : [];
@@ -3159,8 +3164,8 @@ window.__ModuleLoader__.load({
 					.replace(/{{\s*char\s*}}/gi, String(state.characterName || "角色"));
 			};
 			window.submitTavernInput = function (text) { return call("submitTavernHelperInput", { text: String(text || "") }); };
-            modules.installBackgroundModel({ window: window, request: call });
-			facade = modules.installFacade({ readGlobalRegexes: function () { return regexGroups().global.map(rawRegex); }, installCompatibility: modules.installCompatibility, currentScript: currentScript, post: transport.post, createChatData: modules.createChatData, readMessage:readMessage, readCharacter:readCharacter, createLocalVariables: modules.createLocalVariables, window: window, copy: copy, request: call, context: function () { return state; },
+            const backgroundModel = modules.installBackgroundModel({ window: window, request: call });
+			facade = modules.installFacade({ projectMvuSettings: backgroundModel.projectMvuSettings, normalizeMvuSettings: backgroundModel.normalizeMvuSettings, readGlobalRegexes: function () { return regexGroups().global.map(rawRegex); }, installCompatibility: modules.installCompatibility, currentScript: currentScript, post: transport.post, createChatData: modules.createChatData, readMessage:readMessage, readCharacter:readCharacter, createLocalVariables: modules.createLocalVariables, window: window, copy: copy, request: call, context: function () { return state; },
 				Popup: modules.createPopup({ document: window.document, parent: parent, token: token }) });
 			let regexSaveTimer = null;
 			async function persistGlobalRegexes() {

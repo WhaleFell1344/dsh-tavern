@@ -1765,6 +1765,44 @@ window.__ModuleLoader__.load({
             }
             adapt(window.document);
             try { if (window.parent !== window && window.parent.document) adapt(window.parent.document); } catch (_) {}
+            // Expose the actual host connection through MVU's public settings contract.
+            // Serialization keeps the user's stored connection values, not adapter tokens.
+            const managedMvu = { 模型来源:'自定义', api地址:base, 密钥:'host-managed', 模型名称:model };
+            const views = new WeakMap();
+            function projectMvuSettings(value) {
+                if (!value || typeof value !== 'object') return value;
+                if (views.has(value)) return views.get(value);
+                const managed = managedMvu;
+                const configViews = new WeakMap();
+                const empty = {};
+                const proxy = new Proxy(value, { get(target, key) {
+                    if (key === 'toJSON') return () => ({ ...target });
+                    if (key !== '额外模型解析配置') return target[key];
+                    const config = target[key] && typeof target[key] === 'object' ? target[key] : empty;
+                    if (!configViews.has(config)) configViews.set(config, new Proxy(config, {
+                        get(object, field) {
+                            if (field === 'toJSON') return () => ({ ...object });
+                            return Object.hasOwn(managed, field) ? managed[field] : object[field];
+                        }
+                    }));
+                    return configViews.get(config);
+                } });
+                views.set(value, proxy);
+                return proxy;
+            }
+            function normalizeMvuSettings(next, previous) {
+                if (!next || typeof next !== 'object') return next;
+                const config = next.额外模型解析配置;
+                if (!config || typeof config !== 'object') return next;
+                const restored = { ...config };
+                for (const [key, value] of Object.entries(managedMvu)) if (restored[key] === value) {
+                    if (Object.hasOwn(previous?.额外模型解析配置 || {}, key)) restored[key] = previous.额外模型解析配置[key];
+                    else delete restored[key];
+                }
+                return { ...next, 额外模型解析配置:restored };
+            }
+            return { projectMvuSettings, normalizeMvuSettings };
+
         }
 
         function expandTavernOpeningWindow(view) {
@@ -5132,7 +5170,12 @@ window.__ModuleLoader__.load({
 			// Tavern applies enabled card regexes without ST's per-avatar opt-in.
 			// Project that host-owned permission without persisting a fabricated setting.
 			const visibleExtensionSettings = new Proxy(extensionSettings, {
+                set: function (target, key, value) {
+                    target[key] = key === "mvu_settings" && options.normalizeMvuSettings ? options.normalizeMvuSettings(value, target[key]) : value;
+                    return true;
+                },
 				get: function (target, key) {
+                    if (key === "mvu_settings" && options.projectMvuSettings) return options.projectMvuSettings(target[key]);
                     if (key === "regex" && !Array.isArray(target.regex)) return options.readGlobalRegexes ? options.readGlobalRegexes() : [];
 					if (key !== "character_allowed_regex") return target[key];
 					const allowed = Array.isArray(target[key]) ? target[key].slice() : [];
@@ -6036,8 +6079,8 @@ window.__ModuleLoader__.load({
 					.replace(/{{\s*char\s*}}/gi, String(state.characterName || "角色"));
 			};
 			window.submitTavernInput = function (text) { return call("submitTavernHelperInput", { text: String(text || "") }); };
-            modules.installBackgroundModel({ window: window, request: call });
-			facade = modules.installFacade({ readGlobalRegexes: function () { return regexGroups().global.map(rawRegex); }, installCompatibility: modules.installCompatibility, currentScript: currentScript, post: transport.post, createChatData: modules.createChatData, readMessage:readMessage, readCharacter:readCharacter, createLocalVariables: modules.createLocalVariables, window: window, copy: copy, request: call, context: function () { return state; },
+            const backgroundModel = modules.installBackgroundModel({ window: window, request: call });
+			facade = modules.installFacade({ projectMvuSettings: backgroundModel.projectMvuSettings, normalizeMvuSettings: backgroundModel.normalizeMvuSettings, readGlobalRegexes: function () { return regexGroups().global.map(rawRegex); }, installCompatibility: modules.installCompatibility, currentScript: currentScript, post: transport.post, createChatData: modules.createChatData, readMessage:readMessage, readCharacter:readCharacter, createLocalVariables: modules.createLocalVariables, window: window, copy: copy, request: call, context: function () { return state; },
 				Popup: modules.createPopup({ document: window.document, parent: parent, token: token }) });
 			let regexSaveTimer = null;
 			async function persistGlobalRegexes() {
