@@ -96,6 +96,45 @@ function Assert-LastCommand([string]$Message) {
   if ($LASTEXITCODE -ne 0) { throw $Message }
 }
 
+function Invoke-SourceDownload([string]$Uri, [string]$Destination, [int]$TimeoutSec = 300) {
+  # PowerShell 5.1's .NET sockets can be blocked while curl/Node still work.
+  # Only publish a completed download; a failed transport must not leave bytes behind.
+  $Partial = $Destination + '.download-' + [Guid]::NewGuid().ToString('N')
+  $PreviousPreference = $ErrorActionPreference
+  try {
+    $Downloaded = $false
+    $CurlCommand = Resolve-Command 'curl.exe'
+    if ($null -ne $CurlCommand) {
+      $ErrorActionPreference = 'Continue'
+      $CurlOutput = & $CurlCommand --fail --location --silent --show-error --connect-timeout 20 --max-time $TimeoutSec --output $Partial --url $Uri 2>&1
+      $Downloaded = ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $Partial -PathType Leaf))
+      $ErrorActionPreference = $PreviousPreference
+    }
+    if (-not $Downloaded) {
+      $DownloadScript = @'
+const fs = require('node:fs');
+const { pipeline } = require('node:stream/promises');
+const [url, destination, timeout] = process.argv.slice(2);
+(async () => {
+  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(Number(timeout) * 1000) });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  await pipeline(response.body, fs.createWriteStream(destination));
+})().catch(error => { console.error(error.message); process.exitCode = 1; });
+'@
+      $ErrorActionPreference = 'Continue'
+      $NodeOutput = $DownloadScript | & node - $Uri $Partial $TimeoutSec 2>&1
+      $NodeCode = $LASTEXITCODE
+      $ErrorActionPreference = $PreviousPreference
+      if ($NodeCode -ne 0) { throw "下载失败，Node 退出码 ${NodeCode}：$($NodeOutput -join "`n")" }
+    }
+    Move-Item -LiteralPath $Partial -Destination $Destination -Force
+  }
+  finally {
+    $ErrorActionPreference = $PreviousPreference
+    if (Test-Path -LiteralPath $Partial) { Remove-Item -LiteralPath $Partial -Force }
+  }
+}
+
 $PreviousDshHome = $env:DSH_HOME
 $PreviousCliHome = $env:DSH_TAVERN_CLI_HOME
 $PreviousLegacyHome = $env:DSH_TAVERN_LEGACY_DSH_HOME
@@ -286,7 +325,9 @@ try {
       Write-UpdateLog 'installer.stage.started' 'source.jsdelivr'
       $CdnSource = Join-Path $TempDir 'cdn-source'
       New-Item -ItemType Directory -Force -Path $CdnSource | Out-Null
-      $Metadata = Invoke-RestMethod -UseBasicParsing -Uri $CdnMetadataUrl -TimeoutSec 15
+      $MetadataPath = Join-Path $TempDir 'cdn-metadata.json'
+      Invoke-SourceDownload $CdnMetadataUrl $MetadataPath 15
+      $Metadata = [IO.File]::ReadAllText($MetadataPath) | ConvertFrom-Json
       if ([string]$Metadata.revision -notmatch '^[0-9a-fA-F]{40}$') { throw 'jsDelivr 运行清单缺少有效提交号。' }
       $RuntimePattern = '^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|cordis\.patch\.yml|install\.ps1|install\.sh|bin/|config/|presets/|patches/|tavern-plugin/)'
       $Files = @($Metadata.files | Where-Object { $_.path -match $RuntimePattern -and $_.path -notmatch '(^|/)(\.\.|docs|tests|__tests__|testsets)(/|$)' -and $_.sha256 -match '^[0-9a-fA-F]{64}$' })
@@ -356,12 +397,16 @@ const controller=new AbortController();
     $ProgressPreference = 'SilentlyContinue'
     try {
       if ($TargetCommit -eq '') {
-        try { $TargetCommit = (Invoke-RestMethod -UseBasicParsing -Uri $CommitUrl -TimeoutSec 15 -Headers @{ Accept = 'application/vnd.github+json' }).sha }
+        try {
+          $CommitPath = Join-Path $TempDir 'commit.json'
+          Invoke-SourceDownload $CommitUrl $CommitPath 15
+          $TargetCommit = ([IO.File]::ReadAllText($CommitPath) | ConvertFrom-Json).sha
+        }
         catch { Write-Warning '无法记录当前提交号，不影响本次安装。' }
       }
       for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
         try {
-          Invoke-WebRequest -UseBasicParsing -Uri $ArchiveUrl -OutFile $ArchivePath -TimeoutSec 120
+          Invoke-SourceDownload $ArchiveUrl $ArchivePath 120
           break
         }
         catch {

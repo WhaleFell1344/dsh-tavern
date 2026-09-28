@@ -124,13 +124,19 @@ install_source() {
   prepare_temp_root
   if command -v git >/dev/null 2>&1; then
     local candidate="${TEMP_ROOT}/git-source"
-    printf '正在通过 Git 下载 DSH Tavern……\n'
-    if git clone --filter=blob:none --no-checkout --branch main --single-branch "${REPOSITORY}" "${candidate}" \
-      && git -C "${candidate}" sparse-checkout set --no-cone '/*' '!**/docs/' \
-      && git -C "${candidate}" checkout main; then
-      replace_source "${candidate}"
-      return
-    fi
+    local attempt
+    for attempt in 1 2 3; do
+      printf '正在通过 Git 下载 DSH Tavern（第 %s/3 次）……\n' "${attempt}"
+      if git clone --filter=blob:none --no-checkout --branch main --single-branch "${REPOSITORY}" "${candidate}" \
+        && git -C "${candidate}" sparse-checkout set --no-cone '/*' '!**/docs/' \
+        && git -C "${candidate}" checkout main; then
+        replace_source "${candidate}"
+        return
+      fi
+      # A failed clone or checkout can leave a directory that blocks the next clone.
+      if [ -e "${candidate}" ]; then rm -rf -- "${candidate}"; fi
+      if [ "${attempt}" -lt 3 ]; then sleep 2; fi
+    done
   else
     printf '未检测到 Git，直接使用 GitHub 压缩包。\n'
   fi

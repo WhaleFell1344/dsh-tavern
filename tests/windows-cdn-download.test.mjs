@@ -11,7 +11,7 @@ const execute=promisify(execFile)
 test('Windows CDN downloader reuses verified files, overlaps requests, retries failures and rejects corruption',async t=>{
  const root=await mkdtemp(path.join(tmpdir(),'tavern-cdn-'))
  t.after(()=>rm(root,{recursive:true,force:true}))
- const ps=await readFile(new URL('../install.ps1',import.meta.url),'utf8')
+ const ps=(await readFile(new URL('../install.ps1',import.meta.url),'utf8')).replaceAll('\r\n','\n')
  const helper=ps.match(/WriteAllText\(\$CdnDownloader, @'\n([\s\S]*?)\n'@/)[1]
  await writeFile(path.join(root,'download.cjs'),helper)
  const files=Array.from({length:9},(_,n)=>({path:`文件 ${n}.js`,content:`contents-${n}`}))
