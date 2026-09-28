@@ -1,3 +1,5 @@
+import { diffJson } from './json-mutation.js'
+import { copyJsonTree } from './copy-json-tree.js'
 import { taskStateFields } from './task-state-reader.js'
 
 function str(value) {
@@ -58,11 +60,16 @@ export function createDurableTaskMailbox(options = {}) {
 
   const scoped = typeof store.readState === 'function' && typeof store.patchChat === 'function'
   const retryWrite = Symbol('mailbox revision conflict')
-  const readWritable = scoped ? id => store.readState(id) : id => store.readChat(id)
+  const baselines = new WeakMap()
+  const readWritable = async id => {
+    const chat=await (scoped ? store.readState(id) : store.readChat(id))
+    if(scoped && chat) baselines.set(chat,copyJsonTree(chat.taskMailbox))
+    return chat
+  }
   async function saveMailbox(chat, metadata) {
     if (!scoped) return store.writeChat(chat, metadata)
     const saved = await store.patchChat(chat.id, chat._storageRevision,
-      [{ op: 'set', path: ['taskMailbox'], value: chat.taskMailbox }],
+      diffJson(baselines.get(chat) === undefined ? {} : {taskMailbox:baselines.get(chat)}, {taskMailbox:chat.taskMailbox}),
       { ...metadata, returnProjection: taskStateFields })
     if (!saved) throw retryWrite
     return saved
@@ -248,5 +255,11 @@ export function createDurableTaskMailbox(options = {}) {
     })
   }
 
-  return Object.freeze({ submit, transition, sync, recover })
+  function startInChat(chat, taskId, operationId) {
+    const mailbox=mailboxOf(chat),task=mailbox.tasks[taskId]
+    if (!task || task.status !== 'running' || task.stage !== 'preparing') throw new Error('候选任务已过期，不能开始执行')
+    applyPatch(mailbox,task,{status:'running',stage:'generating',operationId})
+    return true
+  }
+  return Object.freeze({ submit, transition, sync, recover, startInChat })
 }

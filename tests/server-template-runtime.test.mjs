@@ -262,3 +262,21 @@ test('actual isolated template engine keeps logical floors and reads old content
  assert.equal(result.text,'10000:historical 3')
  assert.deepEqual(calls.filter(c=>c.method==='getPromptTemplateHistory').map(c=>c.args.messageId),[3])
 })
+
+test('worldbook projection preserves upstream evaluation without routine execution journals',async t=>{
+ const {engine,journals}=fixture(t)
+ const entries=[{uid:1,world:'book',ref:'entry',content:'plain',comment:'Guide',key:[],keysecondary:[],disable:false}]
+ const projected=await engine.prepareWorldbookProjection(entries,{})
+ assert.equal(projected.entries[0].content,'plain')
+ assert.equal(journals.size,0)
+ const regular=await engine.prepareWorldbook(entries,{})
+ assert.deepEqual(projected,regular)
+ assert.equal([...journals.values()].at(-1).phase,'completed')
+})
+
+test('request projection keeps exact prompt bytes without a redundant execution journal',async t=>{
+ const {engine,journals}=fixture(t)
+ const request={system:'stable\n',messages:[{role:'user',content:'next'}],model:'model'}
+ assert.deepEqual(await engine.projectRequestProjection(request),{system:request.system,messages:request.messages})
+ assert.equal(journals.size,0)
+})

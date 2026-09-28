@@ -44,5 +44,11 @@ export function createServerTemplateSync({ run, onError, delayMs = 250, maxRetry
     }, record.retryDelay)
     record.timer.unref?.()
   }
-  return { schedule, dispose() { disposed = true; for (const record of records.values()) clearTimeout(record.timer); records.clear() } }
+  function unchanged(id, version) {
+    const record=records.get(id)
+    // Only advance across the exact metadata commit; an unseen revision may
+    // contain a real display edit. Retain any already queued or running work.
+    if(record && Number.isSafeInteger(version) && record.version+1===version) record.version=version
+  }
+  return { schedule, unchanged, dispose() { disposed = true; for (const record of records.values()) clearTimeout(record.timer); records.clear() } }
 }

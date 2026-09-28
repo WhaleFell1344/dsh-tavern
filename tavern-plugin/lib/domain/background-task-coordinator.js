@@ -113,7 +113,7 @@ export function createBackgroundTaskCoordinator(options = {}) {
         if (state) chat = {...chat,...state}
       }
       let fast = (input.reuseSnapshot === true && requestId === '' || role === 'candidate' && store.readRecoveryState) && store.patchChat && Number.isSafeInteger(chat?._storageRevision)
-        && chat.timeline?.schemaVersion === 1 && Array.isArray(chat.timeline.checkpoints) && !Object.values(chat.timeline.operations || {}).some(op => op?.kind === 'body' && op.status === 'foreground-completed')
+        && chat.timeline?.schemaVersion === 1 && !Object.values(chat.timeline.operations || {}).some(op => op?.kind === 'body' && op.status === 'foreground-completed')
       let source = fast ? chat : (await store.readChat(chatId) ?? chat)
       while (true) {
         const requestedRole = str(role)
@@ -150,11 +150,15 @@ export function createBackgroundTaskCoordinator(options = {}) {
         }
         // agent.begin only changes timeline metadata. Omit historic checkpoints
         // from cloning/diffing; retain them in the returned full snapshot.
-        const projected = fast ? { timeline: { ...source.timeline, checkpoints: [] }, ...(Object.hasOwn(source, 'candidateAgent') ? { candidateAgent: source.candidateAgent } : {}) } : source
+        const projected = fast ? { ...(input.prepareCommit ? {taskMailbox:source.taskMailbox} : {}), timeline: { ...source.timeline, checkpoints: [] }, ...(Object.hasOwn(source, 'candidateAgent') ? { candidateAgent: source.candidateAgent } : {}) } : source
         const next = timeline.apply({ chat: projected, intent: { kind: 'agent.begin', role, requestId } })
+        if (input.bindExistingSession && next.value.participant?.sessionId) {
+          next.chat = timeline.apply({chat:next.chat,intent:{kind:'agent.bind',operationId:next.value.operationId,sessionId:next.value.participant.sessionId}}).chat
+        }
+        if (input.prepareCommit) next.value.startCommitted = input.prepareCommit(next.chat,next.value) === true
         if (fast) {
           const changes = diffJson(projected, next.chat)
-          const safe = changes.every(change => change.path[0] === 'candidateAgent' ||
+          const safe = changes.every(change => change.path[0] === 'candidateAgent' || input.prepareCommit && change.path[0] === 'taskMailbox' ||
             change.path[0] === 'timeline' && change.path.length > 1 && change.path[1] !== 'checkpoints')
           const saved = safe && await store.patchChat(chatId, source._storageRevision, changes,
             { source: 'background.' + requestedRole + '.begin', operationId: next.value.operationId, requestId, returnProjection: taskStateFields })
@@ -175,6 +179,7 @@ export function createBackgroundTaskCoordinator(options = {}) {
       operationId: begun.value.operationId,
       basedOn: begun.value.basedOn,
       created: begun.value.created !== false,
+      startCommitted: begun.value.startCommitted === true,
       participantRequest: begun.value.participant || {},
       participant(trace) {
         const sessionId = str(trace && (trace.traceSessionId || trace.sessionId))
@@ -194,9 +199,18 @@ export function createBackgroundTaskCoordinator(options = {}) {
             const state = await (store.readRecoveryState || store.readState)(chatId)
             const legacy = Object.values(state?.timeline?.operations || {}).some(op => op?.kind === 'body' && op.status === 'foreground-completed')
             if (state?.timeline?.schemaVersion === 1 && !legacy) {
-              const next = timeline.apply({ chat: state, intent }).chat
+              // Binding changes metadata only. Recovery projections deliberately
+              // omit rollback snapshots; never replace the entire timeline.
+              const before={timeline:{...state.timeline,checkpoints:[]},...(Object.hasOwn(state,'candidateAgent')?{candidateAgent:state.candidateAgent}:{})}
+              const next = timeline.apply({ chat: before, intent }).chat
+              // Begin may already have bound a durable reused session. Still
+              // validate the operation above; a late callback must not bypass it.
+              if (state.timeline.operations[begun.value.operationId]?.startedSessionId === sessionId &&
+                state.timeline.participants?.background?.sessionId === sessionId) {
+                return stateOnly ? state : store.readChat(chatId)
+              }
               const saved = await store.patchChat(chatId, state._storageRevision,
-                [{ op: 'set', path: ['timeline'], value: next.timeline }], {...metadata,returnProjection:taskStateFields})
+                diffJson(before,next), {...metadata,returnProjection:taskStateFields})
               if (saved) return stateOnly ? (role === 'candidate' ? saved : store.readState(chatId)) : store.readChat(chatId)
             }
           }
@@ -273,6 +287,7 @@ export function createBackgroundTaskCoordinator(options = {}) {
             for (let attempt = 0; attempt < 3; attempt++) {
               const before = (await store.readSlice(begun.chat.id, [], fields))?.chat
               if (before?.timeline?.schemaVersion !== 1 || Object.values(before.timeline.operations || {}).some(op => op?.kind === 'body' && op.status === 'foreground-completed')) break
+              before.timeline={...before.timeline,checkpoints:[]}
               const completed = timeline.complete({chat:before,operationId:begun.value.operationId,basedOn:begun.value.basedOn,
                 outcome:{status:input.status||'success',stateChanged:input.stateChanged===true,participant:input.participant||null},apply:input.apply})
               const changes = diffJson(before, completed.chat)

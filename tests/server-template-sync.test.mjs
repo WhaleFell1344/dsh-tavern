@@ -64,3 +64,19 @@ test('disabling a conversation prevents an in-flight deferral from resurrecting 
   t.mock.timers.tick(10000); await Promise.resolve()
   assert.equal(runs, 1)
 })
+
+test('metadata-only revisions do not requeue display from subsequent views or discard pending work',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']})
+ let runs=0
+ const sync=createServerTemplateSync({run:async()=>{runs++}})
+ t.after(()=>sync.dispose())
+ sync.schedule('s',1);sync.unchanged('s',2)
+ t.mock.timers.tick(250);await Promise.resolve()
+ assert.equal(runs,1)
+ sync.unchanged('s',3);sync.schedule('s',3)
+ t.mock.timers.tick(250);await Promise.resolve()
+ assert.equal(runs,1)
+ sync.unchanged('s',5);sync.schedule('s',5)
+ t.mock.timers.tick(250);await Promise.resolve()
+ assert.equal(runs,2,'a gap may hide a real edit and must refresh')
+})

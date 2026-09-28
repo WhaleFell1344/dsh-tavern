@@ -128,3 +128,15 @@ test('bounded decoded reuse skips repeated tree walks without sharing mutable re
  await tree.get(huge);io.length=0;await tree.get(huge)
  assert.ok(io.length>0,'oversized decoded values are not retained')
 })
+
+test('decoded cache budgets requested projections once instead of every nested copy',async()=>{
+ const {adapter,io}=fixture()
+ const tree=createIncrementalJsonState({...adapter,decodedCacheBytes:1300000})
+ const one=await tree.create({card:{extensions:{script:'a'.repeat(100000)}}})
+ const two=await tree.create({card:{extensions:{script:'b'.repeat(100000)}}})
+ await tree.get(one);await tree.get(two);io.length=0
+ const result=await tree.get(one)
+ assert.equal(io.length,0,'two small-enough resources must survive nested decoding in the same bounded cache')
+ result.card.extensions.script='mutated'
+ assert.equal((await tree.get(one)).card.extensions.script.length,100000)
+})

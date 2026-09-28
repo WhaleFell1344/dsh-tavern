@@ -1,3 +1,5 @@
+import { copyJsonTree } from './domain/copy-json-tree.js'
+import { createCandidateContextReader } from './domain/candidate-context-reader.js'
 import { createTemplateWindowReader, templateStateFields } from './domain/template-window-reader.js'
 import { createSessionResourceAccess } from './domain/session-resource-access.js'
 import { worldBookDisplayName } from './domain/worldbook-resource.js'
@@ -275,7 +277,10 @@ export async function apply(ctx) {
   // Every scheduling caller already has this committed chat. Do not read a
   // full history projection again just to check its mode or settlement status.
   function scheduleTemplateSync(chat, metadata) {
-    if (/^candidate\.mailbox\.|^background\.candidate\.(begin|bind)$/.test(str(metadata?.source))) return
+    if (/^candidate\.mailbox\.|^background\.candidate\.(begin|bind)$/.test(str(metadata?.source))) {
+      templateSync.unchanged(chat.sessionId,chat._storageRevision)
+      return
+    }
     templateSync.schedule(chat.sessionId, chat._storageRevision, {
       enabled: groupOfMode(chat.mode || 'story') === 'play',
       blocked: ['pending', 'running'].includes(chat.settleStatus)
@@ -887,7 +892,7 @@ export async function apply(ctx) {
     }
   })
   async function readChatCard(chat) {
-    if (chat.mode !== 'card' && chat.cardDefinitionSnapshot) return structuredClone(chat.cardDefinitionSnapshot)
+    if (chat.mode !== 'card' && chat.cardDefinitionSnapshot) return copyJsonTree(chat.cardDefinitionSnapshot)
     const card = await readCard(chat.cardPath)
     if (card === undefined) throw new Error('人物卡不存在: ' + chat.cardPath)
     return card
@@ -2272,12 +2277,13 @@ export async function apply(ctx) {
       return { context: '', refs: [], diagnostics: [{ kind: 'worldbook-template', code: 'projection-failed' }] }
     }
   }
+  const candidateContextReader = createCandidateContextReader({headerForSession:chatHeaderForSession,readWindow:chatPersistence.readWindow,readChat})
   const candidateGenerator = createCandidateGenerator({
     backgroundTasks: async chat => normalizeBackgroundTasks((await backgroundConfigForSession(chat.sessionId))?.backgroundTasks),
     store: {
-      chatForSession: chatForSession,
+      chatForSession: candidateContextReader.forSession,
       stateForSession: sessionStateForSession,
-      readChat: readChat,
+      readChat: candidateContextReader.read,
       readCard: (path, chat) => chat ? readChatCard(chat) : readCard(path),
       readCardExtensions: readCardExtensions,
       readScript: readScript,
@@ -2295,10 +2301,11 @@ export async function apply(ctx) {
     tasks: backgroundTasks,
     characterDesign: characterDesignDocuments,
     waitUntilSettled: async function (chat) {
-      let current = await readChat(chat.id)
+      let current = chat
       if (current === undefined) return
       let shouldRun = false
       if (isOpeningAwaitingSettlement(current)) {
+        current = await readChat(chat.id)
         current.settleStatus = 'running'
         current.settleError = null
         await writeChat(current, { source: 'settlement.opening-prepare' })
@@ -4422,7 +4429,7 @@ export async function apply(ctx) {
         'requestMode', 'compatibilityTraces', 'bypassPlanId', 'runtimePresetSnapshot', 'foregroundFrames'
       ])
       if (chat && ['story', 'script'].includes(chat.mode) && options.purpose === undefined && chat.requestMode !== 'sillytavern' && !fullTemplateRequests.has(options)) {
-        const projected = await fullTemplateRuntime.forSession(ownerSessionId).projectRequest({ messages: options.messages, system: options.system, model: options.model })
+        const projected = await fullTemplateRuntime.forSession(ownerSessionId).projectRequestProjection({ messages: options.messages, system: options.system, model: options.model })
         const templated = { ...options, ...projected }
         fullTemplateRequests.set(templated, options)
         yield * ctx.llm.stream(templated)

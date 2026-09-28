@@ -27,7 +27,13 @@ export function createConversationPageStore({root,onIO=()=>{},linkFile=link}={})
   if(size<=8*1024*1024){packed.set(key,{value,size});packedBytes+=size}
  }
  function decodeBlock(dir,id,bytes){
-  if(hash(bytes)===id)return JSON.parse(bytes)
+  if(hash(bytes)===id){
+   const value=JSON.parse(bytes)
+   // Content hashes are immutable across revisions. Keep small index/record
+   // blocks warm across field reads; the mutable head pointer is never cached.
+   if(Buffer.byteLength(bytes)<=64*1024)cachePacked(dir,id,value,Buffer.byteLength(bytes)*2+128)
+   return value
+  }
   let pack
   try{pack=JSON.parse(bytes)}catch{throw Error('Immutable block checksum mismatch')}
   if(pack?.kind!=='record-pack-v1'||!Array.isArray(pack.records)||pack.records.length>128)throw Error('Immutable block checksum mismatch')
@@ -81,7 +87,7 @@ export function createConversationPageStore({root,onIO=()=>{},linkFile=link}={})
   return id
  }
  function reader(dir){
-  // Page/index reads remain request-local; decoded record packs have a bounded cache.
+  // Reader-local references sit over a bounded immutable block cache.
   const cache=new Map()
   return async function readBlock(id,kind){
    if(!cache.has(id)){
@@ -115,14 +121,14 @@ export function createConversationPageStore({root,onIO=()=>{},linkFile=link}={})
   if(!node.children[slot])throw Error('History index missing page')
   return leaf(read,node.children[slot],height-1,page)
  }
- async function setLeaf(dir,read,root,height,page,messages){
-  if(height===0)return writeBlock(dir,{kind:'page',messages})
+ async function setLeaf(dir,read,root,height,page,messages,write=value=>writeBlock(dir,value)){
+  if(height===0)return write({kind:'page',messages})
   const children=root===null?[]:[...(await read(root,'index')).children]
   const slot=Math.floor(page/FANOUT**(height-1))%FANOUT
   // Explicit nulls keep sparse new branches stable after JSON serialization.
   while(children.length<=slot)children.push(null)
-  children[slot]=await setLeaf(dir,read,children[slot],height-1,page,messages)
-  return writeBlock(dir,{kind:'index',children})
+  children[slot]=await setLeaf(dir,read,children[slot],height-1,page,messages,write)
+  return write({kind:'index',children})
  }
  async function build(dir,messages){
   let refs=[]
@@ -144,19 +150,19 @@ export function createConversationPageStore({root,onIO=()=>{},linkFile=link}={})
   return lookup(read,node.children[route[depth]],key,route,depth+1)
  }
  // Batch entries by hash path so imports do not rewrite the same branch per key.
- async function putEntries(dir,read,root,updates,depth=0){
+ async function putEntries(dir,read,root,updates,depth=0,write=value=>writeBlock(dir,value)){
   const node=root?await read(root):null
   if(!node||node.kind==='entry'){
    const merged=new Map(node?[[node.key,{key:node.key,valueRef:node.valueRef,route:recordKey(node.key)}]]:[])
    for(const entry of updates)merged.set(entry.key,entry)
    updates=[...merged.values()]
-   if(updates.length===1){const {key,valueRef}=updates[0];return writeBlock(dir,{kind:'entry',key,valueRef})}
+   if(updates.length===1){const {key,valueRef}=updates[0];return write({kind:'entry',key,valueRef})}
   }else if(node.kind!=='entries')throw Error('Invalid record index')
   if(depth>=64)throw Error('Record key hash collision')
   const children=node?.kind==='entries'?{...node.children}:{},groups=new Map()
   for(const entry of updates){const slot=entry.route[depth];if(!groups.has(slot))groups.set(slot,[]);groups.get(slot).push(entry)}
-  for(const [slot,entries] of groups)children[slot]=await putEntries(dir,read,children[slot],entries,depth+1)
-  return writeBlock(dir,{kind:'entries',children})
+  for(const [slot,entries] of groups)children[slot]=await putEntries(dir,read,children[slot],entries,depth+1,write)
+  return write({kind:'entries',children})
  }
  async function create(id,input,{assertCurrent,verifyBeforePublish}={}){
   const dir=directory(id),value=copy(input)
@@ -176,7 +182,32 @@ export function createConversationPageStore({root,onIO=()=>{},linkFile=link}={})
   return result
  }
  async function commit(id,input,{assertCurrent}={}){
-  const dir=directory(id),change=copy(input),read=reader(dir)
+  const dir=directory(id),change=copy(input),diskRead=reader(dir),pending=new Map()
+  // References depend on content, not write order. Build the new immutable graph
+  // in memory, then durably flush independent blocks before publishing its head.
+  const write=async value=>{const id=hash(JSON.stringify(value));pending.set(id,value);return id}
+  const read=async (id,kind)=>{
+   if(!pending.has(id))return diskRead(id,kind)
+   const value=pending.get(id)
+   if(kind&&value.kind!==kind)throw Error('Invalid block type')
+   return value
+  }
+  async function flush(){
+   const values=[...pending.values()],directories=new Set();let index=0
+   const results=await Promise.allSettled(Array.from({length:Math.min(8,values.length)},async()=>{
+    while(index<values.length)await writeBlock(dir,values[index++],directories)
+   }))
+   const failure=results.find(result=>result.status==='rejected')
+   if(failure)throw failure.reason
+   const leaves=[...directories].filter(value=>value!==dir&&value!==path.join(dir,'blocks'))
+   let directoryIndex=0
+   const synced=await Promise.allSettled(Array.from({length:Math.min(8,leaves.length)},async()=>{
+    while(directoryIndex<leaves.length)await syncDirectory(leaves[directoryIndex++])
+   }))
+   const syncFailure=synced.find(result=>result.status==='rejected')
+   if(syncFailure)throw syncFailure.reason
+   if(directories.size){await syncDirectory(path.join(dir,'blocks'));await syncDirectory(dir)}
+  }
   if(!integer(change.expectedRevision,1)||!Array.isArray(change.append??[])||!(change.append??[]).every(record)
     ||!Array.isArray(change.edits??[])||(Object.hasOwn(change,'state')&&!record(change.state)))throw Error('Invalid commit')
   let result
@@ -207,8 +238,8 @@ export function createConversationPageStore({root,onIO=()=>{},linkFile=link}={})
    }
    let {root:treeRoot,height}=head
    const lastPage=Math.max(0,Math.ceil(count/PAGE_SIZE)-1)
-   while(lastPage>=FANOUT**height){treeRoot=await writeBlock(dir,{kind:'index',children:treeRoot?[treeRoot]:[]});height++}
-   for(const [page,messages] of pages)treeRoot=await setLeaf(dir,read,treeRoot,height,page,messages)
+   while(lastPage>=FANOUT**height){treeRoot=await write({kind:'index',children:treeRoot?[treeRoot]:[]});height++}
+   for(const [page,messages] of pages)treeRoot=await setLeaf(dir,read,treeRoot,height,page,messages,write)
    const next={...head,revision:head.revision+1,count,root:treeRoot,height,previousHeadId:reference.headId}
    if(change.records!==undefined){
     if(!Array.isArray(change.records))throw Error('Invalid keyed records')
@@ -216,15 +247,16 @@ export function createConversationPageStore({root,onIO=()=>{},linkFile=link}={})
     for(const entry of change.records){
      if(!Array.isArray(entry)||entry.length!==2)throw Error('Invalid keyed record')
      const [key,value]=entry,route=recordKey(key)
-     const valueRef=await writeBlock(dir,{kind:'record',value})
+     const valueRef=await write({kind:'record',value})
      updates.set(key,{key,valueRef,route})
     }
-    if(updates.size)next.recordRoot=await putEntries(dir,read,next.recordRoot,[...updates.values()])
+    if(updates.size)next.recordRoot=await putEntries(dir,read,next.recordRoot,[...updates.values()],0,write)
    }
-   if(Object.hasOwn(change,'state'))next.stateId=await writeBlock(dir,{kind:'state',value:change.state})
-   if(Object.hasOwn(change,'metadata'))next.metadataId=await writeBlock(dir,{kind:'metadata',value:change.metadata})
-   const headId=await writeBlock(dir,next)
+   if(Object.hasOwn(change,'state'))next.stateId=await write({kind:'state',value:change.state})
+   if(Object.hasOwn(change,'metadata'))next.metadataId=await write({kind:'metadata',value:change.metadata})
+   const headId=await write(next)
    result={revision:next.revision,snapshotId:headId}
+   await flush()
    assertCurrent?.()
    return JSON.stringify({format:FORMAT,headId})
   })

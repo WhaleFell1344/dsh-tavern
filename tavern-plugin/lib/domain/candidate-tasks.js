@@ -44,12 +44,13 @@ export function createCandidateTasks({ chats, generator, backgroundTasks, sessio
           sessionId: input.sessionId,
           messageId: input.messageId,
           guidance: input.guidance,
-          requestId: task.requestId
+          requestId: task.requestId,
+          prepareCommit: (chat, operation) => taskMailbox.startInChat(chat, taskId, operation.operationId)
           // Validation/commit/publication are one durable completion, not three
           // additional whole task checkpoints on the result delivery path.
         })
         operationId = str(prepared.operationId)
-        await taskMailbox.transition(chatId, taskId, { status: 'running', stage: 'generating', operationId })
+        if (!prepared.startCommitted) await taskMailbox.transition(chatId, taskId, { status: 'running', stage: 'generating', operationId })
         if (prepared.created === false) {
           await taskMailbox.sync(chatId, { taskId })
           return

@@ -10,7 +10,11 @@ const chat = { id: 'chat', sessionId: 'session', cardPath: 'card', cardName: 'ca
   candidates: { requestId: 'request', messageId: 'message', operationId: 'candidate', generatedAt: 123 } }
 function harness(source = chat) {
   let fullReads = 0
-  const headers = () => Object.fromEntries(taskStateFields.filter(key => key in source).map(key => [key, structuredClone(source[key])]))
+  const headers = () => {
+    const result={}
+    for(const field of taskStateFields){const parts=field.split('.');let value=source;for(const key of parts)value=value?.[key];if(value===undefined)continue;let target=result;for(const key of parts.slice(0,-1))target=target[key]??={};target[parts.at(-1)]=structuredClone(value)}
+    return result
+  }
   const reader = createTaskStateReader({
     readSlice: async (id, indices, fields) => { assert.equal(id, 'chat'); assert.deepEqual(indices, []); assert.equal(fields, taskStateFields); return { chat: headers() } },
     readState: async () => { fullReads++; return source },
@@ -51,4 +55,12 @@ test('missing slice retains legacy fallback and session header adapter owns alia
     headerForSession: async () => adopted, stateForSession: async () => { throw Error('not needed') } })
   assert.equal(await reader.read('missing'), undefined)
   assert.equal(await reader.forSession('alias'), adopted)
+})
+
+test('task reads never materialize rollback snapshots',async()=>{
+ const source={...chat,timeline:{...chat.timeline}}
+ Object.defineProperty(source.timeline,'checkpoints',{enumerable:true,get(){throw Error('rollback snapshot read')}})
+ const {reader}=harness(source)
+ assert.equal((await reader.read('chat')).timeline.branchId,'branch')
+ assert.equal((await reader.forSession('session')).timeline.checkpoints,undefined)
 })

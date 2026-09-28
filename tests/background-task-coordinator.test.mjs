@@ -1,3 +1,4 @@
+import { applyJsonChanges } from '../tavern-plugin/lib/domain/json-mutation.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createChatPersistence } from '../tavern-plugin/lib/domain/chat-persistence.js'
@@ -437,7 +438,7 @@ test('session binding can return task state without reloading story history',asy
  let fullReads=0
  const store={readChat:async()=>{fullReads++;return structuredClone(chat)},writeChat:async value=>{chat=value},updateChat:async(_id,fn)=>{chat=fn(chat);return chat},
   readState:async()=>({...structuredClone(chat),messages:[]}),
-  patchChat:async(_id,_revision,changes)=>{for(const change of changes)chat[change.path[0]]=change.value;return chat}}
+  patchChat:async(_id,_revision,changes)=>{chat=applyJsonChanges(chat,changes);return chat}}
  const task=await createBackgroundTaskCoordinator({timeline,store}).begin(chat,'settlement')
  fullReads=0
  const state=await task.bindSession('background',{stateOnly:true})
@@ -508,6 +509,7 @@ test('candidate header commit on native storage preserves messages and optional 
  const root=await mkdtemp(join(tmpdir(),'native-candidate-'));t.after(()=>rm(root,{recursive:true,force:true}))
  const p=createChatPersistence({store:createChatJournalStore({dataRoot:root,newConversations:true})}),timeline=createStoryTimeline()
  const original=timeline.apply({chat:{id:'c',sessionId:'s',messages:[{role:'assistant',text:'keep',variables:[{hp:3}]}]},intent:{kind:'ensure'}}).chat
+ original.timeline.checkpoints=[{id:'keep-checkpoint',before:{variables:{text:'old'.repeat(10000)}}}]
  await p.write(original)
  const coordinator=createBackgroundTaskCoordinator({timeline,store:{readChat:p.read,writeChat:p.write,updateChat:()=>{throw Error('full update forbidden')},patchChat:p.patch,readSlice:p.readSlice,readState:p.readSessionState}})
  const task=await coordinator.begin(await p.read('c'),'candidate',{reuseSnapshot:true})
@@ -517,4 +519,53 @@ test('candidate header commit on native storage preserves messages and optional 
  const saved=await p.read('c')
  assert.deepEqual(saved.messages,original.messages)
  assert.deepEqual(saved.candidates,{choices:[{text:'look'}]})
+ assert.deepEqual(saved.timeline.checkpoints,original.timeline.checkpoints)
+})
+
+
+test('candidate start atomically records command and existing session before execution',async()=>{
+ const h=coordinatorHarness()
+ const previous=await h.coordinator.begin(h.current(),'settlement')
+ await previous.commit({participant:{sessionId:'existing',lifetime:'chat',boundary:12}})
+ const before=h.writes.length
+ const task=await h.coordinator.begin(h.current(),'candidate',{
+  requestId:'new',bindExistingSession:true,
+  prepareCommit(chat,value){chat.taskMailbox={operationId:value.operationId};return true}
+ })
+ assert.equal(h.writes.length,before+1)
+ assert.equal(task.startCommitted,true)
+ assert.equal(h.current().taskMailbox.operationId,task.operationId)
+ assert.equal(h.current().timeline.operations[task.operationId].startedSessionId,'existing')
+ assert.equal(task.participantRequest.sessionId,'existing')
+})
+
+test('native candidate begin combines mailbox claim and reused binding without full reads or repeat writes',async t=>{
+ const {mkdtemp,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path')
+ const {createChatJournalStore}=await import('../tavern-plugin/lib/domain/chat-journal-store.js')
+ const {createDurableTaskMailbox}=await import('../tavern-plugin/lib/domain/durable-task-mailbox.js')
+ const {taskStateFields}=await import('../tavern-plugin/lib/domain/task-state-reader.js')
+ const root=await mkdtemp(join(tmpdir(),'candidate-atomic-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const p=createChatPersistence({store:createChatJournalStore({dataRoot:root,newConversations:true})}),timeline=createStoryTimeline()
+ let original=timeline.apply({chat:{id:'c',sessionId:'s',messages:[{role:'assistant',text:'keep'}]},intent:{kind:'ensure'}}).chat
+ let previous=timeline.apply({chat:original,intent:{kind:'agent.begin',role:'candidate'}})
+ original=timeline.complete({chat:previous.chat,operationId:previous.value.operationId,basedOn:previous.value.basedOn,outcome:{status:'success',participant:{sessionId:'existing',lifetime:'chat',boundary:5}}}).chat
+ await p.write(original)
+ let writes=0
+ const readState=async id=>(await p.readSlice(id,[],taskStateFields)).chat
+ const store={readChat:async()=>{throw Error('full read')},writeChat:async()=>{throw Error('full write')},updateChat:p.update,readState,readRecoveryState:readState,
+  patchChat:async(...args)=>{writes++;return p.patch(...args)}}
+ const mailbox=createDurableTaskMailbox({store})
+ const command=await mailbox.submit('c',{requestId:'candidate',kind:'candidate',startImmediately:true})
+ const task=await createBackgroundTaskCoordinator({timeline,store}).begin(await readState('c'),'candidate',{
+  requestId:'candidate',bindExistingSession:true,prepareCommit:(chat,value)=>mailbox.startInChat(chat,command.taskId,value.operationId)
+ })
+ assert.equal(writes,2,'one durable submission and one atomic operation start')
+ assert.equal(task.startCommitted,true)
+ await task.bindSession('existing',{stateOnly:true})
+ assert.equal(writes,2,'reused session acknowledgement must not commit again')
+ const restored=await p.read('c')
+ assert.equal(restored.taskMailbox.tasks[command.taskId].stage,'generating')
+ assert.equal(restored.taskMailbox.tasks[command.taskId].operationId,task.operationId)
+ assert.equal(restored.timeline.operations[task.operationId].startedSessionId,'existing')
+ assert.deepEqual(restored.messages,original.messages)
 })

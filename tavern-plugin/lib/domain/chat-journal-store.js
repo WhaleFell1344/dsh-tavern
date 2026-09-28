@@ -709,12 +709,41 @@ export function createChatJournalStore(options = {}) {
     return { ...changed, changedHeaderFields, runtimeInputChanges, layoutFrom:Math.min(...knownChanges(chatId,state).filter(frame=>frame.revision>revision).map(frame=>frame.layoutFrom ?? 0)), layoutChanged:knownChanges(chatId,state).filter(frame=>frame.revision>revision).some(frame=>frame.layoutChanged !== false), chat }
   }
 
+  function normalizePatch(chat,changes) {
+      const normalized = []
+      for (const change of changes) {
+        if (change.op === 'set' && change.value === undefined) {
+          if (!change.path.length) throw new Error('Journal root cannot be undefined')
+          const current = applyIndexedChanges(chat, normalized)
+          let parent = current
+          for (const key of change.path.slice(0,-1)) parent = parent?.[key]
+          if (!parent || typeof parent !== 'object') throw new Error('Missing mutation parent')
+          const key = change.path.at(-1)
+          if (Array.isArray(parent)) normalized.push({...change,value:null})
+          else if (Object.hasOwn(parent,key)) normalized.push({op:'delete',path:change.path})
+        } else normalized.push(jsonClone(change))
+      }
+      return normalized
+  }
+
   /** Exact-version internal commit; stale callers must use their existing merge path. */
   async function patch(chatId, expectedRevision, changes, metadata={}) {
     return serialize(chatId,async()=>{
-      if (!readCache.has(chatId)) {
-        const saved = await native.patch(chatId,expectedRevision,changes,metadata.assertCurrent,metadata.returnProjection)
-        if (saved !== null) return saved ? slice(saved.chat,[],metadata.returnProjection).chat : undefined
+      if (!readCache.has(chatId) || Array.isArray(metadata.returnProjection)) {
+        const cached=readCache.get(chatId)?.state
+        const reusable=cached?.native && cached.revision===expectedRevision
+        const normalized=reusable ? normalizePatch(cached.chat,changes) : changes
+        const saved = await native.patch(chatId,expectedRevision,normalized,metadata.assertCurrent,metadata.returnProjection)
+        if (saved !== null) {
+          // A scoped native commit must not fall back to materializing the full
+          // cached archive, nor replace that cache with a partial projection.
+          if (saved && reusable) {
+            const recent=knownChanges(chatId,cached)
+            const chat=applyIndexedChanges(cached.chat,normalized)
+            rememberState(chatId,'native:'+saved.native.view.snapshotCursor.snapshotId,{...saved,chat},rememberChanges(recent,saved.revision,normalized))
+          } else if(saved) forgetState(chatId)
+          return saved ? slice(saved.chat,[],metadata.returnProjection).chat : undefined
+        }
       }
       const state=await cachedState(chatId)
       if(!state || state.revision!==expectedRevision)return undefined
@@ -724,20 +753,7 @@ export function createChatJournalStore(options = {}) {
       const paths=layout(chatId)
       // Cache and disk must contain the same JSON. Canonicalize only changed
       // payloads, never copy the complete chat on this fast path.
-      const normalized = []
-      for (const change of changes) {
-        if (change.op === 'set' && change.value === undefined) {
-          if (!change.path.length) throw new Error('Journal root cannot be undefined')
-          const current = applyIndexedChanges(state.chat, normalized)
-          let parent = current
-          for (const key of change.path.slice(0,-1)) parent = parent?.[key]
-          if (!parent || typeof parent !== 'object') throw new Error('Missing mutation parent')
-          const key = change.path.at(-1)
-          if (Array.isArray(parent)) normalized.push({...change,value:null})
-          else if (Object.hasOwn(parent,key)) normalized.push({op:'delete',path:change.path})
-        } else normalized.push(jsonClone(change))
-      }
-      changes = normalized
+      changes = normalizePatch(state.chat,changes)
       const next=applyIndexedChanges(state.chat,changes)
       if(next.id!==chatId || revisionOf(next)!==expectedRevision+1)throw new Error('Invalid journal patch revision')
       if(state.native){

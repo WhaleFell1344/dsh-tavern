@@ -1,3 +1,4 @@
+import {copyJsonTree} from './copy-json-tree.js'
 import {createHash} from 'node:crypto'
 import {isDeepStrictEqual} from 'node:util'
 
@@ -39,7 +40,7 @@ export function createDecodedJsonCache(maxBytes = 0) {
    while (entries.size && bytes + size > maxBytes) {
     const key = entries.keys().next().value; bytes -= entries.get(key).size; entries.delete(key)
    }
-   entries.set(ref, { value: structuredClone(value), size }); bytes += size
+   entries.set(ref, { value: copyJsonTree(value), size }); bytes += size
   }
  }
 }
@@ -100,18 +101,20 @@ export function createIncrementalJsonState({read,write,decodedCacheBytes=0,decod
   for(let order=0;order<keys.length;order++)items.push([keys[order],await encode(s,value[keys[order]]),order])
   return {ref:await s.put({type:array?'array':'object',size:keys.length,nextOrder:keys.length,entries:items.length?await bucket(s,items):null})}
  }
- async function decode(s,link){
+ async function decode(s,link,cacheResult=true){
   if(own(link,'value'))return link.value
   const previous=decodedCache.get(link.ref)
-  if(previous)return structuredClone(previous.value)
+  if(previous)return copyJsonTree(previous.value)
   const node=await s.get(link.ref)
-  if(node.type==='scalar'){rememberDecoded(link.ref,node.value);return node.value}
+  if(node.type==='scalar'){if(cacheResult)rememberDecoded(link.ref,node.value);return node.value}
   if(!['object','array'].includes(node.type))throw fail('Corrupt state value')
   const value=node.type==='array'?[]:{}
   for(const [key,child] of (await entries(s,node.entries)).sort((a,b)=>a[2]-b[2])){
-   Object.defineProperty(value,key,{value:await decode(s,child),enumerable:true,writable:true,configurable:true})
+   Object.defineProperty(value,key,{value:await decode(s,child,false),enumerable:true,writable:true,configurable:true})
   }
-  rememberDecoded(link.ref,value)
+  // Budget only requested projections. Retaining every nested subtree repeats
+  // the same large strings and evicts otherwise reusable resource snapshots.
+  if(cacheResult)rememberDecoded(link.ref,value)
   return value
  }
  async function locate(s,link,parts){

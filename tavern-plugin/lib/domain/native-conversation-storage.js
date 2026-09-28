@@ -104,7 +104,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
  async function read(id,revision=Infinity,snapshotId){
   const view=snapshotId?await head(id,snapshotId):await headAtRevision(id,revision)
   if(!view)return null
-  const t=tree(id),chat=await t.get(view.state.chatHeaderRef)
+  const t=tree(id),chat=await selectedHeader(id,view)
   const messages=new Array(view.messageCount)
   let cursor=view.snapshotCursor
   while(cursor){
@@ -118,12 +118,14 @@ export function createNativeConversationStorage({dataRoot,onIO}){
  }
  async function selectedHeader(id,view,fields){
   const t=tree(id),root=view.state.chatHeaderRef
-  if(!Array.isArray(fields)&&fields!=='settlement')return t.get(root)
+  // Cache resource fields independently: a new task revision must not retain
+  // another whole header containing the same large card and evict the card.
+  const complete=!Array.isArray(fields)&&fields!=='settlement'
   const result={}
   const paths=Array.isArray(fields)?fields:await t.keys(root)
   for(const field of paths){
-   const parts=String(field).split('.').filter(Boolean)
-   if(!parts.length||parts[0]==='messages'||parts.some(part=>['__proto__','prototype','constructor'].includes(part)))continue
+   const parts=complete?[field]:String(field).split('.').filter(Boolean)
+   if(!parts.length||parts[0]==='messages'||!complete&&parts.some(part=>['__proto__','prototype','constructor'].includes(part)))continue
    let value
    if(fields==='settlement'&&field==='timeline'&&await t.type(root,'/timeline')==='object'){
     value={}
@@ -133,13 +135,13 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    if(value===undefined)continue
    let target=result
    for(const key of parts.slice(0,-1))target=target[key]??={}
-   target[parts.at(-1)]=value
+   Object.defineProperty(target,parts.at(-1),{value,enumerable:true,writable:true,configurable:true})
   }
   return result
  }
  // A window is explicitly NOT a writable Chat: coordinates refer to the pinned
  // full archive, while chat.messages contains only this bounded page.
- async function readWindow(id,{limit=48,before,revision,includeCheckpoints=false,requirePartial=false}={}){
+ async function readWindow(id,{limit=48,before,revision,includeCheckpoints=false,requirePartial=false,fields}={}){
   if(!Number.isSafeInteger(limit)||limit<1||limit>500)throw Error('Invalid history window limit')
   const view=await headAtRevision(id,revision??Infinity)
   if(!view)return null
@@ -149,7 +151,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   // Opening callers fall back to the complete view when no history is omitted.
   // Reject using pinned metadata before materializing the card and worldbook.
   if(requirePartial && from===0)return null
-  const chat=await selectedHeader(id,view,includeCheckpoints?undefined:'settlement'),t=tree(id)
+  const chat=await selectedHeader(id,view,fields ?? (includeCheckpoints?undefined:'settlement')),t=tree(id)
   const page=await pages.readHistoryPage(id,{cursor:{snapshotId:view.snapshotCursor.snapshotId,before:end},limit})
   chat.messages=[]
   for(const row of page.messages)chat.messages.push(await t.get(row.message.runtimeRef))
@@ -477,14 +479,17 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   // Task metadata changes do not touch story rows, world state or indexes.
   // Apply them directly to the header tree instead of materializing the card.
   if (Array.isArray(returnProjection) && changes.length && changes.every(change =>
-    change.op === 'set' && change.path?.length >= 1 && ['taskMailbox','timeline','candidateAgent','candidates','scriptState','_storageRevision','updatedAt'].includes(change.path[0]))) {
+    ['set','delete'].includes(change.op) && change.path?.length >= 1 && ['taskMailbox','timeline','candidateAgent','candidates','scriptState','_storageRevision','updatedAt'].includes(change.path[0]))) {
    const nextRevision=changes.find(change=>change.path[0]==='_storageRevision')?.value
    if(nextRevision!==revision+1)throw Error('Invalid journal patch revision')
    const batch=createBufferedJsonRecords({read:ref=>pages.readRecord(id,ref),writeMany:values=>pages.writeRecords(id,values)})
    let chatHeaderRef=view.state.chatHeaderRef
    for (const change of changes) {
     const p=pointer(change.path)
-    if (change.value === undefined) {
+    if (change.op === 'delete') {
+     if(await batch.tree.type(chatHeaderRef,pointer(change.path.slice(0,-1))) !== 'object')throw Error('Invalid delete')
+     chatHeaderRef=(await batch.tree.apply(chatHeaderRef,[{op:'remove',path:p}])).nextRoot
+    } else if (change.value === undefined) {
      if (await batch.tree.get(chatHeaderRef,p) !== undefined) chatHeaderRef=(await batch.tree.apply(chatHeaderRef,[{op:'remove',path:p}])).nextRoot
     } else chatHeaderRef=(await batch.tree.apply(chatHeaderRef,[{op:'set',path:p,value:JSON.parse(JSON.stringify(change.value))}])).nextRoot
    }
@@ -501,7 +506,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   }
   if(changes.some(change=>!change.path?.length || change.path[0]==='messages' &&
     (change.path.length<3 || !Number.isSafeInteger(change.path[1]) || change.path[1]<0 || change.path[1]>=view.messageCount)))return null
-  const t=tree(id),originalHeader=await t.get(view.state.chatHeaderRef),rows=new Map()
+  const t=tree(id),originalHeader=await selectedHeader(id,view),rows=new Map()
   for(const change of changes){
    if(change.path[0]!=='messages'||rows.has(change.path[1]))continue
    const position=change.path[1]

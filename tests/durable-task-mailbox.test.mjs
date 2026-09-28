@@ -1,3 +1,4 @@
+import { applyJsonChanges } from '../tavern-plugin/lib/domain/json-mutation.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -137,8 +138,9 @@ test('mailbox scoped writes retry revision conflicts without reading or overwrit
     async patchChat(id, revision, changes) {
       if (conflict) { conflict = false; chat.story = 'concurrent'; chat._storageRevision++; return undefined }
       assert.equal(revision, chat._storageRevision)
-      assert.deepEqual(changes.map(change => change.path), [['taskMailbox']])
-      chat.taskMailbox = structuredClone(changes[0].value); chat._storageRevision++
+      assert.ok(changes.every(change=>change.path[0]==='taskMailbox'))
+      if(chat.taskMailbox) assert.ok(changes.every(change=>change.path.length>1),'do not replace existing mailbox')
+      chat = applyJsonChanges(chat,changes); chat._storageRevision++
       const { story, ...state } = chat; return structuredClone(state)
     }
   } })

@@ -172,3 +172,17 @@ test('failed publication hides receipts and state together',async t=>{
  assert.deepEqual(await store.readEntries('a',['op']),{})
  assert.equal((await store.openConversation('a')).state.gold,10)
 })
+
+test('small immutable blocks survive reader calls while head publication remains fresh',async t=>{
+ const {root}=await fixture(t,4)
+ const io=[],store=createConversationPageStore({root,onIO:event=>io.push(event)})
+ const first=await store.openConversation('a')
+ io.length=0
+ first.messages[0].message.text='caller mutation'
+ assert.equal((await store.openConversation('a')).messages[0].message.text,'body 0')
+ assert.equal(io.filter(event=>event.kind==='read').length,0,'reuse immutable blocks across readers')
+ await createConversationPageStore({root}).commit('a',{expectedRevision:1,append:[{id:'external',text:'external write'}]})
+ const latest=await store.openConversation('a')
+ assert.equal(latest.revision,2)
+ assert.equal(latest.messages.at(-1).message.text,'external write')
+})

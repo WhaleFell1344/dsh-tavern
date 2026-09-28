@@ -369,19 +369,21 @@ test('cold candidate task state reads no history pages and stays detached across
  const {createTaskStateReader}=await import('../tavern-plugin/lib/domain/task-state-reader.js')
  const {persistence,root}=await fixture(t)
  const saved=await persistence.write({id:'task-state',sessionId:'session',mode:'story',cardPath:'card',
-  timeline:{schemaVersion:1,branchId:'branch',revision:1,operations:{},participants:{},checkpoints:[]},
+  timeline:{schemaVersion:1,branchId:'branch',revision:1,operations:{},participants:{},checkpoints:[{before:{large:"rollback".repeat(200000)}}]},
   candidates:{requestId:'request',messageId:'last',operationId:'candidate'},
   messages:Array.from({length:530},(_,i)=>({...row(i),turn:i+1}))})
  const io=[],cold=createChatPersistence({store:createChatJournalStore({dataRoot:root,onNativeIO:event=>io.push(event)})})
  const reader=createTaskStateReader({readSlice:cold.readSlice,readState:()=>{throw Error('must not materialize session history')}})
  const selected=await reader.read('task-state')
  assert.deepEqual(selected.candidates,saved.candidates)
- assert.deepEqual(selected.timeline,saved.timeline)
+ const {checkpoints,...metadata}=saved.timeline
+ assert.deepEqual(selected.timeline,metadata)
+ assert.ok(io.every(event=>event.bytes<65536),"rollback snapshots stay unread")
  assert.equal(selected._storageRevision,saved._storageRevision)
  assert.equal(io.filter(event=>event.type==='page').length,0)
  selected.candidates.requestId='local mutation'
  selected.timeline.operations.local={status:'running'}
- assert.deepEqual((await reader.read('task-state')).timeline,saved.timeline)
+ assert.deepEqual((await reader.read('task-state')).timeline,metadata)
  await persistence.patch('task-state',saved._storageRevision,[{op:'set',path:['candidates','requestId'],value:'new request'}])
  assert.equal((await reader.read('task-state')).candidates.requestId,'new request')
  assert.equal(io.filter(event=>event.type==='page').length,0)

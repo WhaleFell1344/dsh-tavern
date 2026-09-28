@@ -144,11 +144,13 @@ function validatedChoices(source, scriptMode, logger) {
 }
 
 function buildMessages(chat, card, selection, now, limit = 6) {
-  const source = (chat.messages || []).filter(function (message) {
-    return message !== null && typeof message === 'object' && message.role === 'assistant'
-  }).map(function (message) {
-    return { message, text: messageText(message, card, chat) }
-  }).filter(function (item) { return item.text !== '' }).slice(-Math.max(1, Number(limit) || 6))
+  const source = [], history=chat.messages || []
+  for(let index=history.length-1;index>=0 && source.length<Math.max(1,Number(limit)||6);index--){
+    const message=history[index]
+    if(message?.role!=='assistant')continue
+    const text=messageText(message,card,chat)
+    if(text!=='')source.unshift({message,text})
+  }
   const messages = []
   for (let index = 0; index < source.length; index++) {
     const item = source[index]
@@ -303,7 +305,7 @@ export function createCandidateGenerator(options) {
     let taskRun = null
     const activity = tasks.activity(chat)
     if (activity.busy) {
-      try { taskRun = await tasks.begin(chat, 'candidate', { requestId }) }
+      try { taskRun = await tasks.begin(chat, 'candidate', { requestId, bindExistingSession: true, prepareCommit: input.prepareCommit }) }
       catch (_error) { throw new Error('后台 Agent 正在执行 ' + activity.role + '，请等待完成后再生成候选项') }
     }
     function preparedValue() {
@@ -343,7 +345,7 @@ export function createCandidateGenerator(options) {
     const constantWorldBookContext = preparedWorldbook !== undefined ? preparedWorldbook.context : typeof options.stableWorldBookContext === 'function'
       ? await options.stableWorldBookContext(chat, card) : ''
     const context = await planner.plan({ purpose: 'candidate', card, chat, task, scriptWindow, constantWorldBookContext })
-    taskRun = await tasks.begin(chat, 'candidate', { requestId })
+    taskRun = await tasks.begin(chat, 'candidate', { requestId, bindExistingSession: true, prepareCommit: input.prepareCommit })
     chat = taskRun.chat
     const duplicate = preparedValue()
     if (duplicate !== null) return duplicate
@@ -504,7 +506,7 @@ export function createCandidateGenerator(options) {
         basedOn: savedCandidates.basedOn
       }
     }
-    return Object.freeze({ operationId: taskRun.operationId, basedOn: taskRun.basedOn, created: true, execute })
+    return Object.freeze({ operationId: taskRun.operationId, basedOn: taskRun.basedOn, created: true, startCommitted: taskRun.startCommitted === true, execute })
   }
 
   async function generate(input) {
