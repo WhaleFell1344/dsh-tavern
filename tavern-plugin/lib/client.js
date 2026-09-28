@@ -3809,12 +3809,59 @@ window.__ModuleLoader__.load({
 		  const ids = new Set(['send_textarea', 'send_but']);
 		  const documents = new WeakMap(), windows = new WeakMap();
 		  const jq = frame.jQuery;
+		  const anchors = new Map();
+		  let observedViewport = null;
+		  const layoutObserver = host?.ResizeObserver ? new host.ResizeObserver(function () {
+		    const rect = observedViewport?.getBoundingClientRect();
+		    if (!rect) return;
+		    // Legacy scripts observe their layout anchor's style/class changes.
+		    for (const node of anchors.values()) {
+		      const value = `--dsh-layout:${rect.left},${rect.top},${rect.width},${rect.height}`;
+		      if (node.getAttribute('style') !== value) node.setAttribute('style', value);
+		    }
+		  }) : null;
+		  if (layoutObserver) frame.addEventListener?.('pagehide', () => layoutObserver?.disconnect(), {once:true});
+		  function layoutAnchor(id) {
+		    if (!['sheld', 'top-settings-holder'].includes(id)) return null;
+		    const doc = host.document;
+		    function viewport() {
+		      let node = doc.querySelector('.dsh-tavern-assistant');
+		      for (; node && node !== doc.body; node = node.parentElement) {
+		        const style = host.getComputedStyle(node);
+		        if (/auto|scroll/.test(style.overflowY) && node.getBoundingClientRect().height > 0) {
+		          if (layoutObserver && observedViewport !== node) {
+		            layoutObserver.disconnect(); observedViewport = node; layoutObserver.observe(node);
+		          }
+		          return node;
+		        }
+		      }
+		      return null;
+		    }
+		    if (!viewport()) return null;
+		    if (!anchors.has(id)) {
+		      const node = doc.createElement('div');
+		      node.id = id;
+		      node.getBoundingClientRect = function () {
+		        const rect = viewport()?.getBoundingClientRect();
+		        if (!rect) return new host.DOMRect();
+		        return id === 'sheld' ? rect : new host.DOMRect(rect.left, 0, rect.width, rect.top);
+		      };
+		      anchors.set(id, node);
+		    }
+		    return anchors.get(id);
+		  }
+		  function lookup(doc, id) {
+		    return ids.has(id) ? frame.document.getElementById(id) : doc.getElementById(id) || layoutAnchor(id);
+		  }
+
 		  function documentView(doc) {
 		    if (documents.has(doc)) return documents.get(doc);
 		    const proxy = new Proxy({}, { get(_, key) {
-		      if (key === 'getElementById') return id => ids.has(id) ? frame.document.getElementById(id) : doc.getElementById(id);
+		      if (key === 'getElementById') return id => lookup(doc, id);
 		      if (key === 'querySelector' || key === 'querySelectorAll') return selector =>
-		        /^#(?:send_textarea|send_but)$/.test(selector) ? frame.document[key](selector) : doc[key](selector);
+		        (/^#(?:sheld|top-settings-holder)$/.test(selector) && !doc.querySelector(selector))
+		          ? (key === 'querySelector' ? layoutAnchor(selector.slice(1)) : [layoutAnchor(selector.slice(1))].filter(Boolean))
+		          : /^#(?:send_textarea|send_but)$/.test(selector) ? frame.document[key](selector) : doc[key](selector);
 		      if (key === 'defaultView') return windowView(doc.defaultView);
 		      const value = doc[key];
 		      return typeof value === 'function' ? value.bind(doc) : value;
@@ -3824,6 +3871,7 @@ window.__ModuleLoader__.load({
 		  }
 		  function jquery(selector, context) {
 		    if (typeof selector === 'string' && /^#(?:send_textarea|send_but)$/.test(selector)) return jq(frame.document.querySelector(selector));
+		    if (typeof selector === 'string' && /^#(?:sheld|top-settings-holder)$/.test(selector) && !host.document.querySelector(selector)) return jq(layoutAnchor(selector.slice(1)));
 		    if (context === documentView(host.document)) context = host.document;
 		    if (selector === documentView(host.document)) {
 		      const result = jq(host.document);

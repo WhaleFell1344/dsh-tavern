@@ -133,3 +133,25 @@ test('jQuery composer selection and parent-document find use the local controls'
   assert.equal(jq.fn,host.window.jQuery.fn)
   host.window.close(); frame.window.close()
 })
+
+test('legacy layout anchors track the conversation viewport below native navigation', async () => {
+  const { JSDOM } = await import('jsdom')
+  const host = new JSDOM('<header></header><div style="overflow-y:auto"><div class="dsh-tavern-assistant"></div></div>')
+  const frame = new JSDOM('<body></body>')
+  try {
+    const viewport = host.window.document.querySelector('header + div')
+    let rect = new host.window.DOMRect(280, 82, 416, 638)
+    viewport.getBoundingClientRect = () => rect
+    const scope = helperClient.createTavernComposerWindow(frame.window, host.window)
+    const header = scope.parent.document.getElementById('top-settings-holder')
+    const chat = scope.parent.document.getElementById('sheld')
+    assert.equal(header.getBoundingClientRect().bottom,82)
+    assert.equal(chat.getBoundingClientRect().left,280)
+    assert.equal(chat.getBoundingClientRect().width,416)
+    rect = new host.window.DOMRect(0, 96, 390, 700)
+    assert.equal(header.getBoundingClientRect().bottom,96)
+    assert.equal(chat.getBoundingClientRect().width,390)
+    assert.equal(scope.top.document.querySelector('#sheld'),chat)
+    assert.equal(host.window.document.getElementById('sheld'),null)
+  } finally {host.window.close();frame.window.close()}
+})
