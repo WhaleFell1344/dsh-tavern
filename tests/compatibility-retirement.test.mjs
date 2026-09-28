@@ -33,6 +33,8 @@ test('实验分支可以创建并重新进入兼容会话', async () => {
 test('启动恢复包含兼容与普通会话', async () => {
   const calls = []
   const context = {
+    recoverRegeneration: async () => {}, str: value => String(value || ''),
+    chatPersistence: { readWindow: async id => ({ chat: { ...chats.find(chat => chat.id === id), runtimePresetPath: 'preset' } }) },
     readChat: async id => chats.find(chat => chat.id === id),
     presetLibrary: { migrateChat: async chat => { calls.push(chat.id); return false } },
     syncChatSummary: async () => {},

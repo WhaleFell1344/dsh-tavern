@@ -35,6 +35,7 @@ export function helperHostHarness(context = {}, options = {}) {
   window.jQuery = options.jQuery
   window.XMLHttpRequest = options.XMLHttpRequest
   window.fetch = options.fetch
+  window.location = { href: "http://localhost/" }
   window.URL = URL
   window.document = { baseURI: 'http://localhost/' }
   window.window = window

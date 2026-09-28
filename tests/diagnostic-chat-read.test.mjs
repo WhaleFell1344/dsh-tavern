@@ -26,6 +26,7 @@ for (const method of ['recordMvuRuntimeDiagnostic', 'recordTavernCompatibilityCa
       return clone(value)
     })
     const context = { str: String, sanitizeMvuLoadDiagnostic, sanitizeModuleFailure, redactMvuLoadError,
+      chatHeaderForSession: id => id === 'missing' ? undefined : store.readSessionState('chat'),
       chatForSession: id => id === 'missing' ? undefined : store.read('chat'),
       sessionStateForSession: id => id === 'missing' ? undefined : store.readSessionState('chat'),
       mvuDiagnostics: { record: async (...args) => rows.push(args) },
@@ -58,6 +59,7 @@ test('deferred MVU retries read flags without cloning saved submissions or varia
       schedule: callback => { scheduled = callback; return 1 }, cancel() {} }),
     conversationRegistry: { list: async () => [{ sessionId: 's' }] },
     chatForSession: async () => { fullReads++; return structuredClone(chat) },
+    taskStateReader: { forSession: async () => projectChatSessionState(chat) },
     sessionStateForSession: async () => projectChatSessionState(chat),
     backgroundTasks: { activity: () => ({ phase: 'pending' }) },
     tavernScriptDispatch: { status: () => ({ ready: false }) },
@@ -162,6 +164,8 @@ test('skill visibility and compaction polling preserve settings without cloning 
     return { skillRoleFor, skillEnabledFor, status: async args => {
       switch ('compactionStatus') { ${source.slice(statusStart, statusEnd)} }
     } } })()`, {
+    backgroundConfigForSession: id => id === 's' ? store.readBackgroundConfig('chat') : undefined,
+    chatHeaderForSession: id => id === 's' ? store.readSessionState('chat') : undefined,
     chatForSession: id => id === 's' ? store.read('chat') : undefined,
     sessionStateForSession: id => id === 's' ? store.readSessionState('chat') : undefined,
     backgroundAgentRunner: { owns: id => id === 'background', requestContext: () => ({ task: 'variables' }) },

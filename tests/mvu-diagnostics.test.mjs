@@ -81,7 +81,7 @@ test('真实日志 RPC 保留加载字段；诊断写盘失败不向运行路径
   const start = source.indexOf("case 'recordMvuRuntimeDiagnostic':")
   const end = source.indexOf("case 'getPlayChatDebugTarget':", start)
   const store = createMvuDiagnosticStore(storage())
-  const context = { sessionStateForSession: async id => ({ sessionId: id }), str: String, sanitizeMvuLoadDiagnostic, sanitizeModuleFailure, redactMvuLoadError, mvuDiagnostics: store }
+  const context = { chatHeaderForSession: async id => ({ sessionId: id }), sessionStateForSession: async id => ({ sessionId: id }), str: String, sanitizeMvuLoadDiagnostic, sanitizeModuleFailure, redactMvuLoadError, mvuDiagnostics: store }
   const invoke = vm.runInNewContext('(async function(args){switch("recordMvuRuntimeDiagnostic"){' + source.slice(start, end) + '}})', context)
   const args = { sessionId: 's', diagnostic: { kind: 'mvu-load', phase: 'download-response', httpStatus: 403, contentType: 'text/plain' } }
   assert.equal((await invoke(args)).recorded, true)

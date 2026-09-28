@@ -42,7 +42,7 @@ async function createRuntime() {
     page,
     panel: context => run('panel', { context }),
     renderInput: (text,context={}) => run('input',{text,context}),
-    prepareWorldbook: (entries,context={}) => run('worldbook', {entries,context}),
+    prepareWorldbook: (entries,context={}) => run('worldbook', {entries,context:{...context,worldBookEntries:entries}}),
     lifecycle: context => run('lifecycle', { context }),
     history: (context,steps) => run('history',{context,steps}),
     command: (text, context={}) => run('command', { text, context }),

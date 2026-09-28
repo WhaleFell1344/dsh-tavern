@@ -1,6 +1,6 @@
 {
   "name": "dsh-profile-tavern",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "scripts": {
     "build:client": "node bin/build-tavern-client.mjs",
     "check:client": "node bin/build-tavern-client.mjs --check",

@@ -24,7 +24,7 @@ export function createServerTemplateFixture() {
   return {
     dispose: () => runtime.dispose(),
     renderInput:(text,context={})=>run(engine.renderInput,[text,context],context),
-    prepareWorldbook:(entries,context={})=>run(engine.prepareWorldbook,[entries,context],context),
+    prepareWorldbook:(entries,context={})=>run(engine.prepareWorldbook,[entries,context],{...context,worldBookEntries:entries}),
     command:(text,context={})=>run(engine.command,[text],context),
     render:(template,context={},environmentEntries)=>run(engine.render,[template,context],environmentEntries?{...context,worldBookEntries:environmentEntries}:context),
     renderProjections:(items,context={},environmentEntries)=>run(engine.renderProjections,[items,context],environmentEntries?{...context,worldBookEntries:environmentEntries}:context),

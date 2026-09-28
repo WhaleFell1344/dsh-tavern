@@ -1,3 +1,4 @@
+import { readSettlementInput } from '../tavern-plugin/lib/domain/settlement-input.js'
 import { normalizeBackgroundTasks } from '../tavern-plugin/lib/domain/tavern-settings.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -53,6 +54,7 @@ test('普通卡结算忽略旧的自动台账开关，只提交姿势并保留�
   let chat = { ledger: structuredClone(existingLedger), id: 'chat', sessionId: 'front', messages: [{ role: 'assistant', turn: 2, text: '获得解药' }] }
   let calls = 0
   const ctx = {
+    readSettlementInput, chatPersistence: { readWindow: async () => null },
     normalizeBackgroundTasks,
     readChat: async () => structuredClone(chat), prepareNextWorldBookContext: async c => c,
     backgroundTasks: { begin: async snapshot => ({ chat: snapshot, participantRequest: { sessionId: 'same-background', rewindTo: null }, participant: x => x, commit: async completion => { assert.notEqual(completion.status, 'failed', '真实结算意外进入失败分支'); assert.equal(typeof completion.apply, 'function'); completion.apply(chat); return { status: 'committed', chat } } }) },
