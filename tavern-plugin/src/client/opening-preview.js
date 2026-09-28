@@ -166,8 +166,8 @@ function installSessionOpeningBridge(token, descriptor) {
     return window.setChatMessage(swipes[index], 0, { swipe_id: index });
   } };
   if (!window.toastr) window.toastr = { info: console.info, success: console.info, warning: console.warn, error: console.error };
-  window.SillyTavern = Object.assign({}, window.SillyTavern, {
-    extensionSettings: descriptor.extensionSettings || {},
+  window.SillyTavern = Object.assign(window.SillyTavern || {}, {
+    extensionSettings: window.SillyTavern?.extensionSettings || descriptor.extensionSettings || {},
     TavernHelper: window.TavernHelper,
     chat, swipe,
     getContext: function () { return window.SillyTavern; },

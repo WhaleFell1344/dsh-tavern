@@ -270,3 +270,26 @@ test('旧存档无源版本时提示同步，但保留本局脚本写入', async
     assert.equal((await h.adapter.getWorldbook('audit', '审计书')).worldbook.entries[0].content, '本局变量变化后的内容')
   } finally { await h.cleanup() }
 })
+
+test('opening settings use the profile store and survive another preparation', async () => {
+  let saved = { mvu_settings: { 更新方式:'额外模型解析' }, regex:[] }
+  const service = createOpeningPreparation({readCard:async()=>structuredClone(card),worldBooks:{bound:async()=>null},
+    extensionSettings:{read:async()=>structuredClone(saved),save:async(next)=>{saved=structuredClone(next);return saved}}})
+  const first=await service.create('card',{runtime:true})
+  assert.equal(first.runtime.context.extensionSettings.mvu_settings.更新方式,'额外模型解析')
+  const next={...first.runtime.context.extensionSettings,mvu_settings:{更新方式:'随AI输出'}}
+  await service.callRuntime(first.id,'saveTavernExtensionSettings',{settings:next,expectedSettings:first.runtime.context.extensionSettings})
+  const second=await service.create('card',{runtime:true})
+  assert.equal(second.runtime.context.extensionSettings.mvu_settings.更新方式,'随AI输出')
+})
+
+test('session opening bridge preserves live settings identity and character getters', async () => {
+  const settings={mvu_settings:{更新方式:'额外模型解析'}}
+  let name='first'
+  const host={extensionSettings:settings,get characters(){return [{name}]}}
+  const context=vm.createContext({window:{SillyTavern:host},parent:{},console,addEventListener(){},setTimeout,clearTimeout})
+  vm.runInContext(await readFile(new URL('../tavern-plugin/src/client/opening-preview.js',import.meta.url),'utf8'),context)
+  context.installSessionOpeningBridge('test',{swipes:['start'],selectedIndex:0,openingIds:['primary'],extensionSettings:{}})
+  assert.equal(context.window.SillyTavern.extensionSettings,settings)
+  name='second';assert.equal(context.window.SillyTavern.characters[0].name,'second')
+})

@@ -3647,8 +3647,8 @@ window.__ModuleLoader__.load({
 		    return window.setChatMessage(swipes[index], 0, { swipe_id: index });
 		  } };
 		  if (!window.toastr) window.toastr = { info: console.info, success: console.info, warning: console.warn, error: console.error };
-		  window.SillyTavern = Object.assign({}, window.SillyTavern, {
-		    extensionSettings: descriptor.extensionSettings || {},
+		  window.SillyTavern = Object.assign(window.SillyTavern || {}, {
+		    extensionSettings: window.SillyTavern?.extensionSettings || descriptor.extensionSettings || {},
 		    TavernHelper: window.TavernHelper,
 		    chat, swipe,
 		    getContext: function () { return window.SillyTavern; },
@@ -5133,6 +5133,7 @@ window.__ModuleLoader__.load({
 			// Project that host-owned permission without persisting a fabricated setting.
 			const visibleExtensionSettings = new Proxy(extensionSettings, {
 				get: function (target, key) {
+                    if (key === "regex" && !Array.isArray(target.regex)) return options.readGlobalRegexes ? options.readGlobalRegexes() : [];
 					if (key !== "character_allowed_regex") return target[key];
 					const allowed = Array.isArray(target[key]) ? target[key].slice() : [];
 					const character = context().character;
@@ -5205,6 +5206,7 @@ window.__ModuleLoader__.load({
 					const character = options.readCharacter ? options.readCharacter() : context().character;
 					if (!character || typeof character !== "object") return [];
 					const current = copy(character);
+                    if (!current.data) current.data = copy(character);
 					if (!current.avatar) current.avatar = String(current.path || "");
 					return [current];
 				},
@@ -6035,7 +6037,7 @@ window.__ModuleLoader__.load({
 			};
 			window.submitTavernInput = function (text) { return call("submitTavernHelperInput", { text: String(text || "") }); };
             modules.installBackgroundModel({ window: window, request: call });
-			facade = modules.installFacade({ installCompatibility: modules.installCompatibility, currentScript: currentScript, post: transport.post, createChatData: modules.createChatData, readMessage:readMessage, readCharacter:readCharacter, createLocalVariables: modules.createLocalVariables, window: window, copy: copy, request: call, context: function () { return state; },
+			facade = modules.installFacade({ readGlobalRegexes: function () { return regexGroups().global.map(rawRegex); }, installCompatibility: modules.installCompatibility, currentScript: currentScript, post: transport.post, createChatData: modules.createChatData, readMessage:readMessage, readCharacter:readCharacter, createLocalVariables: modules.createLocalVariables, window: window, copy: copy, request: call, context: function () { return state; },
 				Popup: modules.createPopup({ document: window.document, parent: parent, token: token }) });
 			let regexSaveTimer = null;
 			async function persistGlobalRegexes() {

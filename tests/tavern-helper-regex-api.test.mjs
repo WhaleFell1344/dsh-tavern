@@ -99,3 +99,11 @@ test('CHAT_CHANGED 自动开启局部正则读取宿主实际启用状态，不�
   run.reply(call, { updated: true, extensionSettings: call.args.settings })
   await save
 })
+
+test('legacy self checks can read empty global regexes and v2 character script paths', () => {
+  const scripts=[{id:'script',name:'Example',enabled:true}]
+  const w=helperHostHarness({extensionSettings:{},character:{name:'Example',extensions:{TavernHelper_scripts:scripts}},regexScripts:{global:[],character:[]}}).window
+  assert.equal(Array.isArray(w.SillyTavern.extensionSettings.regex),true)
+  assert.equal(w.SillyTavern.extensionSettings.regex.length,0)
+  assert.equal(w.SillyTavern.characters[w.SillyTavern.characterId].data.extensions.TavernHelper_scripts[0].name,'Example')
+})

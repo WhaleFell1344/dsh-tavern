@@ -11,8 +11,8 @@ import { projectTavernHelperWorldbook, replaceTavernHelperWorldbookOperations } 
 
 const copy = value => structuredClone(value)
 
-/** Private pre-game host state. No Session or shared resource is written here. */
-export function createOpeningPreparation({ readCard, worldBooks, generateRaw, readRuntimeExtensions, now = Date.now }) {
+/** Private pre-game state; explicit plugin-setting saves use the profile store. */
+export function createOpeningPreparation({ readCard, worldBooks, generateRaw, readRuntimeExtensions, extensionSettings, now = Date.now }) {
   const drafts = new Map()
   const lifetime = 2 * 60 * 60 * 1000
   function requireDraft(id) {
@@ -28,7 +28,7 @@ export function createOpeningPreparation({ readCard, worldBooks, generateRaw, re
     return { ...projectTavernHelperContext(draft.chat), worldbook: draft.document ? projectTavernHelperWorldbook(inspectWorldBookDocument(draft.document)) : null,
       characterName: draft.card.name, playerName: draft.userName, character: copy(draft.card),
       globalVariables: copy(draft.globalVariables || {}), characterVariables: copy(draft.characterVariables || {}),
-      extensionSettings: copy(draft.extensionSettings), regexScripts: { global: [], character: [] } }
+      extensionSettings: copy(draft.extensionSettings), regexScripts: copy(draft.regexScripts || { global: [], character: [] }) }
   }
   function present(draft) {
     return copy({ id: draft.id, cardPath: draft.cardPath, openings: draft.openings,
@@ -57,9 +57,10 @@ export function createOpeningPreparation({ readCard, worldBooks, generateRaw, re
       const extensions = settings.extensions || (readRuntimeExtensions ? await readRuntimeExtensions(cardPath) : {})
       const projected = projectTavernHelperScripts(extensions.helperScripts)
       draft.helperScripts = projected.scripts
+      draft.regexScripts = { global: extensions.globalRegexScripts || [], character: extensions.characterRegexScripts || extensions.regexScripts || [] }
       draft.diagnostics = projected.diagnostics.concat(extensions.diagnostics || [])
       draft.runtimeEnabled = projected.scripts.length > 0
-      draft.extensionSettings = {}
+      draft.extensionSettings = extensionSettings ? await extensionSettings.read() : {}
       if (settings.runtime === true) { draft.extensionSettings.EjsTemplate = { enabled: true }; draft.runtimeEnabled = true }
       draft.chat.sessionId = 'opening:' + draft.id
       drafts.set(draft.id, draft)
@@ -127,7 +128,7 @@ export function createOpeningPreparation({ readCard, worldBooks, generateRaw, re
         replaceTavernHelperMessages(draft.chat, args.messages)
       } else if (method === 'saveTavernExtensionSettings') {
         if (JSON.stringify(draft.extensionSettings) !== JSON.stringify(args.expectedSettings)) throw new Error('设置已变化，请重新读取')
-        draft.extensionSettings = copy(args.settings)
+        draft.extensionSettings = extensionSettings ? await extensionSettings.save(args.settings, args.expectedSettings) : copy(args.settings)
         draft.chat._storageRevision++
         return { updated: true, extensionSettings: copy(draft.extensionSettings), context: runtimeContext(draft) }
       } else if (method === 'recordMvuRuntimeDiagnostic' || method === 'recordMvuLoadDiagnostic') {
