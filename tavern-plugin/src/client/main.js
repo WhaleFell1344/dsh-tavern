@@ -5827,6 +5827,8 @@ window.__ModuleLoader__.load({
 			return [{ kind: "markdown", text: String(projection.text || "") }];
 		}
 
+        // @include inline-fragment.js
+
 		function renderTavernProjection(projection, options) {
 			const h = React.createElement;
 			const parts = projectionPartsOf(projection);
@@ -5840,6 +5842,9 @@ window.__ModuleLoader__.load({
 			return parts.map(function (part, index) {
 				if (part.kind === "markdown") return h(TavernColoredMarkdown, { key: index, text: String(part.text || ""), streaming: options.streaming, labels: { code: options.codeLabels, footnotes: "脚注" }, codeLabels: options.codeLabels, fileMentions: options.mentions });
 				const content = String(part.content !== undefined ? part.content : part.html || "");
+                if (options.trustedCardMode === true && !options.openingPreview && parseTavernInlineFragment(content, window.document)) {
+                    return h(TavernInlineFragment, {key:index, content:content});
+                }
 				return h(TavernMessageFrame, { key: index, content: content, sessionId: options.sessionId, turn: options.turn, partIndex: index, frameOwner: options.frameOwner, frameSizing: options.frameSizing, helperContext: options.helperContext, helperContextReader: options.helperContextReader, openingPreview: options.openingPreview, onSelectOpening: options.onSelectOpening, onSubmitOpening: options.onSubmitOpening, trustedCardMode: options.trustedCardMode, eager: options.eagerFrame, executeSlash: options.executeSlash });
 			});
 		}
@@ -11645,6 +11650,9 @@ window.__ModuleLoader__.load({
 		exports.installOpeningHostComposer = installOpeningHostComposer;
         exports.installFrameHostComposer = installFrameHostComposer;
         exports.createTavernComposerWindow = createTavernComposerWindow;
+        exports.parseTavernInlineFragment = parseTavernInlineFragment;
+        exports.TavernInlineFragment = TavernInlineFragment;
+        exports.renderTavernProjection = renderTavernProjection;
 		exports.createConversationLifecycleModule = createConversationLifecycleModule;
 		exports.createConversationHostAdapter = createConversationHostAdapter;
 		exports.createConversationPrewarmModule = createConversationPrewarmModule;
