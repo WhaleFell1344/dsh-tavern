@@ -1796,3 +1796,9 @@ header .nL4_yW_moreButton { display: none !important; }
 body.dsh-tavern-shell-active > :is([role="tree"], [role="menu"], [role="listbox"]):not([data-dsh-tavern-host-artifact]) {
   z-index: 2147483647 !important;
 }
+
+/* Opening preparation can use the entire available height. */
+.dsh-tavern-picker-overlay:has(.dsh-tavern-greeting-preview) { padding-block: 0; }
+.dsh-tavern-card-picker:has(.dsh-tavern-greeting-preview) { max-height: 100dvh; padding-block: 8px; }
+.dsh-tavern-card-picker:has(.dsh-tavern-greeting-preview) .dsh-tavern-card-picker-head { flex-wrap: wrap; }
+.dsh-tavern-card-picker:has(.dsh-tavern-greeting-preview) .dsh-tavern-picker-foot { position: static; margin: 0; padding: 8px 0 0; }
