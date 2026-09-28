@@ -53,7 +53,7 @@ test('legacy channel connection is automatic while stored settings and feature s
     env.window.document.body.innerHTML = '<div><div><input id="yq-api-url"></div><div><input id="yq-api-key"></div><div><input id="yq-api-model"></div><input id="yq-api-autogen" type="checkbox"></div>'
     await new Promise(resolve => setTimeout(resolve, 0))
     assert.equal(env.window.document.querySelector('#yq-api-url').parentElement.hidden, true)
-    assert.equal(env.window.document.querySelectorAll('[data-dsh-background-model]').length, 1)
+    assert.equal(env.window.document.querySelectorAll('[data-dsh-background-model]').length, 0)
     assert.equal(env.window.document.querySelector('#yq-api-autogen').hidden, false)
   } finally { env.close() }
 })

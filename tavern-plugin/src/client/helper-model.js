@@ -77,12 +77,7 @@ function installTavernBackgroundModel({ window, request }) {
                 input.value = value;
                 const row = id === 'api-ch-key' ? input.parentElement?.parentElement : input.parentElement;
                 if (row) row.hidden = true;
-                if (id.endsWith('-url') && row?.parentNode) {
-                    const note = document.createElement('p');
-                    note.dataset.dshBackgroundModel = 'true';
-                    note.textContent = '自动使用本局后台模型，无需配置 API。';
-                    row.before(note);
-                }
+
             }
             const selector = '.api-ch-fetch-btn,.api-ch-manual-model-btn,.api-ch-copy-chat-btn,.api-ch-sync-all-btn,#yq-api-copy-chat';
             if (root.matches?.(selector)) root.hidden = true;
