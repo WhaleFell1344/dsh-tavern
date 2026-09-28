@@ -2444,6 +2444,7 @@ window.__ModuleLoader__.load({
             modules.applyVariableReceipt.turnFields = modules.createTurnFieldIndex({createIndex:modules.createOrderedNumericIndex,visit:function(){}});
             const initializationTiming = modules.createInitializationTiming({ report: function (timings) { parent.postMessage({ type: "dsh-tavern-mvu-load-diagnostic", token: metadata.token, diagnostic: { phase: "initialization-timing", timings: timings } }, "*"); } });
             window.__dshTavernInitializationTiming = initializationTiming;
+            window.__dshTavernManagedMvu = initialContext.mvuEnabled === true;
             window.addEventListener("pagehide", initializationTiming.dispose, { once: true });
 			try { void window.localStorage; }
 			catch (_) {
@@ -3407,6 +3408,23 @@ window.__ModuleLoader__.load({
 		}
 
 		function loadTavernHelperModule(source, scriptId, previewScope) {
+            // This legacy guide diagnoses SillyTavern's client-owned MVU pipeline.
+            // DSH owns settlement and credentials; do not let its repair actions
+            // turn on a second client-side updater merely to satisfy the guide.
+            if (scriptId !== "__dsh_official_mvu__") {
+                const checks = {
+                    MvuMode: ["mvu_mode", "MVU 更新方式", "由 DSH 后台代理更新变量，无需切换卡内更新方式"],
+                    MvuAutoRequest: ["mvu_autoreq", "额外模型自动请求", "由宿主调度，无需开启卡内自动请求"],
+                    MvuWbFilter: ["mvu_wb_filter", "变量解析减负（世界书过滤）", "由宿主组织变量上下文，不使用此处全局过滤设置"],
+                    MvuNotify: ["mvu_notify", "MVU 通知开关", "变量更新错误由宿主显示，无需修改卡内通知开关"],
+                    ExtraModel: ["extra_model", "额外模型 API 配置", "自动使用本局后台模型，无需填写卡内密钥；此项不代表连接测试"]
+                };
+                for (const [name, [id, title, msg]] of Object.entries(checks)) {
+                    const signature = "function _yqDiagCheck" + name + "() {";
+                    const result = JSON.stringify({ id, title, msg, sev:"red", ok:true, info:true, fixable:false });
+                    source = source.replace(signature, signature + "\nif (window.__dshTavernManagedMvu === true) return " + result + ";\n");
+                }
+            }
 			// Card pages may declare a lexical `$` that shadows window.jQuery.
 			// Bind the managed MVU module to its runtime dependency, not page globals.
 			if (scriptId === "__dsh_official_mvu__") source = "const $ = window.jQuery;\n" + source;
@@ -11560,6 +11578,7 @@ window.__ModuleLoader__.load({
 		exports.ensureTavernHostJQuery = ensureTavernHostJQuery;
 		exports.ensureTavernHostJQueryUi = ensureTavernHostJQueryUi;
 		exports.installTavernTrustedHostFacade = installTavernTrustedHostFacade;
+        exports.loadTavernHelperModule = loadTavernHelperModule;
         exports.installTavernBackgroundModel = installTavernBackgroundModel;
         exports.mountTavernLegacyMessage = mountTavernLegacyMessage;
 		exports.releaseTavernHostJQueryHandlers = releaseTavernHostJQueryHandlers;

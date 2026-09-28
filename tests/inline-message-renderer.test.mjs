@@ -1893,3 +1893,22 @@ test('懒读取的历史楼层保存插件数据时不误判变量被修改', as
   assert.equal(submitted.variableUpdates,undefined)
   assert.equal(submitted.messages[0].data.note,1)
 })
+
+test('managed MVU self-check reports host ownership without enabling legacy repair actions', async () => {
+  for (const managed of [true, false]) {
+    const window = { __dshTavernManagedMvu: managed, addEventListener() {}, removeEventListener() {}, clearTimeout() {} }
+    const results = []
+    const sandbox = { window, results, console, document: { createElement: () => ({ remove() {} }), body: { appendChild(element) { vm.runInNewContext(element.textContent, sandbox) } } } }
+    const load = vm.runInNewContext('(' + client.loadTavernHelperModule.toString() + ')', sandbox)
+    const checks = ['MvuMode', 'MvuAutoRequest', 'MvuWbFilter', 'MvuNotify', 'ExtraModel']
+    const source = checks.map(name => 'function _yqDiagCheck' + name + '() { return {ok:false, fixable:true}; }\nresults.push(_yqDiagCheck' + name + '());').join('\n')
+    await load(source, 'guide', false)
+    assert.equal(results.length, 5)
+    for (const result of results) {
+      assert.equal(result.ok, managed)
+      assert.equal(result.fixable, !managed)
+      if (managed) assert.ok(!result.fixKind)
+    }
+    assert.match(results[4].msg || '', managed ? /不代表连接测试/ : /^$/)
+  }
+})
