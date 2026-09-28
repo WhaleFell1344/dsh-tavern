@@ -63,6 +63,7 @@ test('后台 MVU 命令只在隔离草稿执行并原子提交，协议不进入
   let adapter
   const writes = []
   const adapterOptions = {
+    globalVariables: { read: async () => ({ keep: 1 }), save: async () => { throw Error('transaction must not persist globals') } },
     resolveChat: async function () { return value },
     writeChat: async function (draft, metadata) {
       writes.push({ draft: structuredClone(draft), metadata })
@@ -73,6 +74,12 @@ test('后台 MVU 命令只在隔离草稿执行并原子提交，协议不进入
     scriptDispatch: {
       async dispatch(_sessionId, _name, _args, context, work) {
         assert.match(context.messages[0].message, /<UpdateVariable>/)
+        for (const extra_analysis of [false, true, false]) {
+          const result = await adapter.updateVariables('session-1', { type: 'global' }, { keep: 1, extra_analysis }, 2, work.eventId)
+          assert.equal(result.globalVariables.extra_analysis, extra_analysis)
+        }
+        await assert.rejects(adapter.updateVariables('session-1', { type: 'global' }, { keep: 2 }, 2, work.eventId), /跨对话的全局变量/)
+
         await adapter.updatePrompts('session-1', { kind: 'inject', prompts: [{ id: 'event', content: '当前事件', position: 'in_chat', depth: 0, role: 'system' }] }, 2, work.eventId)
         await adapter.updateMessages('session-1', [{
           message_id: 0,

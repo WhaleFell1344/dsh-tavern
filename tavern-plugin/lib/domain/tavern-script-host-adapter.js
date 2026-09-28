@@ -240,7 +240,16 @@ export function createTavernScriptHostAdapter(options = {}) {
     if (option && option.type === 'global') {
       if (!options.globalVariables || typeof options.globalVariables.save !== 'function') throw new Error('全局变量存储未连接')
       const transaction = settlementTransactions.get(str(sessionId))
-      if (transaction) throw new Error('MVU 结算事务不能修改跨对话的全局变量')
+      if (transaction) {
+        const previous = transaction.globalVariables || await options.globalVariables.read()
+        const next = variables && typeof variables === 'object' && !Array.isArray(variables) ? variables : {}
+        // Official MVU uses this global as an execution flag, not shared game
+        // state. Keep it local to the settlement and retain cross-chat guards.
+        const withoutRuntimeFlag = value => { const copy = { ...value }; delete copy.extra_analysis; return copy }
+        if (!isDeepStrictEqual(withoutRuntimeFlag(previous), withoutRuntimeFlag(next))) throw new Error('MVU 结算事务不能修改跨对话的全局变量')
+        transaction.globalVariables = structuredClone(next)
+        return { updated: true, transactional: true, target: { type: 'global' }, globalVariables: structuredClone(next) }
+      }
       const saved = await options.globalVariables.save(variables && typeof variables === 'object' && !Array.isArray(variables) ? variables : {})
       return { updated: true, target: { type: 'global' }, globalVariables: structuredClone(saved) }
     }
