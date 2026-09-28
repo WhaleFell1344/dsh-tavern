@@ -45,3 +45,11 @@ The final guide step writes its setup and then finds `topDoc.getElementById("sen
 Shared scripts now receive sandbox-owned legacy controls. Those parent-DOM lookups are redirected to the calling sandbox; submissions use a scoped Helper message and the original session's prompt API. Text is sent literally (no slash-pipeline parsing), pending clicks are deduplicated, the user's composer draft is untouched, and inactive/stale runtimes are rejected with a surfaced error. Existing message-frame/preparation composer behavior remains intact.
 
 Validation uses neutral payloads for the old DOM lookup, duplicate clicks, exact prompt dispatch, failure retention, and existing lifecycle/chat-data regressions. No card gameplay request was generated during verification. Already-completed guide callbacks are not replayed after refresh; their saved configuration remains available and the user can submit a continuation from the normal composer.
+
+## Reopen saved greeting projection
+
+Live DOM inspection distinguished a display regression from script startup failure: phone/system widgets were present, while the hidden legacy message contained the persisted binding-complete message and the visible React subtree still showed the original YINQI_BOOT text. The guide intentionally skips boot rendering once its raw message no longer contains the marker. The wrapper previously revealed saved text only after a new script DOM mutation, which never arrives in this state.
+
+The greeting wrapper now immediately displays persisted text when it differs from the original text blocks. An already-bound, single-message opening that carries the legacy waiting text has an explicit continuation button using the scoped prompt bridge; it retains setup, disables repeat clicks and displays submission errors. This does not replay a gameplay request on reload.
+
+Verification: after service restart, the actual saved session displayed binding-complete text, the continuation button, phone and system panel; the raw YINQI_BOOT fallback was absent. 76 focused tests passed, including reopening with no subsequent script DOM mutation. Build and diff checks passed. Gameplay generation was not triggered during the UI check.

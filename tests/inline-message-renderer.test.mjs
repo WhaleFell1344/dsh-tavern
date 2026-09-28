@@ -1935,3 +1935,19 @@ test('legacy parent send lookup resolves only to calling sandbox controls', asyn
   assert.equal(result[0], 'neutral')
   assert.equal(result[1], fields.send_but)
 })
+
+test('reopening a script-edited greeting shows saved content before scripts mutate DOM', async () => {
+  const { JSDOM } = await import('jsdom')
+  const dom = new JSDOM('<div id="native">YINQI_BOOT original startup instructions</div><div id="owned"></div>')
+  const document = dom.window.document, native = document.getElementById('native'), node = document.getElementById('owned')
+  const saved = 'Setup saved. Waiting for opening.'
+  const stop = client.mountTavernLegacyMessage({ node, native, source:saved, showInitial:true })
+  assert.equal(node.hidden, false)
+  assert.equal(native.hidden, true)
+  assert.equal(node.textContent, saved)
+  // A card may deliberately skip boot rendering once setup was saved.
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(node.hidden, false)
+  assert.equal(native.hidden, true)
+  stop(); dom.window.close()
+})

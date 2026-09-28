@@ -3562,10 +3562,12 @@ window.__ModuleLoader__.load({
             text.textContent = String(options.source || "");
             node.appendChild(text);
             const initial = text.textContent;
-            node.hidden = true;
+            node.hidden = !options.showInitial;
+            native.hidden = Boolean(options.showInitial);
+            text.style.whiteSpace = "pre-wrap";
             const Observer = options.MutationObserver || node.ownerDocument.defaultView.MutationObserver;
             const observer = new Observer(function () {
-                const replaced = text.childElementCount > 0 || text.textContent !== initial;
+                const replaced = Boolean(options.showInitial) || text.childElementCount > 0 || text.textContent !== initial;
                 node.hidden = !replaced;
                 native.hidden = replaced;
                 if (options.note) options.note.hidden = !replaced;
@@ -6242,12 +6244,23 @@ window.__ModuleLoader__.load({
 			}
             function TavernLegacyGreeting(props) {
                 const native = React.useRef(null), node = React.useRef(null), note = React.useRef(null);
+                const [submitted, setSubmitted] = React.useState(false);
+                const [error, setError] = React.useState("");
                 React.useLayoutEffect(function () {
-                    return mountTavernLegacyMessage({node:node.current, native:native.current, source:props.source, note:note.current});
-                }, [props.source, props.managedMvu]);
+                    return mountTavernLegacyMessage({node:node.current, native:native.current, source:props.source, note:note.current, showInitial:props.modified});
+                }, [props.source, props.managedMvu, props.modified]);
                 return React.createElement("div", {className:"mes", mesid:"0", is_user:"false"},
                     React.createElement("div", {ref:native}, props.children),
                     React.createElement("div", {ref:node, "data-dsh-legacy-message":"0"}),
+                    props.pendingOpening ? React.createElement("div", {className:"dsh-tavern-hint"},
+                        React.createElement("p", null, submitted ? "开场请求已提交。" : "开局配置已保存。如果之前没有发出生成请求，可在这里继续。"),
+                        React.createElement("button", {type:"button", className:"dsh-tavern-btn", disabled:submitted, onClick:async function () {
+                            setSubmitted(true); setError("");
+                            try { await props.executeSlash("", props.sessionId, {inputText:"请根据已经保存的开局配置，生成开场白并开始游戏。"}); }
+                            catch (err) { setSubmitted(false); setError(String(err && err.message || err)); }
+                        }}, submitted ? "已提交" : "继续生成开场白"),
+                        error ? React.createElement("p", {role:"alert"}, error) : null) : null,
+
                     props.managedMvu ? React.createElement("p", {ref:note, hidden:true, role:"note", className:"dsh-tavern-hint"}, "额外模型调用自动使用本局后台模型，可在“本局设置”更换，无需填写卡内 API。") : null);
             }
 
@@ -6310,7 +6323,10 @@ window.__ModuleLoader__.load({
                 const helper = liveState.view?.tavernHelper;
                 const greetingId = helper?.turnMessageIds?.[String(storyTurn)];
                 const legacyGreeting = settled && !sessionTransitioning && greetingId === 0 && liveState.view?.tavernRuntimePolicy?.trustedCardMode;
-                const body = legacyGreeting ? React.createElement(TavernLegacyGreeting, {key:props.sessionId+":greeting", source:helper.messages?.[0]?.message || "", managedMvu:liveState.view?.tavernMvuRuntime?.owner === "official"}, rendered) : rendered;
+                const greetingSource = helper?.messages?.[0]?.message || "";
+                const originalGreeting = (data.blocks || []).filter(block => block?.kind === "text").map(block => String(block.text || "")).join("");
+                const pendingOpening = helper?.messages?.length === 1 && greetingSource.includes("AI正在根据你的选择生成专属开场白");
+                const body = legacyGreeting ? React.createElement(TavernLegacyGreeting, {key:props.sessionId+":greeting", source:greetingSource, modified:greetingSource !== originalGreeting, pendingOpening:pendingOpening, sessionId:props.sessionId, executeSlash:props.executeSlash, managedMvu:liveState.view?.tavernMvuRuntime?.owner === "official"}, rendered) : rendered;
 				return React.createElement("div", { ref:historyNode, className: "dsh-tavern-assistant", "data-streaming": data.status === "running" || undefined }, body, illustration, mvuReceiptNode, inlineStatus);
 			}
 			function TavernForkAssistantAction(props) {
