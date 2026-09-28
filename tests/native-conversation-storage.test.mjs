@@ -401,7 +401,7 @@ test('scoped mailbox commit preserves story, world and historical revisions',asy
  const {root,persistence,domain}=await fixture(t)
  const original=await persistence.write({id:'mailbox',cardSnapshot:{large:'card'.repeat(20000)},messages:[row(7)]})
  const cold=createChatPersistence({store:createChatJournalStore({dataRoot:root})})
- const saved=await cold.patch('mailbox',original._storageRevision,[{op:'set',path:['taskMailbox'],value:{version:1,tasks:{},latestByKind:{}}}],{returnProjection:['id','_storageRevision','taskMailbox']})
+ const saved=await cold.patch('mailbox',original._storageRevision,[{op:'set',path:['taskMailbox'],value:{version:1,tasks:{},latestByKind:{},optional:undefined}}],{returnProjection:['id','_storageRevision','taskMailbox']})
  assert.equal(saved.taskMailbox.version,1)
  assert.equal(saved.cardSnapshot,undefined)
  assert.deepEqual((await cold.read('mailbox')).messages,original.messages)
@@ -409,4 +409,12 @@ test('scoped mailbox commit preserves story, world and historical revisions',asy
  assert.deepEqual((await domain.readWorld('mailbox')).variables.stat_data,{gold:7})
  assert.deepEqual(await cold.readRevision('mailbox',original._storageRevision),original)
  assert.equal(await cold.patch('mailbox',original._storageRevision,[{op:'set',path:['taskMailbox'],value:{version:99}}],{returnProjection:['id']}),undefined)
+})
+
+
+test('candidate metadata patch canonicalizes optional undefined leaves',async t=>{
+ const {persistence}=await fixture(t)
+ const original=await persistence.write({id:'optional',messages:[row(7)],candidates:{choices:[],script:{old:true}}})
+ const saved=await persistence.patch('optional',original._storageRevision,[{op:'set',path:['candidates','script'],value:undefined},{op:'set',path:['candidates','optional'],value:undefined}],{returnProjection:['id','candidates']})
+ assert.deepEqual(saved.candidates,{choices:[]})
 })

@@ -148,3 +148,27 @@ test('mailbox scoped writes retry revision conflicts without reading or overwrit
   assert.equal((await mailbox.sync('c',{requestId:'r'})).task.status,'succeeded')
   assert.equal(chat.story,'concurrent')
 })
+
+test('durable result can project completion without waiting for a second write', async () => {
+ const task={taskId:'t',requestId:'r',kind:'candidate',status:'running',version:1}
+ const state={id:'c',candidates:{choices:['ready']},taskMailbox:{version:1,tasks:{t:task},latestByKind:{candidate:'t'}}}
+ const mailbox=createDurableTaskMailbox({projectReconciledState:true,store:{readChat(){throw Error('full read')},writeChat(){throw Error('redundant write')},async readState(){return structuredClone(state)}},reconcile:chat=>({status:'succeeded',result:chat.candidates})})
+ const result=await mailbox.sync('c',{kind:'candidate'})
+ assert.equal(result.task.status,'succeeded')
+ assert.deepEqual(result.task.result,{choices:['ready']})
+ assert.equal(state.taskMailbox.tasks.t.status,'running')
+})
+
+test('durable completion is readable while a mailbox write is blocked', async () => {
+ let unblock,started
+ const entered=new Promise(resolve=>started=resolve), blocked=new Promise(resolve=>unblock=resolve)
+ const state={id:'c',_storageRevision:1,taskMailbox:{version:1,tasks:{t:{taskId:'t',requestId:'r',kind:'candidate',status:'queued',version:1}},latestByKind:{candidate:'t'}}}
+ const mailbox=createDurableTaskMailbox({projectReconciledState:true,store:{async readChat(){return structuredClone(state)},async readState(){return structuredClone(state)},async writeChat(){started();await blocked}},reconcile:chat=>chat.candidates?{status:'succeeded',result:chat.candidates}:null})
+ const writing=mailbox.transition('c','t',{status:'running'})
+ await entered
+ state.candidates={choices:['persisted']}
+ try {
+  const result=await Promise.race([mailbox.sync('c',{kind:'candidate'}),new Promise((_,reject)=>setTimeout(()=>reject(Error('waited for mailbox writer')),200))])
+  assert.equal(result.task.status,'succeeded')
+ } finally {unblock();await writing}
+})

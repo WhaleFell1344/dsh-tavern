@@ -173,6 +173,20 @@ export function createDurableTaskMailbox(options = {}) {
   }
 
   async function sync(chatId, selector = {}, project) {
+    // A durable candidate result is sufficient even while its bookkeeping
+    // transition holds the mailbox writer queue.
+    if (options.projectReconciledState === true && store.readState) {
+      const state = await store.readState(chatId)
+      if (state) {
+        const mailbox = mailboxOf(state), task = findTask(mailbox, selector)
+        const repair = task ? await reconcile(state, publicTask(task)) : null
+        if (repair) {
+          const projected = structuredClone(mailbox), projectedTask = findTask(projected, selector)
+          applyPatch(projected, projectedTask, repair)
+          return { mailboxVersion: projected.version, task: publicTask(projectedTask), ...(project ? { projection: project(state) } : {}) }
+        }
+      }
+    }
     return await serialize(chatId, async function () {
       // Inspect a detached projection first. Only a repair may acquire a writable Chat.
       if (store.readState) {
@@ -182,6 +196,14 @@ export function createDurableTaskMailbox(options = {}) {
         const repair = task ? await reconcile(state, publicTask(task)) : null
         if (!task || !repair || !applyPatch(structuredClone(mailbox), structuredClone(task), repair)) {
           return { mailboxVersion: mailbox.version, task: publicTask(task), ...(project ? { projection: project(state) } : {}) }
+        }
+        // The caller may derive completion from another already-durable result.
+        // Publishing that projection need not wait for a redundant mailbox write.
+        if (options.projectReconciledState === true) {
+          const projected = structuredClone(mailbox)
+          const projectedTask = findTask(projected, selector)
+          applyPatch(projected, projectedTask, repair)
+          return { mailboxVersion: projected.version, task: publicTask(projectedTask), ...(project ? { projection: project(state) } : {}) }
         }
         // Re-read and reconcile below: a concurrent write may have changed the task.
       }

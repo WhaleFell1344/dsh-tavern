@@ -1,3 +1,4 @@
+import { taskStateFields } from './task-state-reader.js'
 import { createScopedMessages } from './scoped-messages.js'
 import { diffMvuChanges } from './mvu-settlement-effect.js'
 import { diffJson } from './json-mutation.js'
@@ -107,7 +108,11 @@ export function createBackgroundTaskCoordinator(options = {}) {
     const chatId = str(chat && chat.id)
     const requestId = str(input.requestId).trim().slice(0, 160)
     const begun = await serialize(chatId, async function () {
-      let fast = input.reuseSnapshot === true && requestId === '' && store.patchChat && Number.isSafeInteger(chat?._storageRevision)
+      if (role === 'candidate' && store.readRecoveryState) {
+        const state = await store.readRecoveryState(chatId)
+        if (state) chat = {...chat,...state}
+      }
+      let fast = (input.reuseSnapshot === true && requestId === '' || role === 'candidate' && store.readRecoveryState) && store.patchChat && Number.isSafeInteger(chat?._storageRevision)
         && chat.timeline?.schemaVersion === 1 && Array.isArray(chat.timeline.checkpoints) && !Object.values(chat.timeline.operations || {}).some(op => op?.kind === 'body' && op.status === 'foreground-completed')
       let source = fast ? chat : (await store.readChat(chatId) ?? chat)
       while (true) {
@@ -152,7 +157,7 @@ export function createBackgroundTaskCoordinator(options = {}) {
           const safe = changes.every(change => change.path[0] === 'candidateAgent' ||
             change.path[0] === 'timeline' && change.path.length > 1 && change.path[1] !== 'checkpoints')
           const saved = safe && await store.patchChat(chatId, source._storageRevision, changes,
-            { source: 'background.' + requestedRole + '.begin', operationId: next.value.operationId, requestId, returnProjection: 'settlement' })
+            { source: 'background.' + requestedRole + '.begin', operationId: next.value.operationId, requestId, returnProjection: taskStateFields })
           if (saved) return { ...next, chat: { ...source, ...saved,
             timeline: { ...next.chat.timeline, checkpoints: source.timeline.checkpoints }, messages: source.messages } }
           // A concurrent writer invalidated our snapshot. Revalidate all guards
@@ -186,13 +191,13 @@ export function createBackgroundTaskCoordinator(options = {}) {
           const intent = { kind: 'agent.bind', operationId: begun.value.operationId, sessionId }
           const metadata = { source: 'background.' + str(role) + '.bind', operationId: begun.value.operationId }
           if (store.readState && store.patchChat) {
-            const state = await store.readState(chatId)
+            const state = await (store.readRecoveryState || store.readState)(chatId)
             const legacy = Object.values(state?.timeline?.operations || {}).some(op => op?.kind === 'body' && op.status === 'foreground-completed')
             if (state?.timeline?.schemaVersion === 1 && !legacy) {
               const next = timeline.apply({ chat: state, intent }).chat
               const saved = await store.patchChat(chatId, state._storageRevision,
-                [{ op: 'set', path: ['timeline'], value: next.timeline }], metadata)
-              if (saved) return stateOnly ? store.readState(chatId) : store.readChat(chatId)
+                [{ op: 'set', path: ['timeline'], value: next.timeline }], {...metadata,returnProjection:taskStateFields})
+              if (saved) return stateOnly ? (role === 'candidate' ? saved : store.readState(chatId)) : store.readChat(chatId)
             }
           }
           return store.updateChat(chatId, source => timeline.apply({ chat: source, intent }).chat, metadata)
@@ -261,6 +266,19 @@ export function createBackgroundTaskCoordinator(options = {}) {
               if (changes.some(c => c.path[0] === 'messages' && (!indices.includes(c.path[1]) || c.path.length < 2))) break
               const saved = await store.patchChat(begun.chat.id,before._storageRevision,changes,{...metadata,returnProjection:'settlement'})
               if (saved) return {chat:{...completed.chat,...saved,messages:completed.chat.messages},status:completed.value.status}
+            }
+          }
+          if (role === 'candidate' && input.headerOnly === true && store.readSlice && store.patchChat) {
+            const fields = [...taskStateFields, 'scriptState']
+            for (let attempt = 0; attempt < 3; attempt++) {
+              const before = (await store.readSlice(begun.chat.id, [], fields))?.chat
+              if (before?.timeline?.schemaVersion !== 1 || Object.values(before.timeline.operations || {}).some(op => op?.kind === 'body' && op.status === 'foreground-completed')) break
+              const completed = timeline.complete({chat:before,operationId:begun.value.operationId,basedOn:begun.value.basedOn,
+                outcome:{status:input.status||'success',stateChanged:input.stateChanged===true,participant:input.participant||null},apply:input.apply})
+              const changes = diffJson(before, completed.chat)
+              if (changes.some(change => !['timeline','candidateAgent','candidates','scriptState'].includes(change.path[0]))) break
+              const saved = await store.patchChat(begun.chat.id,before._storageRevision,changes,{...metadata,returnProjection:fields})
+              if (saved) return {chat:saved,status:completed.value.status}
             }
           }
           let status = 'missing'

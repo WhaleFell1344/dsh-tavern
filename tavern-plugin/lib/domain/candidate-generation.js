@@ -339,7 +339,8 @@ export function createCandidateGenerator(options) {
     const backgroundTasks = await options.backgroundTasks?.(chat)
     const designEnabled = backgroundTasks?.characterDesign !== false
     const task = prompt(scriptMode ? 'candidate-script' : 'candidate-story')
-    const constantWorldBookContext = typeof options.stableWorldBookContext === 'function'
+    const preparedWorldbook = typeof options.worldBookContext === 'function' ? await options.worldBookContext(chat, card) : undefined
+    const constantWorldBookContext = preparedWorldbook !== undefined ? preparedWorldbook.context : typeof options.stableWorldBookContext === 'function'
       ? await options.stableWorldBookContext(chat, card) : ''
     const context = await planner.plan({ purpose: 'candidate', card, chat, task, scriptWindow, constantWorldBookContext })
     taskRun = await tasks.begin(chat, 'candidate', { requestId })
@@ -398,7 +399,8 @@ export function createCandidateGenerator(options) {
       return JSON.stringify({ ok: false, retryable: true, error: '当前候选任务只允许调用 candidate_submit_choices' })
     }
     const callOptions = {
-      onPersistentSessionReady: id => taskRun.bindSession(id),
+      onPersistentSessionReady: id => taskRun.bindSession(id, { stateOnly: true }),
+      preparedWorldbook,
       sessionId: input.sessionId,
       task: 'candidate',
       backgroundTasks,
@@ -461,6 +463,7 @@ export function createCandidateGenerator(options) {
         await reportStage('committing')
         completed = await taskRun.commit({
           stateChanged: true,
+          headerOnly: true,
           participant,
           apply(draft) {
             let scriptProjection

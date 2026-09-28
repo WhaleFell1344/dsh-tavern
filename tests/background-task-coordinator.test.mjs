@@ -501,3 +501,20 @@ test('fast begin rechecks busy guards after a concurrent operation wins the CAS'
  assert.equal(writes,0)
  assert.equal(Object.values(chat.timeline.operations).filter(op=>op.role==='settlement').length,0)
 })
+
+test('candidate header commit on native storage preserves messages and optional fields',async t=>{
+ const {mkdtemp,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path')
+ const {createChatJournalStore}=await import('../tavern-plugin/lib/domain/chat-journal-store.js')
+ const root=await mkdtemp(join(tmpdir(),'native-candidate-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const p=createChatPersistence({store:createChatJournalStore({dataRoot:root,newConversations:true})}),timeline=createStoryTimeline()
+ const original=timeline.apply({chat:{id:'c',sessionId:'s',messages:[{role:'assistant',text:'keep',variables:[{hp:3}]}]},intent:{kind:'ensure'}}).chat
+ await p.write(original)
+ const coordinator=createBackgroundTaskCoordinator({timeline,store:{readChat:p.read,writeChat:p.write,updateChat:()=>{throw Error('full update forbidden')},patchChat:p.patch,readSlice:p.readSlice,readState:p.readSessionState}})
+ const task=await coordinator.begin(await p.read('c'),'candidate',{reuseSnapshot:true})
+ await task.bindSession('background',{stateOnly:true})
+ const result=await task.commit({headerOnly:true,stateChanged:true,apply(chat){chat.candidates={choices:[{text:'look'}],script:undefined}}})
+ assert.equal(result.status,'committed')
+ const saved=await p.read('c')
+ assert.deepEqual(saved.messages,original.messages)
+ assert.deepEqual(saved.candidates,{choices:[{text:'look'}]})
+})

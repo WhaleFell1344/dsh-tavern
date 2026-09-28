@@ -13,6 +13,7 @@ export function createCandidateTasks({ chats, generator, backgroundTasks, sessio
   const taskMailbox = createDurableTaskMailbox({
     store: { readChat, writeChat, readState: chats.readState, patchChat: chats.patch },
     now,
+    projectReconciledState: true,
     reconcile(chat, task) {
       if (task.kind !== 'candidate') return null
       const saved = chat.candidates

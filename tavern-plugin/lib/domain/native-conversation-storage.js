@@ -470,15 +470,20 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   const view=await head(id)
   if(!view)return null
   if(view.state.chatRevision!==revision)return undefined
-  // Mailbox lifecycle changes do not touch story rows, world state or indexes.
+  // Task metadata changes do not touch story rows, world state or indexes.
   // Apply them directly to the header tree instead of materializing the card.
   if (Array.isArray(returnProjection) && changes.length && changes.every(change =>
-    change.op === 'set' && change.path?.length === 1 && ['taskMailbox','_storageRevision','updatedAt'].includes(change.path[0]))) {
+    change.op === 'set' && change.path?.length >= 1 && ['taskMailbox','timeline','candidateAgent','candidates','scriptState','_storageRevision','updatedAt'].includes(change.path[0]))) {
    const nextRevision=changes.find(change=>change.path[0]==='_storageRevision')?.value
    if(nextRevision!==revision+1)throw Error('Invalid journal patch revision')
    const batch=createBufferedJsonRecords({read:ref=>pages.readRecord(id,ref),writeMany:values=>pages.writeRecords(id,values)})
    let chatHeaderRef=view.state.chatHeaderRef
-   for(const change of changes)chatHeaderRef=(await batch.tree.apply(chatHeaderRef,[{op:'set',path:pointer(change.path),value:change.value}])).nextRoot
+   for (const change of changes) {
+    const p=pointer(change.path)
+    if (change.value === undefined) {
+     if (await batch.tree.get(chatHeaderRef,p) !== undefined) chatHeaderRef=(await batch.tree.apply(chatHeaderRef,[{op:'remove',path:p}])).nextRoot
+    } else chatHeaderRef=(await batch.tree.apply(chatHeaderRef,[{op:'set',path:p,value:JSON.parse(JSON.stringify(change.value))}])).nextRoot
+   }
    const state={...view.state,chatHeaderRef,chatRevision:nextRevision,
     ...(view.state.sceneIndexRevision===revision?{sceneIndexRevision:nextRevision}:{}),
     ...(view.state.displayIndexRevision===revision?{displayIndexRevision:nextRevision}:{})}

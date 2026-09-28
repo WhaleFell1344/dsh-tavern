@@ -25,7 +25,7 @@ function script() {
   }
 }
 
-function harness({ mode = 'story', outputs, initialCandidates, initialCandidateAgent, initialSettleStatus, messages, initialScriptCursor = 0, initialScriptEnded = false, scriptData, cardData, macroState, waitUntilSettled, writeChatHook, modelSelection, planHook }) {
+function harness({ mode = 'story', outputs, initialCandidates, initialCandidateAgent, initialSettleStatus, messages, initialScriptCursor = 0, initialScriptEnded = false, scriptData, cardData, macroState, waitUntilSettled, writeChatHook, modelSelection, planHook, worldBookContext }) {
   const continuity = createScriptContinuity()
   const activeScript = scriptData || script()
   let scriptState = mode === 'script' ? continuity.start(activeScript, initialScriptCursor) : null
@@ -43,6 +43,7 @@ function harness({ mode = 'story', outputs, initialCandidates, initialCandidateA
   const modelRequests = []
   function remember(options) {
     modelRequests.push({
+      preparedWorldbook: options.preparedWorldbook,
       system: options.system,
       backgroundContext: options.backgroundContext,
       systemPromptText: options.systemPromptText,
@@ -108,7 +109,7 @@ function harness({ mode = 'story', outputs, initialCandidates, initialCandidateA
     }
   }
   const candidates = createCandidateGenerator({
-    store, model, planner, prompt, scripts: continuity,
+    store, model, planner, prompt, scripts: continuity, worldBookContext,
     characterDesign: { async execute() { return JSON.stringify({ ok: true }) } },
     async stableWorldBookContext(currentChat, currentCard) {
       assert.equal(currentChat.id, chat.id)
@@ -361,4 +362,18 @@ test('候选准备期间修改切片字数，即使游标未变也不能继续�
   } })
   await assert.rejects(run.candidates.generate({ sessionId: 'session-1', messageId: 'new-budget' }), /剧本游标已变化/)
   assert.equal(run.modelRequests.length, 0)
+})
+
+
+test('one request shares its prepared worldbook with the runner and the next request resolves afresh', async () => {
+  let count = 0
+  const app = harness({outputs:[JSON.stringify({choices:storyChoices})],worldBookContext:async()=>({context:'context-'+(++count),prefixContext:'prefix-'+count})})
+  const first = await app.candidates.prepare({sessionId:'s',messageId:'m',requestId:'one'})
+  await first.execute()
+  const second = await app.candidates.prepare({sessionId:'s',messageId:'m',requestId:'two'})
+  await second.execute()
+  assert.equal(count,2)
+  assert.equal(app.plannerCalls[0].constantWorldBookContext,'context-1')
+  assert.equal(app.modelRequests[0].preparedWorldbook.prefixContext,'prefix-1')
+  assert.equal(app.modelRequests[1].preparedWorldbook.prefixContext,'prefix-2')
 })

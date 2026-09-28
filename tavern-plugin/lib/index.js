@@ -273,7 +273,8 @@ export async function apply(ctx) {
   })
   // Every scheduling caller already has this committed chat. Do not read a
   // full history projection again just to check its mode or settlement status.
-  function scheduleTemplateSync(chat) {
+  function scheduleTemplateSync(chat, metadata) {
+    if (/^candidate\.mailbox\.|^background\.candidate\.(begin|bind)$/.test(str(metadata?.source))) return
     templateSync.schedule(chat.sessionId, chat._storageRevision, {
       enabled: groupOfMode(chat.mode || 'story') === 'play',
       blocked: ['pending', 'running'].includes(chat.settleStatus)
@@ -759,9 +760,9 @@ export async function apply(ctx) {
   async function writeChat(chat, metadata) {
     if (deletedChatIds.has(chat.id)) throw new Error('对话已删除')
     const saved = await rawWriteChat(chat, metadata)
-    await syncChatSummary(saved)
+    if (!str(metadata?.source).startsWith('candidate.mailbox.')) await syncChatSummary(saved)
     void coordinationEvents?.publish(saved.sessionId)
-    scheduleTemplateSync(saved)
+    scheduleTemplateSync(saved, metadata)
     if (!str(metadata?.source).startsWith('compaction.')) queueAutoCompaction(saved.sessionId)
     return saved
   }
@@ -770,7 +771,7 @@ export async function apply(ctx) {
     const saved = await chatPersistence.writeHeader(chat, baseline, metadata)
     await syncChatSummary(chat)
     void coordinationEvents?.publish(saved.sessionId)
-    scheduleTemplateSync(saved)
+    scheduleTemplateSync(saved, metadata)
     queueAutoCompaction(saved.sessionId)
     return saved
   }
@@ -783,7 +784,7 @@ export async function apply(ctx) {
       // A Skill switch changes future availability, not story/template data.
       // Do not let this settings write trigger maintenance that rewrites history.
       if (metadata?.source !== 'writing-skill.switch') {
-        scheduleTemplateSync(saved)
+        scheduleTemplateSync(saved, metadata)
         if (!str(metadata?.source).startsWith('compaction.')) queueAutoCompaction(saved.sessionId)
       }
     }
@@ -793,9 +794,9 @@ export async function apply(ctx) {
     if (deletedChatIds.has(chatId)) throw new Error('对话已删除')
     const saved = await chatPersistence.patch(chatId, revision, changes, metadata)
     if (saved) {
-      await syncChatSummary(saved)
+      if (!str(metadata?.source).startsWith('candidate.mailbox.')) await syncChatSummary(saved)
       void coordinationEvents?.publish(saved.sessionId)
-      scheduleTemplateSync(saved)
+      scheduleTemplateSync(saved, metadata)
       queueAutoCompaction(saved.sessionId)
     }
     return saved
@@ -1987,6 +1988,7 @@ export async function apply(ctx) {
       return foregroundWorldbookReads(chat, session)
     },
     resolveCurrentWorldbook: async function (input) {
+      if (input.preparedWorldbook !== undefined) return input.preparedWorldbook
       if (input.task === 'worldbook-filter') return ''
       if (input.task === 'image') return undefined
       // The server template engine owns absolute history and reads old floors
@@ -2298,9 +2300,7 @@ export async function apply(ctx) {
       runCandidate: backgroundAgentRunner.run
     },
     planner: contextPlanner,
-    stableWorldBookContext: async function (chat, card) {
-      return (await nativeWorldBookTemplateContext(chat, card)).context
-    },
+    worldBookContext: nativeWorldBookTemplateContext,
     prompt: runtimePrompt,
     scripts: scriptContinuity,
     timeline: storyTimeline,
