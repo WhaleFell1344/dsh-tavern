@@ -879,10 +879,9 @@ body.dsh-tavern-shell-active [data-dsh-panel-host] { overflow: clip; }
 .dsh-tavern-card-picker:has(.dsh-tavern-greeting-preview) { display: flex; flex-direction: column; max-height: calc(100dvh - 48px); }
 /* In block pickers this is inert; avoid a descendant :has() before universal children. */
 .dsh-tavern-card-picker > * { flex-shrink: 0; }
-.dsh-tavern-card-picker > .dsh-tavern-greeting-preview { height: auto; min-height: 0; max-height: min(1200px, 85dvh); flex: 0 0 auto; }
-.dsh-tavern-card-picker > .dsh-tavern-greeting-preview:has(iframe) { height: min(1200px, 85dvh); }
-.dsh-tavern-card-picker > .dsh-tavern-greeting-preview .dsh-tavern-message-frame-slot,
-.dsh-tavern-card-picker > .dsh-tavern-greeting-preview .dsh-tavern-message-frame { min-height: min(1200px, 85dvh); }
+.dsh-tavern-card-picker .dsh-tavern-greeting-preview { height: auto; min-height: 0; max-height: min(1200px, 85dvh); flex: 0 0 auto; }
+.dsh-tavern-card-picker .dsh-tavern-greeting-preview .dsh-tavern-message-frame-slot,
+.dsh-tavern-card-picker .dsh-tavern-greeting-preview .dsh-tavern-message-frame { min-height: 0; }
 @media (max-width: 640px) {
   .dsh-tavern-card-picker:has(.dsh-tavern-greeting-preview) { max-height: calc(100dvh - 24px); }
 }
