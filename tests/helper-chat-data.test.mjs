@@ -95,7 +95,7 @@ test('旧正文、变量、身份、重排或删除请求明确失败，不保�
   const host = await fixture(t)
   for (const mutate of [
     api => { api.chat[0].mes = '改写历史' },
-    api => { api.chat[0].variables = [{ hp: 100 }] },
+    api => { api.chat[0].variables = [] },
     api => { api.chat[0].is_system = true },
     api => { api.chat.splice(0, 1) },
     api => { api.chat[0] = { ...api.chat[0] } }
@@ -192,4 +192,64 @@ test('进行中保存的旧回执不会覆盖新聊天上下文', async t => {
   assert.equal(run.api.chatMetadata.database, undefined)
   assert.equal((await host.open().read('audit')).messages[0].tavernPluginData.database, 1)
   assert.equal((await host.open().read('other')).messages[0].tavernPluginData, undefined)
+})
+
+test('旧式面板变量编辑与元数据原子保存，重开后恢复且不改正文和历史', async t => {
+  const host = await fixture(t), run = await host.connect()
+  const before = await host.open().read('audit')
+  run.api.chat[0].variables[0].hp = 8
+  run.api.chatMetadata.migration = 2
+  await run.api.saveMetadata()
+  const saved = await host.open().read('audit')
+  assert.equal(saved.messages[0].variables[0].hp, 8)
+  assert.equal(saved.tavernPluginMetadata.migration, 2)
+  assert.deepEqual(saved.timeline, before.timeline)
+  assert.deepEqual(saved.foregroundFrame, before.foregroundFrame)
+  assert.equal(saved.messages[0].text, before.messages[0].text)
+  assert.equal(run.api.chat[0].variables[0].hp, 8)
+  assert.equal((await host.connect()).api.chat[0].variables[0].hp, 8)
+})
+
+test('旧式变量保存拒绝并发冲突和已推进的历史，元数据也不部分保存', async t => {
+  const host = await fixture(t), stale = await host.connect()
+  stale.api.chat[0].variables[0].hp = 8
+  stale.api.chatMetadata.marker = true
+  await host.persistence.update('audit', chat => { chat.messages[0].variables[0].hp=9; return chat })
+  await assert.rejects(stale.api.saveChat(), /其他操作修改/)
+  const newer = await host.connect()
+  newer.api.chat[0].variables[0].hp=10
+  await host.persistence.update('audit', chat => { chat.messages.push({...chat.messages[0],id:'next',turn:2});return chat })
+  await assert.rejects(newer.api.saveChat(), /历史|版本/)
+  const saved=await host.open().read('audit')
+  assert.equal(saved.messages[0].variables[0].hp,9)
+  assert.equal(saved.tavernPluginMetadata,undefined)
+})
+
+test('保存期间的新变量编辑不会被回执覆盖，连续保存可重开恢复', async t => {
+  const host=await fixture(t), deliveries=[]
+  const run=await host.connect('audit',(_message,dispatch)=>deliveries.push(dispatch))
+  run.api.chat[0].variables[0].hp=2
+  const first=run.api.saveChat()
+  await tick()
+  run.api.chat[0].variables[0].hp=3
+  const second=run.api.saveChat()
+  await deliveries.shift()(); await first; await tick()
+  assert.equal(run.api.chat[0].variables[0].hp,3)
+  await deliveries.shift()(); await second
+  assert.equal((await host.open().read('audit')).messages[0].variables[0].hp,3)
+})
+
+test('远端刷新不掩盖未保存变量的冲突，宿主拒绝旧楼层和非当前 swipe', async t => {
+  const host=await fixture(t), run=await host.connect()
+  run.api.chat[0].variables[0].hp=2
+  await host.persistence.update('audit',chat=>{chat.messages[0].variables[0].hp=3;return chat})
+  run.receive({type:'dsh-tavern-helper-context',context:await host.context()})
+  await assert.rejects(run.api.saveChat(),/其他操作修改/)
+  await host.persistence.update('audit',chat=>{chat.messages.push({...chat.messages[0],id:'next',turn:2});return chat})
+  const current=await host.context()
+  const request={chatId:'audit',lifecycleRevision:2,messages:[],metadata:{stateRevision:current.stateRevision,data:{bad:true}},variableUpdates:[{message_id:0,swipe_id:0,stateRevision:current.stateRevision,data:{hp:4}}]}
+  await assert.rejects(host.adapter.saveChatData('audit',request),/当前变量快照/)
+  request.variableUpdates[0].message_id=1;request.variableUpdates[0].swipe_id=1
+  await assert.rejects(host.adapter.saveChatData('audit',request),/当前变量快照/)
+  assert.equal((await host.open().read('audit')).tavernPluginMetadata,undefined)
 })

@@ -4572,7 +4572,7 @@ window.__ModuleLoader__.load({
 			}
 			function identity(core) { return [core.message_id, core.role, core.message, core.swipe_id, core.swipes]; }
 			function layoutMatches() { return exposedLayoutMatches() && chat.length === rows.length && rows.every((row, index) => chat[index] === row.view); }
-			function dirty() { return !layoutMatches() || !same(metadata, metadataBase) || rows.some(row => !row.core.stub && !same(pluginData(row.view), row.base)); }
+			function dirty() { return !layoutMatches() || !same(metadata, metadataBase) || rows.some(row => !row.core.stub && (!same(pluginData(row.view), row.base) || !same(row.view.variables, row.variablesBase))); }
 			function sync(value, acknowledged, variableDelta) {
 				if (!value) return;
 				if (saving && !acknowledged) {
@@ -4598,11 +4598,15 @@ window.__ModuleLoader__.load({
 					let row = rows[index];
 					if (!row || !same(identity(row.core), identity(core))) {
 						const view = copy(remote); for (const key of Object.keys(core)) set(view, key, core[key]);
-						return { view: view, core: core, base: remote, revision: revision };
+						return { view: view, core: core, base: remote, revision: revision, variablesBase: core.variables, variablesRevision: revision };
 					}
 					const ack = acknowledged && acknowledged.messages.find(item => item.message_id === core.message_id);
 					mergeView(row.view, ack ? ack.data : row.base, remote, key => !reserved.has(key));
-					mergeView(row.view, row.core, core, key => reserved.has(key));
+					const variableAck = acknowledged && (acknowledged.variableUpdates || []).find(item => item.message_id === core.message_id);
+                    const priorCore = Object.assign({}, row.core, { variables: variableAck ? copy(row.variablesBase) : row.variablesBase });
+                    if (variableAck) priorCore.variables[variableAck.swipe_id] = copy(variableAck.data);
+                    mergeView(row.view, priorCore, core, key => reserved.has(key));
+                    if (variableAck || same(row.view.variables, core.variables)) { row.variablesBase = core.variables; row.variablesRevision = revision; }
 					row.core = core;
 					if (ack || same(pluginData(row.view), remote)) { row.base = remote; row.revision = revision; }
 					return row;
@@ -4629,14 +4633,21 @@ window.__ModuleLoader__.load({
 			}
 			function snapshot() {
 				if (!layoutMatches()) throw new Error("saveChat 不支持新增、删除、替换或重排历史消息");
-				const messages = [];
+				const messages = [], variableUpdates = [];
 				for (const row of rows) {
                     if (row.core.stub) continue;
-					for (const key of reserved) if (own(row.view, key) !== own(row.core, key) || !same(row.view[key], row.core[key])) throw new Error("saveChat 只保存插件数据，不支持修改正文、身份或消息版本: " + key);
+					for (const key of reserved) if (key !== "variables" && (own(row.view, key) !== own(row.core, key) || !same(row.view[key], row.core[key]))) throw new Error("saveChat 不支持修改正文、身份或消息版本: " + key);
+                    if (!same(row.view.variables, row.variablesBase)) {
+                        const desired = row.view.variables, base = row.variablesBase, swipe = row.core.swipe_id || 0;
+                        if (!Array.isArray(desired) || !Array.isArray(base) || desired.length !== base.length || !base[swipe]
+                            || desired.some((value, index) => index !== swipe && !same(value, base[index]))) throw new Error("saveChat 不支持删除变量历史或修改其他消息版本");
+                        variableUpdates.push({message_id:row.core.message_id, swipe_id:swipe, stateRevision:row.variablesRevision, data:copy(desired[swipe])});
+                    }
 					const data = pluginData(row.view);
 					if (!same(data, row.base)) messages.push({ message_id: row.core.message_id, stateRevision: row.revision, data: data });
 				}
 				const result = { chatId: chatId, lifecycleRevision: lifecycleRevision, messages: messages };
+                if (variableUpdates.length) result.variableUpdates = variableUpdates;
 				if (!same(metadata, metadataBase)) result.metadata = { stateRevision: metadataRevision, data: copy(metadata) };
 				return result;
 			}
@@ -4645,7 +4656,7 @@ window.__ModuleLoader__.load({
 				const task = tail.catch(function () {}).then(async function () {
 					if (binding !== requestedBinding) throw new Error("聊天已切换，已取消旧聊天的排队保存");
 					const submitted = snapshot();
-					if (!submitted.messages.length && !submitted.metadata) return;
+					if (!submitted.messages.length && !submitted.metadata && !submitted.variableUpdates?.length) return;
 					saving = true;
 					try {
 						const result = await request("saveTavernChatData", { request: submitted });
@@ -4685,7 +4696,7 @@ window.__ModuleLoader__.load({
                             if(target===chat && rows[id]?.core.stub && chat[id]===rows[id].view && options.readMessage) {
                                 const source=options.readMessage(id), core=coreOf(source), remote=copy(source.pluginData || {});
                                 const view=copy(remote);for(const field of Object.keys(core))set(view,field,core[field]);
-                                rows[id]={view,core,base:remote,revision:lastRevision};chat[id]=view;
+                                rows[id]={view,core,base:remote,revision:lastRevision,variablesBase:core.variables,variablesRevision:lastRevision};chat[id]=view;
                             }
                             return target[id];
                         },
@@ -6185,6 +6196,27 @@ window.__ModuleLoader__.load({
 			doc.head.appendChild(script);
 			return script.tavernReady;
 		}
+
+        function mountTavernLegacyMessage(options) {
+            // Card scripts own this DOM subtree. Keep React's message tree separate
+            // so innerHTML replacement cannot detach nodes React still reconciles.
+            const node = options.node, native = options.native;
+            const text = node.ownerDocument.createElement("div");
+            text.className = "mes_text";
+            text.textContent = String(options.source || "");
+            node.appendChild(text);
+            const initial = text.textContent;
+            node.hidden = true;
+            const Observer = options.MutationObserver || node.ownerDocument.defaultView.MutationObserver;
+            const observer = new Observer(function () {
+                const replaced = text.childElementCount > 0 || text.textContent !== initial;
+                node.hidden = !replaced;
+                native.hidden = replaced;
+                if (options.note) options.note.hidden = !replaced;
+            });
+            observer.observe(text, { childList: true, subtree: true, characterData: true });
+            return function () { observer.disconnect(); text.remove(); native.hidden = false; if (options.note) options.note.hidden = true; };
+        }
 
 		function installTavernTrustedHostFacade(host, frameWindow, priority, names) {
 			// A visible mount root supports legacy host detection and panel mounting.
@@ -9175,7 +9207,7 @@ window.__ModuleLoader__.load({
 			}
 			function tavernAssistantViewPaths(turn, eager = true) {
 				return ["mode", eager ? "tavernHelper" : "$helperAvailable",
-					"tavernRuntimePolicy", "releaseCapabilities", "statusBarPlacement"].map(field => [field]).concat([["$projectionTurn", String(turn)], ["$projectionLatestTurn", String(turn)]]);
+					"tavernRuntimePolicy", "tavernMvuRuntime", "releaseCapabilities", "statusBarPlacement"].map(field => [field]).concat([["$projectionTurn", String(turn)], ["$projectionLatestTurn", String(turn)]]);
 			}
 			function tavernReceiptViewPaths(turn, receipt, latest) {
 				const paths = [["$mvuReceiptTurn", String(turn)], ["$settlementOwner", String(turn)]];
@@ -9196,6 +9228,17 @@ window.__ModuleLoader__.load({
 					sessionId: props.sessionId, view: state.view, executeSlash: props.executeSlash
 				}) : null;
 			}
+            function TavernLegacyGreeting(props) {
+                const native = React.useRef(null), node = React.useRef(null), note = React.useRef(null);
+                React.useLayoutEffect(function () {
+                    return mountTavernLegacyMessage({node:node.current, native:native.current, source:props.source, note:note.current});
+                }, [props.source, props.managedMvu]);
+                return React.createElement("div", {className:"mes", mesid:"0", is_user:"false"},
+                    React.createElement("div", {ref:native}, props.children),
+                    React.createElement("div", {ref:node, "data-dsh-legacy-message":"0"}),
+                    props.managedMvu ? React.createElement("p", {ref:note, hidden:true, role:"note", className:"dsh-tavern-hint"}, "变量更新使用本局后台模型，可在“本局设置”更换；无需填写卡内的额外模型 API。") : null);
+            }
+
 			function TavernAssistantNodeView(props) {
 				const data = props.node.data;
                 const historyNode = React.useRef(null);
@@ -9252,7 +9295,11 @@ window.__ModuleLoader__.load({
 				const illustration = sceneImagesEnabled && settled && storyTurn > 0 && isPlayMode(liveState.view && liveState.view.mode) && !sessionTransitioning ? React.createElement(SceneIllustration, { key: props.sessionId + ":" + storyTurn + ":" + JSON.stringify(projection), sessionId: props.sessionId, turn: storyTurn }) : null;
                 const inlineStatus = liveState.view?.statusBarPlacement === "body" && !sessionTransitioning && storyTurn > 0 && storyTurn === latestProjectionTurn && data.finalNode && tail?.closing?.finalNode?.seq === data.finalNode.seq
                     ? React.createElement(TavernInlineStatusRuntime, { sessionId: props.sessionId, executeSlash: props.executeSlash }) : null;
-				return React.createElement("div", { ref:historyNode, className: "dsh-tavern-assistant", "data-streaming": data.status === "running" || undefined }, rendered, illustration, mvuReceiptNode, inlineStatus);
+                const helper = liveState.view?.tavernHelper;
+                const greetingId = helper?.turnMessageIds?.[String(storyTurn)];
+                const legacyGreeting = settled && !sessionTransitioning && greetingId === 0 && liveState.view?.tavernRuntimePolicy?.trustedCardMode;
+                const body = legacyGreeting ? React.createElement(TavernLegacyGreeting, {key:props.sessionId+":greeting", source:helper.messages?.[0]?.message || "", managedMvu:liveState.view?.tavernMvuRuntime?.owner === "official"}, rendered) : rendered;
+				return React.createElement("div", { ref:historyNode, className: "dsh-tavern-assistant", "data-streaming": data.status === "running" || undefined }, body, illustration, mvuReceiptNode, inlineStatus);
 			}
 			function TavernForkAssistantAction(props) {
 				const liveState = useScopedLiveTavernView(props.sessionId, String(props.messageId || ""), [["mode"], ["forkTurnsByMessageId", String(props.messageId || "")]]);
@@ -15208,6 +15255,7 @@ window.__ModuleLoader__.load({
 		exports.ensureTavernHostJQuery = ensureTavernHostJQuery;
 		exports.ensureTavernHostJQueryUi = ensureTavernHostJQueryUi;
 		exports.installTavernTrustedHostFacade = installTavernTrustedHostFacade;
+        exports.mountTavernLegacyMessage = mountTavernLegacyMessage;
 		exports.releaseTavernHostJQueryHandlers = releaseTavernHostJQueryHandlers;
 		exports.tavernScriptRuntimeReady = tavernScriptRuntimeReady;
 		exports.clampTavernFrameHeight = clampTavernFrameHeight;

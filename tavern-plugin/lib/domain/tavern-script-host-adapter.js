@@ -502,6 +502,7 @@ export function createTavernScriptHostAdapter(options = {}) {
     const saved = await options.updateChat(chat.id, async function (latest) {
       await assertScriptEnabled(latest)
       if (latest.sessionId && str(latest.sessionId) !== str(sessionId)) throw new Error('聊天绑定已变化，插件数据未保存')
+      if (settlementTransactions.has(str(sessionId))) throw new Error('临时 MVU 结算期间不能保存聊天插件数据，请稍后重试')
       return applyChatPluginData(latest, baselines, request)
     }, { source: 'tavern-helper.chat-plugin-data' })
     if (!saved) throw new Error('聊天已不存在，插件数据未保存')

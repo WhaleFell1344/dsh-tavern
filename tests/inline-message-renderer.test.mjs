@@ -1856,3 +1856,40 @@ test('window refresh invalidates clean historical rows without eagerly fetching 
  assert.equal(facade.chat()[7].mes,'fresh')
  assert.equal(reads,1)
 })
+
+test('旧式开场脚本拥有独立 DOM，替换向导后隐藏原文且不破坏 React 节点', async () => {
+  const {JSDOM}=await import('jsdom')
+  const dom=new JSDOM('<div class="mes" mesid="0"><div id="native"><p>原文</p></div><div id="owned"></div></div>')
+  const {document}=dom.window, node=document.getElementById('owned'), native=document.getElementById('native')
+  const original=native.firstChild
+  const stop=client.mountTavernLegacyMessage({node,native,source:'BOOT <script>unsafe()</script>'})
+  assert.equal(node.hidden,true)
+  assert.equal(native.hidden,false)
+  const text=document.querySelector('.mes[mesid="0"] .mes_text')
+  assert.equal(text.querySelector('script'),null)
+  text.innerHTML='<button id="wizard">开始绑定</button>'
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(node.hidden,false)
+  assert.equal(native.hidden,true)
+  assert.equal(native.firstChild,original)
+  original.textContent='React 后续刷新'
+  assert.ok(document.getElementById('wizard'))
+  stop()
+  assert.equal(native.hidden,false)
+  assert.equal(node.children.length,0)
+  dom.window.close()
+})
+
+test('懒读取的历史楼层保存插件数据时不误判变量被修改', async () => {
+  const message={message_id:0,role:'assistant',message:'旧楼层',swipe_id:0,swipes:['旧楼层'],swipes_data:[{hp:1}],pluginData:{}}
+  const context={chatId:'lazy',stateRevision:5,lifecycleRevision:2,messages:[{...message,stub:true,swipes_data:[]}]}
+  let submitted
+  const facade=client.createTavernChatDataFacade({copy:structuredClone,context:()=>context,readMessage:()=>structuredClone(message),request:async(_method,args)=>{
+    submitted=args.request
+    return {updated:true,context:{...context,stateRevision:6,messages:[{...message,pluginData:{note:1}}]}}
+  }})
+  facade.chat()[0].note=1
+  await facade.save()
+  assert.equal(submitted.variableUpdates,undefined)
+  assert.equal(submitted.messages[0].data.note,1)
+})
