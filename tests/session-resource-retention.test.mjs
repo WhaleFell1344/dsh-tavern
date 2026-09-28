@@ -82,22 +82,19 @@ test('后台手机脚本延迟查询仍能绑定事件和设置样式，不操�
     a.dispose(); b.dispose()
   } finally { dom.window.close() }
 })
-test('旧会话到期仅清理自己的宿主节点，不能删除新会话或保留页面的容器', () => {
-  function root() { return { children: [], append(node) { this.children.push(node); node.parentNode = this }, removeChild(node) { this.children.splice(this.children.indexOf(node),1); node.parentNode = null } } }
-  const document = { head: root(), body: root() }
-  const scope = vm.runInNewContext(scopeSource + ';createTavernHostArtifactScope')
-  const a = scope({ document }), aNode = { hidden: false }
-  document.body.append(aNode)
-  const parking = { hasAttribute: name => name === 'data-tavern-retained-frames' }
-  document.body.append(parking)
-  a.setVisible(false)
-  assert.equal(aNode.hidden, true)
-  const b = scope({ document }), bNode = {}
-  document.body.append(bNode)
-  a.setVisible(true); assert.equal(aNode.hidden, false)
-  a.setVisible(false); a.dispose()
-  assert.deepEqual(document.body.children, [parking,bNode])
-  b.dispose(); assert.deepEqual(document.body.children, [parking])
+test('native host nodes created after the script scope are never parked or removed', async () => {
+  const {JSDOM}=await import('jsdom')
+  const dom=new JSDOM('<body></body>',{runScripts:'outside-only'})
+  try {
+    dom.window.eval(scopeSource+';window.makeScope=createTavernHostArtifactScope')
+    const scope=dom.window.makeScope({document:dom.window.document})
+    const menu=dom.window.document.createElement('div');menu.id='native-navigation-menu'
+    dom.window.document.body.append(menu)
+    scope.setVisible(false)
+    assert.equal(menu.isConnected,true)
+    scope.setVisible(true);scope.dispose()
+    assert.equal(menu.isConnected,true)
+  }finally{dom.window.close()}
 })
 
 test('切走后异步创建或重新插入的卡片悬浮窗保持隔离，返回保留事件与状态', async () => {
@@ -130,5 +127,29 @@ test('切走后异步创建或重新插入的卡片悬浮窗保持隔离，返�
     a.dispose(); assert.equal(other.isConnected, true)
     $("body").append("<button id=retired>late</button>")
     assert.equal(dom.window.document.querySelector("#retired"), null)
+  } finally { dom.window.close() }
+})
+
+
+test('explicitly created host nodes are parked before observer delivery and on delayed mount', async () => {
+  const { JSDOM } = await import('jsdom')
+  const dom = new JSDOM('<body></body>', { runScripts: 'outside-only' })
+  try {
+    dom.window.eval(scopeSource + ';window.makeScope=createTavernHostArtifactScope')
+    const scope = dom.window.makeScope({ document: dom.window.document })
+    const button = scope.trackNode(dom.window.document.createElement('button'))
+    dom.window.document.body.append(button)
+    scope.setVisible(false)
+    assert.equal(button.isConnected, false)
+    const delayed = scope.trackNode(dom.window.document.createElement('div'))
+    dom.window.document.body.append(delayed)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.equal(delayed.isConnected, false)
+    scope.setVisible(true)
+    assert.equal(button.isConnected, true)
+    assert.equal(delayed.isConnected, true)
+    scope.dispose()
+    assert.equal(button.isConnected, false)
+    assert.equal(delayed.isConnected, false)
   } finally { dom.window.close() }
 })

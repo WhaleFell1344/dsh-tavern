@@ -85,3 +85,11 @@ Validation: 30 composer, resource-retention and module-loader tests passed; buil
 The compatibility-only `#chat` mount participated in normal body layout. The card wrote `padding-top:46px!important` to this empty mount, increasing the real browser document from 720px to 766px while the app itself occupied a 720px viewport. Made only the system-owned mount `display:contents!important`, retaining its DOM identity and connected children without a second layout box. Existing real chat nodes are untouched. Also notify virtual layout-anchor observers on captured scroll events, coalesced with requestAnimationFrame, so position-only changes do not require ResizeObserver size changes. Cleanup disconnects observers and cancels queued notifications on frame exit.
 
 Validation: 93 focused tests passed, including placeholder padding, live position notifications and listener cleanup. In the actual saved session, document height is now exactly 720px for a 720px viewport despite the unchanged card-written padding. Scrolled to the story bottom and then upward (scrollTop 11263.5 -> 9823.5); the bar remained at y=82 with the native header bottom at 81.5. The reported screenshot's exact larger gap did not occur in the initial browser attempt; the extra outer-page scroll range was directly observed and removed. No card content or gameplay messages were modified.
+
+
+## 子代理页面遮挡与宿主节点归属
+
+- 切到同一游戏的子代理时，继续复用根会话执行器，但按实际选中的会话隐藏卡片界面；返回根会话恢复。模板弹窗也只在根会话可见时展示。
+- 实测发现原先以 body/head 新增节点推断脚本归属，会误收集原生子代理菜单，导致 React removeChild 报错。改为只管理 scoped jQuery 挂载及脚本文档代理明确创建的节点，保留宿主界面。
+- 实际已有游戏连续两次“前台 → 酒馆后台 Agent → 前台”：子代理页面状态条、手机按钮均为 0，父会话入口可点击；返回后均为 1。没有新增 removeChild 错误。仅导航，没有发送消息或触发模型请求。
+- 回归覆盖同根子代理与嵌套子代理、后台任务继续完成、冷开子代理、原生节点不被移走、直接 DOM 与延迟挂载的脚本节点隐藏/恢复/清理。

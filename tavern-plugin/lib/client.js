@@ -2914,19 +2914,22 @@ window.__ModuleLoader__.load({
                 owned.set(node, { hidden: node.hidden, disabled: node.disabled, body: root === hostDocument.body,
                     root: root, nextSibling: node.nextSibling, parked: false });
             }
-            let baselines, disposed = false, visible = true;
-            function baseline() { baselines = roots.map(root => ({ root: root, nodes: new Set(Array.from(root.childNodes || root.children || [])) })); }
-            function capture() {
-                for (const entry of baselines) for (const node of Array.from(entry.root.childNodes || entry.root.children || [])) {
-                    if (!entry.nodes.has(node)) remember(node, entry.root);
-                }
+            let disposed = false, visible = true;
+            const created = new Set();
+            function captureCreated() {
+                for (const node of created) if (roots.includes(node.parentNode)) remember(node, node.parentNode);
             }
-            baseline();
             if (host && host.MutationObserver) {
-                observer = new host.MutationObserver(park);
+                observer = new host.MutationObserver(function (changes) {
+                    for (const change of changes) for (const node of change.addedNodes) {
+                        if (created.has(node)) remember(node, change.target);
+                    }
+                    park();
+                });
                 for (const root of roots) observer.observe(root, { childList: true });
             }
             return Object.freeze({
+                trackNode: function (node) { created.add(node); return node; },
                 // Scope the mounting operation, not the whole asynchronous import.
                 // Other conversations and the app can render while that import waits.
                 bindJQuery: function (jquery) {
@@ -2980,7 +2983,7 @@ window.__ModuleLoader__.load({
                 },
                 setVisible: function (next) {
                     if (disposed || visible === next) return;
-                    if (visible) capture();
+                    captureCreated();
                     visible = next;
                     for (const [node, previous] of owned) {
                         // Hidden nodes still match the fixed IDs used by card scripts
@@ -3001,11 +3004,10 @@ window.__ModuleLoader__.load({
                             previous.root.insertBefore(node, previous.nextSibling);
                         } else previous.root.append(node);
                     }
-                    if (next) baseline();
                 },
                 dispose: function () {
                     if (disposed) return;
-                    if (visible) capture();
+                    captureCreated();
                     disposed = true;
                     if (observer) observer.disconnect();
                     for (const node of owned.keys()) {
@@ -3013,6 +3015,7 @@ window.__ModuleLoader__.load({
                         else if (node.parentNode && typeof node.parentNode.removeChild === "function") node.parentNode.removeChild(node);
                     }
                     owned.clear();
+                    created.clear();
                 }
             });
         }
@@ -3870,6 +3873,11 @@ window.__ModuleLoader__.load({
 		  function documentView(doc) {
 		    if (documents.has(doc)) return documents.get(doc);
 		    const proxy = new Proxy({}, { get(_, key) {
+		      if (key === 'createElement' || key === 'createElementNS') return function (...args) {
+		        const node = doc[key](...args);
+		        frame.frameElement?.__dshTavernHostArtifacts?.trackNode(node);
+		        return node;
+		      };
 		      if (key === 'getElementById') return id => lookup(doc, id);
 		      if (key === 'querySelector' || key === 'querySelectorAll') return selector =>
 		        (/^#(?:sheld|top-settings-holder)$/.test(selector) && !doc.querySelector(selector))
@@ -7933,7 +7941,7 @@ window.__ModuleLoader__.load({
 			}
 			function createRecord(sessionId) {
 				const record = { sessionId: sessionId, viewState: null, loadState: null, fresh: false, foregroundRunning: sessions.list.getSnapshot().byId?.[sessionId]?.running === true, stopView: null };
-				record.templatePanel = createServerTemplatePanel({ window: hostWindow, rpc: options.rpc || rpc, isActive: () => current === record });
+				record.templatePanel = createServerTemplatePanel({ window: hostWindow, rpc: options.rpc || rpc, isActive: () => current === record && String(sessions.list.getSnapshot().current || "") === record.sessionId });
 				record.execution = (options.createExecution || createTavernScriptExecutionModule)({
 					window: hostWindow, rpc: options.rpc || rpc, executeSlash: options.executeSlash,
 					signals: options.signals || tavernSessionSignals,
@@ -7962,14 +7970,21 @@ window.__ModuleLoader__.load({
 					record.foregroundRunning = running;
 					retire(record);
 				});
-				if ((current ? current.sessionId : "") === sessionId) return;
+				if ((current ? current.sessionId : "") === sessionId) {
+                    // Child agents keep the root executor alive, but its card UI
+                    // belongs only to the actual root conversation surface.
+                    const visible = String(sessions.list.getSnapshot().current || "") === sessionId;
+                    if (current?.execution.setForeground) current.execution.setForeground(visible);
+                    if (current && !visible) current.templatePanel.close();
+                    return;
+                }
 				const previous = current;
                 if (previous) previous.templatePanel.close();
                 if (previous && previous.execution.setForeground) previous.execution.setForeground(false);
 				retention.select(sessionId);
 				hostWindow.__dshTavernSelectedSessionId = sessionId;
 				current = sessionId ? records.get(sessionId) || createRecord(sessionId) : null;
-                if (current && current.execution.setForeground) current.execution.setForeground(true);
+                if (current && current.execution.setForeground) current.execution.setForeground(String(sessions.list.getSnapshot().current || "") === sessionId);
 				if (previous) {
 					// Do not retire from a cached idle view: the settlement-start
 					// notification may still be in flight when navigation happens.

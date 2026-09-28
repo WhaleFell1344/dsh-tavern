@@ -172,6 +172,11 @@ function createTavernComposerWindow(frame, host = frame.parent) {
   function documentView(doc) {
     if (documents.has(doc)) return documents.get(doc);
     const proxy = new Proxy({}, { get(_, key) {
+      if (key === 'createElement' || key === 'createElementNS') return function (...args) {
+        const node = doc[key](...args);
+        frame.frameElement?.__dshTavernHostArtifacts?.trackNode(node);
+        return node;
+      };
       if (key === 'getElementById') return id => lookup(doc, id);
       if (key === 'querySelector' || key === 'querySelectorAll') return selector =>
         (/^#(?:sheld|top-settings-holder)$/.test(selector) && !doc.querySelector(selector))

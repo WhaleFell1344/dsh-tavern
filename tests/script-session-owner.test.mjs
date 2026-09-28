@@ -63,7 +63,8 @@ function harness({ holdReleases = false, dropSignals = false, claimTimeoutMs, re
         }
         return {}
       }, createRuntime(settings) {
-        const runtime = { disposed: 0, syncs: [], emissions: [],
+        const runtime = { disposed: 0, syncs: [], emissions: [], foreground:settings.foreground,
+          setForeground(value) { this.foreground=value },
           sync(id, next) { this.syncs.push({ id, view: next }) },
           inspect: () => ({ scripts: [{ subscriptionsReady: true }] }),
           async emit(name, args) { this.emissions.push(name); return args },
@@ -145,8 +146,10 @@ test('viewing a child and returning keeps one game executor; events complete whi
   assert.equal(h.gate.status('A').ready, true)
   const stopHeader = owner.subscribe(() => {})
   h.list.set({ current: 'child' }); stopHeader()
+  assert.equal(h.runtimes[0].foreground, false, 'child view must hide game UI while retaining its executor')
   assert.equal(h.gate.status('A').ready, true, 'header unmount must not release the game executor')
   h.list.set({ current: 'nested' })
+  assert.equal(h.runtimes[0].foreground, false)
   h.liveView.update('A', view(2))
   const completed = h.gate.dispatch('A', 'MESSAGE_RECEIVED', [1])
   await h.poll()
@@ -156,6 +159,7 @@ test('viewing a child and returning keeps one game executor; events complete whi
   h.list.set({ current: 'A' })
   await h.poll()
   assert.equal(h.runtimes.length, 1)
+  assert.equal(h.runtimes[0].foreground, true, 'returning to the root restores UI')
   assert.equal(h.calls.filter(c => c.method === 'releaseTavernHelperRuntime').length, 0)
   assert.equal(h.calls.some(c => ['child', 'nested'].includes(c.id)), false)
   owner.dispose()
@@ -442,4 +446,18 @@ test('会话到期先解除视图订阅再淘汰快照，活动会话不淘汰',
   await h.advance(599999); assert.deepEqual(evicted, [])
   await h.advance(1); assert.deepEqual(evicted, ['A'])
   owner.dispose()
+})
+
+test('opening directly on a child starts its root executor with card UI hidden', async t => {
+  const h=harness()
+  h.list.set({current:'nested'})
+  const owner=h.client.createTavernScriptSessionOwner(h.options)
+  t.after(()=>owner.dispose())
+  owner.start();await h.poll()
+  assert.equal(h.runtimes.length,1)
+  assert.equal(h.runtimes[0].settings.foreground,false)
+  assert.equal(h.gate.status('A').ready,true)
+  h.list.set({current:'A'});await h.poll()
+  assert.equal(h.runtimes[0].foreground,true)
+  assert.equal(h.runtimes.length,1)
 })

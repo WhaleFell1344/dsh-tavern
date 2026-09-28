@@ -564,6 +564,8 @@ test('Helper Host 切换人物卡时清理旧卡注入宿主的顶层节点和�
   runtime.sync('session', view('card A'))
   const leakedButton = node('card A floating button')
   const leakedStyle = node('card A style')
+  frames[0].__dshTavernHostArtifacts.trackNode(leakedButton)
+  frames[0].__dshTavernHostArtifacts.trackNode(leakedStyle)
   body.appendChild(leakedButton)
   head.appendChild(leakedStyle)
 
@@ -1593,7 +1595,7 @@ test('opening script host stays inside the preview while transport retains its r
   assert.equal(host.cardState, 1)
 })
 
-test('closing a trusted opening removes its host popup and stylesheet without removing existing UI', () => {
+test('closing a trusted opening preserves unowned host UI created during its lifetime', () => {
   const body = { childNodes: [] }, head = { childNodes: [] }
   function add(root, id) { const node = { id, remove() { root.childNodes.splice(root.childNodes.indexOf(node), 1) } }; root.childNodes.push(node); return node }
   const app = add(body, 'app'), style = add(head, 'app-style')
@@ -1603,10 +1605,10 @@ test('closing a trusted opening removes its host popup and stylesheet without re
   const lifecycle = client.createTavernMessageFrameLifecycle({ content: 'opening', sessionId: '', trustedCardMode: true,
     openingPreview: { preparationId: 'draft', swipes: ['opening'], openingIds: ['primary'], selectedIndex: 0 } }, { window: host })
   const stop = lifecycle.start(() => {})
-  add(body, 'card-popup'); add(head, 'card-style')
+  const popup=add(body, 'native-popup'), lateStyle=add(head, 'native-style')
   stop()
-  assert.deepEqual(body.childNodes, [app])
-  assert.deepEqual(head.childNodes, [style])
+  assert.deepEqual(body.childNodes, [app,popup])
+  assert.deepEqual(head.childNodes, [style,lateStyle])
 })
 
 test('trusted host exposes a visible chat mount until the final owner leaves, without a fake composer', () => {
