@@ -1,3 +1,4 @@
+import { templateStateFields } from './template-window-reader.js'
 import { createScopedMessages } from './scoped-messages.js'
 import { createMvuWorkingCopy, projectMvuReceipt } from './mvu-working-copy.js'
 import { randomUUID } from 'node:crypto'
@@ -43,7 +44,7 @@ const MVU_RETRY_AFTER_MS = 3100
  */
 export function createTavernScriptHostAdapter(options = {}) {
   const syncTemplateState = createFullPromptTemplateSync()
-  const templateCharacters = createJsonValueProjectionCache({ capacity: 8, maxBytes: 16 * 1024 * 1024 })
+  const templateCharacters = createJsonValueProjectionCache({ capacity: 8, maxBytes: 64 * 1024 * 1024 })
   const mutationTails = new Map()
   const settlementTransactions = new Map()
   const settlementReaders = new WeakMap()
@@ -521,7 +522,7 @@ export function createTavernScriptHostAdapter(options = {}) {
     let changed = !reuse && selected?.denseMessages && reader?.chatId === selected.chat.id
       && reader.sessionId === selected.chat.sessionId
       && reader.lifecycle === (selected.chat.tavernHelperLifecycleRevision || 0)
-      ? await options.resolveChangedChatSlice?.(sessionId, reader.revision) : undefined
+      ? await options.resolveChangedChatSlice?.(sessionId, reader.revision, templateStateFields) : undefined
     if (!changed?.denseMessages || changed.chat.id !== reader?.chatId
       || changed.chat.sessionId !== reader?.sessionId
       || (changed.chat.tavernHelperLifecycleRevision || 0) !== reader?.lifecycle) changed = undefined

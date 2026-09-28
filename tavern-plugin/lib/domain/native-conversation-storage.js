@@ -7,7 +7,7 @@ import {createBufferedJsonRecords} from './buffered-json-records.js'
 import path from 'node:path'
 import {createConversationPageStore} from './conversation-page-store.js'
 import {createConversationState} from './conversation-state.js'
-import {createIncrementalJsonState} from './incremental-json-state.js'
+import {createIncrementalJsonState,createDecodedJsonCache} from './incremental-json-state.js'
 import {diffJson,applyJsonChangesShared} from './json-mutation.js'
 
 const pointer=parts=>parts.length?'/'+parts.map(part=>String(part).replace(/~/g,'~0').replace(/\//g,'~1')).join('/'):''
@@ -56,11 +56,14 @@ export function createNativeConversationStorage({dataRoot,onIO}){
   summaryLoads.set(key,loading)
   try{return await loading}finally{summaryLoads.delete(key)}
  }
- // Request-local, bounded block reuse. Full reads still return independent JSON
- // values, but shared historical snapshots are not fetched from disk per row.
+ // Immutable content-addressed records can survive a head revision change.
+ // Share one bounded decoded cache across conversations; sidebar/background
+ // reads must not evict the active game's entire decoder. Public reads remain
+ // detached and every request resolves the authoritative head from disk.
+ const decodedCache=createDecodedJsonCache(128*1024*1024)
  function tree(id){
   const cache=new Map();let bytes=0
-  return createIncrementalJsonState({decodedCacheBytes:8*1024*1024,async read(ref){
+  const value=createIncrementalJsonState({decodedCache,async read(ref){
    let entry=cache.get(ref)
    if(entry){cache.delete(ref);cache.set(ref,entry)}
    else {
@@ -73,6 +76,7 @@ export function createNativeConversationStorage({dataRoot,onIO}){
    }
    return structuredClone(entry.value)
   },write:value=>pages.writeRecord(id,value)})
+  return value
  }
  async function head(id,snapshotId){
   const view=await pages.readHead(id,snapshotId?{snapshotId}:{})

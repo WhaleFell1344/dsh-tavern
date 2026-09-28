@@ -22,22 +22,33 @@ function indexOf(key,length,append=false){
  return index
 }
 
-/** Immutable JSON tree with bounded hash buckets. Full materialization is explicit.
- * Scalar changes read/write their ancestor paths, never diff a whole snapshot.
- * read/write store immutable JSON records; hashes are opaque to this module.
- */
-export function createIncrementalJsonState({read,write,decodedCacheBytes=0}){
- // Optional request-local reuse for immutable shared snapshots. Cache-owned
- // values never escape; every public read still receives independent objects.
- const decoded=new Map();let decodedBytes=0
- function rememberDecoded(ref,value){
-  if(!(decodedCacheBytes>0))return
-  const size=JSON.stringify(value).length*4+256
-  if(size>decodedCacheBytes)return
-  if(decoded.has(ref)){decodedBytes-=decoded.get(ref).size;decoded.delete(ref)}
-  while(decoded.size&&decodedBytes+size>decodedCacheBytes){const key=decoded.keys().next().value;decodedBytes-=decoded.get(key).size;decoded.delete(key)}
-  decoded.set(ref,{value:structuredClone(value),size});decodedBytes+=size
+/** Owned, bounded decoded values for immutable record references. */
+export function createDecodedJsonCache(maxBytes = 0) {
+ const entries = new Map(); let bytes = 0
+ return {
+  get(ref) {
+   const entry = entries.get(ref)
+   if (entry) { entries.delete(ref); entries.set(ref, entry) }
+   return entry
+  },
+  remember(ref, value) {
+   if (!(maxBytes > 0)) return
+   const size = JSON.stringify(value).length * 4 + 256
+   if (size > maxBytes) return
+   if (entries.has(ref)) { bytes -= entries.get(ref).size; entries.delete(ref) }
+   while (entries.size && bytes + size > maxBytes) {
+    const key = entries.keys().next().value; bytes -= entries.get(key).size; entries.delete(key)
+   }
+   entries.set(ref, { value: structuredClone(value), size }); bytes += size
+  }
  }
+}
+
+// A shared decoder cache is valid only for one immutable reference namespace.
+// Native storage uses content hashes; unrelated opaque-reference stores must
+// retain the default private cache.
+export function createIncrementalJsonState({read,write,decodedCacheBytes=0,decodedCache=createDecodedJsonCache(decodedCacheBytes)}){
+ const rememberDecoded = (ref,value) => decodedCache.remember(ref,value)
  function session(){
   const cache=new Map()
   return {get:async ref=>{if(!cache.has(ref))cache.set(ref,await read(ref));return cache.get(ref)},
@@ -91,8 +102,8 @@ export function createIncrementalJsonState({read,write,decodedCacheBytes=0}){
  }
  async function decode(s,link){
   if(own(link,'value'))return link.value
-  const previous=decoded.get(link.ref)
-  if(previous){decoded.delete(link.ref);decoded.set(link.ref,previous);return structuredClone(previous.value)}
+  const previous=decodedCache.get(link.ref)
+  if(previous)return structuredClone(previous.value)
   const node=await s.get(link.ref)
   if(node.type==='scalar'){rememberDecoded(link.ref,node.value);return node.value}
   if(!['object','array'].includes(node.type))throw fail('Corrupt state value')

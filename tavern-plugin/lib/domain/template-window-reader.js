@@ -1,0 +1,26 @@
+// Fields consumed by template state and its environment, including the saved
+// resource snapshots. Unchanged refreshes must not silently switch to live cards.
+export const templateStateFields = Object.freeze([
+  'id', 'sessionId', '_storageRevision', 'tavernHelperLifecycleRevision',
+  'backgroundConfigVersion', 'conversationFeaturesVersion', 'mode', 'cardPath',
+  'macroState.userName', 'settleStatus', 'variables', 'tavernPluginMetadata',
+  'promptTemplateInput', 'cardDefinitionSnapshot', 'openingWorldbookSnapshot'
+])
+
+/** A complete short history uses the cursor/delta protocol. Only truncate when
+ * there is actually an older page to fetch; otherwise readWindow would copy the
+ * whole saved card and world on every template refresh before discarding it.
+ */
+export function createTemplateWindowReader({ links, readWindow, access, completeSessions }) {
+  return async sessionId => {
+    if (completeSessions.has(sessionId)) return undefined
+    const chatId = (await links())[String(sessionId)]
+    if (!chatId) return undefined
+    const window = await readWindow(chatId, { limit: 200, requirePartial: true })
+    if (!window || window.chat.sessionId !== sessionId || window.chat.backgroundConfigVersion !== 1 || window.chat.conversationFeaturesVersion !== 1) return undefined
+    return { chat: window.chat, historyWindow: {
+      ...access.issue({ chatId, revision: window.revision, messageCount: window.messageCount }),
+      from: window.from, messageCount: window.messageCount + (window.chat.promptTemplateInput?.message ? 1 : 0)
+    } }
+  }
+}

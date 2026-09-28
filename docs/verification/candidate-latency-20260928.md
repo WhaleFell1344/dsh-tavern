@@ -72,3 +72,28 @@ node --test tests/durable-task-mailbox.test.mjs tests/candidate-tasks.test.mjs t
 实际 DOM 确认可见“5 个候选项”。提交到展示 338ms。启动端最后一轮 7279ms；另一轮无测试负载的热态数据为 5098ms（1790586035365 → 1790586040463），因此不能宣称稳定达到毫秒级启动。模板环境读取/准备仍约 2.6–3.1s；这部分为明确保留的后续优化空间。不要把此次改动描述成全部启动延迟已经消失。此前一轮与自动化测试重叠的计时不用于最终改善结论。
 
 最终回归：112/112 通过，客户端生成文件一致性与 git diff --check 通过。临时计时埋点已移除，服务已重新启动加载清理后的版本。
+
+## 继续优化点击到后台开工（17:35）
+
+这一轮继续使用同一局、同一候选生成按钮，未选择候选或发送剧情。重启后分别测首次候选请求与不重启的连续请求，计时期间没有运行自动化测试。
+
+定位到的额外成本：
+
+- 只有 7 条消息的对话也走最近 200 条模板历史窗口，每次返回完整窗口而没有 cursor，绕过增量同步。窗口读取存档头单次约 450–1039ms。短历史现在先检查 `requirePartial`，未截断时使用完整首读和后续 cursor 增量；长历史保留窗口和按需历史访问。
+- 当前卡的人物投影按缓存原算法计约 56.2MB，超过 16MiB 上限，导致每次刷新重建/指纹计算（约 95–130ms）。人物投影缓存上限改为 64MiB，仍按内容比较和 LRU 淘汰，不使用 TTL。
+- 原生存储的解码缓存仅在一次读取内有效。现在在同一存储的内容哈希命名空间内共用 128MiB 有界缓存，公共读仍返回独立对象，始终读取最新 head。单存档重复读取探针由约 522ms 降至 11–14ms；该数值不是整链路时间。回归包含另一会话读取、外部修改和旧 revision，避免把最新 head 或可变对象缓存成权威状态。
+- 模板增量只选择所需字段，同时保留本局人物卡/世界书快照，避免空增量刷新退回工作区卡资源；候选准备向已有 `readCard(path, chat)` adapter 传入本局快照。
+- 新候选提交直接持久化为 running/preparing，省去紧接着的 queued→preparing 第二次存档。恢复的旧 queued 任务仍在准备前领取；generating、绑定和结果依旧持久化。重复请求只执行一次，运行中断恢复规则不变。
+
+最终两个实测：
+
+| 请求 | 点击 Unix ms | agent.followup Unix ms | 间隔 |
+| --- | ---: | ---: | ---: |
+| 重启后首次候选请求（先正常打开本局） | 1790588101264 | 1790588103345 | 2081ms |
+| 同局连续请求 | 1790588136332 | 1790588138302 | 1970ms |
+
+两轮均实际显示“5 个候选项”。这里的后台开始以调用 agent.followup 为界，不是供应商开始计算或首 token 时间。仍未达到用户期望的几百毫秒。首轮任务声明、begin、generating、bind 四次持久化约 1.1s，世界书准备约 652ms；连续请求仍有类似成本。不能把本次结果描述成瞬时启动。
+
+曾尝试合并页面存储提交内重复的目录同步；存档副本探针没有显示明确收益，已撤回该试验，持久化屏障保持原实现。
+
+最终回归 161/161 通过：background-task-coordinator、candidate-generation、candidate-tasks、durable-task-mailbox、task-state-reader、native-conversation-storage、chat-journal-store、incremental-json-state、template-window-reader、template-projection-freshness、server-template-native、full-prompt-template-state、full-prompt-template-sync、immutable-json-projection。构建和生成文件一致性检查通过。临时计时探针已移除；最终服务重启加载无探针版本。

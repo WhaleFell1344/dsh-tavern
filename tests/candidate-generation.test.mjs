@@ -80,7 +80,7 @@ function harness({ mode = 'story', outputs, initialCandidates, initialCandidateA
   const store = {
     async chatForSession() { return structuredClone(chat) },
     async readChat() { return structuredClone(chat) },
-    async readCard() { return structuredClone(card) },
+    async readCard(_path, snapshot) { assert.equal(snapshot.id, chat.id, 'candidate preparation reuses the current chat resource snapshot'); return structuredClone(card) },
     async readScript() { return mode === 'script' ? structuredClone(activeScript) : undefined },
     async writeChat(next) {
       if (typeof writeChatHook === 'function') await writeChatHook(next, chat)

@@ -418,3 +418,21 @@ test('candidate metadata patch canonicalizes optional undefined leaves',async t=
  const saved=await persistence.patch('optional',original._storageRevision,[{op:'set',path:['candidates','script'],value:undefined},{op:'set',path:['candidates','optional'],value:undefined}],{returnProjection:['id','candidates']})
  assert.deepEqual(saved.candidates,{choices:[]})
 })
+
+test('unchanged card blocks survive task revisions without sharing writable projections',async t=>{
+ const {root,persistence}=await fixture(t)
+ const chat=await persistence.write({id:'resource-reuse',cardDefinitionSnapshot:{description:'large'.repeat(200000)},messages:[row(1)]})
+ await persistence.write({id:'other-game',messages:[]})
+ const io=[],reader=createChatPersistence({store:createChatJournalStore({dataRoot:root,onNativeIO:e=>io.push(e)})})
+ const first=await reader.readSlice(chat.id,[],['id','cardDefinitionSnapshot'])
+ first.chat.cardDefinitionSnapshot.description='caller mutation'
+ await reader.readSlice('other-game',[],['id'])
+ const updated=await persistence.patch(chat.id,chat._storageRevision,[{op:'set',path:['taskMailbox'],value:{version:1}}],{returnProjection:['id','_storageRevision']})
+ io.length=0
+ const second=await reader.readSlice(chat.id,[],['id','cardDefinitionSnapshot'])
+ assert.equal(second.chat.cardDefinitionSnapshot.description,'large'.repeat(200000))
+ assert.ok(io.every(e=>e.bytes<65536),'unchanged large immutable blocks should not be loaded again')
+ await persistence.patch(chat.id,updated._storageRevision,[{op:'set',path:['cardDefinitionSnapshot','description'],value:'external edit'}])
+ assert.equal((await reader.readSlice(chat.id,[],['cardDefinitionSnapshot'])).chat.cardDefinitionSnapshot.description,'external edit')
+ assert.equal((await reader.readRevision(chat.id,chat._storageRevision)).cardDefinitionSnapshot.description,'large'.repeat(200000))
+})

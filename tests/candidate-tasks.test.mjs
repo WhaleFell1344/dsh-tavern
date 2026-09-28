@@ -177,3 +177,18 @@ test('session polling uses state projections without materializing history', asy
     assert.equal(result.activity.busy, true)
   }
 })
+
+test('immediate candidate submission durably claims preparation in one write',async t=>{
+ const h=await harness(t),gate=deferred(),writes=[]
+ const write=h.chats.write
+ h.chats.write=async(chat,metadata)=>{writes.push(metadata.source);return write(chat,metadata)}
+ let preparations=0
+ const service=h.create({async prepare(){preparations++;await gate.promise;return {operationId:'op',async execute(){return {choices:[]}}}}})
+ const started=await service.submit(request)
+ assert.equal(started.task.status,'running');assert.equal(started.task.stage,'preparing')
+ assert.deepEqual(writes,['candidate.mailbox.preparing'])
+ await service.submit(request)
+ assert.equal(preparations,1);assert.equal(writes.length,1)
+ gate.resolve()
+ assert.equal((await until(()=>service.sync('s',{requestId:'r'}),v=>v.task?.terminal)).task.status,'succeeded')
+})

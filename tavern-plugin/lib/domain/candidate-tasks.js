@@ -31,11 +31,14 @@ export function createCandidateTasks({ chats, generator, backgroundTasks, sessio
 
   function scheduleCandidateTask(chatId, task) {
     const taskId = str(task && task.taskId)
-    if (taskId === '' || candidateTaskJobs.has(taskId) || (task && task.status) !== 'queued') return
+    if (taskId === '' || candidateTaskJobs.has(taskId) || !(task?.status === 'queued' || task?.status === 'running' && task.stage === 'preparing')) return
     const job = Promise.resolve().then(async function () {
       let operationId = ''
       try {
-        await taskMailbox.transition(chatId, taskId, { status: 'running', stage: 'preparing', error: '' })
+        // New tasks persist their claim with submission; recovered queued tasks
+        // still need to claim before preparation. No model starts before the
+        // durable generating transition below.
+        if (task.status === 'queued') await taskMailbox.transition(chatId, taskId, { status: 'running', stage: 'preparing', error: '' })
         const input = task.input || {}
         const prepared = await candidateGenerator.prepare({
           sessionId: input.sessionId,
@@ -126,7 +129,8 @@ export function createCandidateTasks({ chats, generator, backgroundTasks, sessio
     const task = await taskMailbox.submit(chat.id, {
       requestId: args.requestId,
       kind: 'candidate',
-      stage: 'queued',
+      startImmediately: true,
+      stage: 'preparing',
       input: {
         sessionId,
         messageId: str(args.messageId),

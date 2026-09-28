@@ -324,7 +324,7 @@ export function createCandidateGenerator(options) {
     chat = await store.readChat(chat.id)
     if (chat === undefined) throw new Error('聊天不存在')
     const cardPath = str(chat.cardPath || chat.cardId)
-    const card = await store.readCard(cardPath)
+    const card = await store.readCard(cardPath, chat)
     if (card === undefined) throw new Error('人物卡不存在: ' + cardPath)
     const selection = model.selection(chat)
     if (selection === null || selection === undefined) throw new Error('没有可用的模型配置')

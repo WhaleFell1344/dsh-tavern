@@ -139,8 +139,8 @@ export function createDurableTaskMailbox(options = {}) {
         taskId,
         requestId,
         kind,
-        status: 'queued',
-        stage: str(input.stage) || 'queued',
+        status: input.startImmediately === true ? 'running' : 'queued',
+        stage: str(input.stage) || (input.startImmediately === true ? 'preparing' : 'queued'),
         input: input.input && typeof input.input === 'object' ? input.input : {},
         operationId: '',
         result: null,
@@ -155,7 +155,7 @@ export function createDurableTaskMailbox(options = {}) {
         return (Number(mailbox.tasks[right].createdAt) || 0) - (Number(mailbox.tasks[left].createdAt) || 0)
       })
       for (const oldId of ids.slice(30)) delete mailbox.tasks[oldId]
-      await saveMailbox(chat, { source: kind + '.mailbox.queued', requestId })
+      await saveMailbox(chat, { source: kind + '.mailbox.' + (input.startImmediately === true ? 'preparing' : 'queued'), requestId })
       return publicTask(task)
     })
   }

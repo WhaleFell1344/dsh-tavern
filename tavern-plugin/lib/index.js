@@ -1,3 +1,4 @@
+import { createTemplateWindowReader, templateStateFields } from './domain/template-window-reader.js'
 import { createSessionResourceAccess } from './domain/session-resource-access.js'
 import { worldBookDisplayName } from './domain/worldbook-resource.js'
 import { createConversationMigration } from './domain/conversation-migration.js'
@@ -1351,25 +1352,12 @@ export async function apply(ctx) {
       if (!selected || selected.chat.sessionId !== sessionId || selected.chat.backgroundConfigVersion !== 1 || selected.chat.conversationFeaturesVersion !== 1) return undefined
       return selected
     },
-    resolveTemplateWindow: async sessionId => {
-      if(completeTemplateHistorySessions.has(sessionId))return undefined
-      const chatId=(await readSessionMap())[str(sessionId)]
-      if(!chatId)return undefined
-      const window=await chatPersistence.readWindow(chatId,{limit:200})
-      if(!window || window.chat.sessionId!==sessionId || window.chat.backgroundConfigVersion!==1 || window.chat.conversationFeaturesVersion!==1)return undefined
-      // The virtual foreground input follows the persisted tail in this window.
-      return {chat:window.chat,historyWindow:{...helperHistoryAccess.issue({chatId,revision:window.revision,messageCount:window.messageCount}),
-        from:window.from,messageCount:window.messageCount+(window.chat.promptTemplateInput?.message?1:0)}}
-    },
+    resolveTemplateWindow: createTemplateWindowReader({ links: readSessionMap, readWindow: chatPersistence.readWindow, access: { issue: input => helperHistoryAccess.issue(input) }, completeSessions: completeTemplateHistorySessions }),
     resolveChatSlice: createSessionSliceReader({links:readSessionMap, readSlice:chatPersistence.readSlice}),
     resolveChatMetadataSlice: async sessionId => {
       const chatId=(await readSessionMap())[sessionId]
       if(!chatId)return undefined
-      const selected=await chatPersistence.readSlice(chatId,[],[
-        'id','sessionId','_storageRevision','tavernHelperLifecycleRevision',
-        'backgroundConfigVersion','conversationFeaturesVersion','mode','cardPath',
-        'macroState.userName','settleStatus'
-      ])
+      const selected=await chatPersistence.readSlice(chatId,[],templateStateFields)
       if(!selected || selected.chat.sessionId!==sessionId || selected.chat.backgroundConfigVersion!==1 || selected.chat.conversationFeaturesVersion!==1)return undefined
       return selected
     },
