@@ -107,3 +107,14 @@ test('legacy self checks can read empty global regexes and v2 character script p
   assert.equal(w.SillyTavern.extensionSettings.regex.length,0)
   assert.equal(w.SillyTavern.characters[w.SillyTavern.characterId].data.extensions.TavernHelper_scripts[0].name,'Example')
 })
+
+test('legacy wrapped script exports expose names and effective enabled state to card readers', () => {
+  const entries=[{type:'script',value:{id:'one',name:'Example',content:'void 0',enabled:true}},
+    {type:'script',enabled:false,value:{id:'two',name:'Disabled',enabled:true}}]
+  const input={name:'Card',extensions:{TavernHelper_scripts:entries}}
+  const w=helperHostHarness({character:input}).window
+  const scripts=w.SillyTavern.characters[0].data.extensions.TavernHelper_scripts
+  assert.equal(scripts[0].name,'Example')
+  assert.equal(scripts[1].enabled,false)
+  assert.equal(entries[0].name,undefined,'source card stays unchanged')
+})

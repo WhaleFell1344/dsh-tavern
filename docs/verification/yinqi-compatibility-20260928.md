@@ -113,3 +113,9 @@ Validation: 93 focused tests passed, including placeholder padding, live positio
 现在 MVU 的公开额外模型配置通过运行时视图返回实际后台代理入口和非秘密的 host-managed 标识；请求测试确认该入口转交 generateTavernHelperRaw。保存与序列化保留原始连接配置，MVU schema 重建设置对象时也会去掉代理占位值，避免覆盖用户原有密钥。更新方式和通知不做伪造投影，已按用户要求通过设置存储 API 保存额外模型解析与变量更新出错通知。
 
 103 项针对性测试通过，客户端构建检查通过。重新打开原卡预览并再次点击开始绑定，真实页面显示“额外模型解析（推荐）”“已配置（本局后台模型）”，无严重错误，只剩 2 项黄色建议。未修改卡片、未启动新游戏或生成剧情。
+
+## 旧格式脚本列表的名称读取
+
+自检的“未找到 8 个”并非可忽略建议。执行器早已展开 {type:'script',value:{name,...}}，但 characters[id].data.extensions.TavernHelper_scripts 仍返回包装对象，自检读取顶层 name 得到 undefined。现将此只读人物卡投影按执行器同样的规则展开，并合并外层与内层启用标志；原卡不变。
+
+新增回归先失败后通过；95 项相关测试通过。直接读取原始 V24.4 卡，通过实际 Helper facade 按卡片自检的同一路径查找，返回 9 个脚本，所需 8 个全部存在且启用（missing=[]、disabled=[]）。本轮未再次完整点击浏览器向导。

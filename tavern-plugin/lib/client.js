@@ -5250,6 +5250,16 @@ window.__ModuleLoader__.load({
 					if (!character || typeof character !== "object") return [];
 					const current = copy(character);
                     if (!current.data) current.data = copy(character);
+                    // Legacy exports wrap scripts in {type, value}; expose the same
+                    // effective script records that the host execution reader uses.
+                    const extensions = current.data.extensions;
+                    if (Array.isArray(extensions?.TavernHelper_scripts)) {
+                        extensions.TavernHelper_scripts = extensions.TavernHelper_scripts.map(function (entry) {
+                            if (entry?.type !== "script" || !entry.value || typeof entry.value !== "object" || Array.isArray(entry.value)) return entry;
+                            return Object.assign({}, entry.value, { type: entry.type,
+                                enabled: entry.enabled !== false && entry.disabled !== true && entry.value.enabled !== false && entry.value.disabled !== true });
+                        });
+                    }
 					if (!current.avatar) current.avatar = String(current.path || "");
 					return [current];
 				},
