@@ -1,5 +1,7 @@
 # dsh-tavern
 
+> **Windows 安装此 UI 修复版：**请按[此 fork 的 Windows 安装说明](docs/windows-fork-install.md)操作。下方原项目的 Windows Setup EXE 链接不包含此 fork 的界面修复。
+
 **基于 DeepSeek Harness（DSH）的文字游戏 Agent，支持导入 SillyTavern 人物卡。**
 
 选一张卡自由游玩，或绑定小说、剧本和大纲，让故事沿主线推进。也可以与 Agent 对话，从素材制作新卡，修改人物设定和世界书。
