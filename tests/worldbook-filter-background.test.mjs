@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createWorldbookFilter } from '../tavern-plugin/lib/domain/worldbook-filter.js'
+import { createWorldbookFilter, WORLD_BOOK_FILTER_TOOLS } from '../tavern-plugin/lib/domain/worldbook-filter.js'
 import { createBackgroundAgentRunner } from '../tavern-plugin/lib/background-agent-runner.js'
 import { createBackgroundTaskCoordinator } from '../tavern-plugin/lib/domain/background-task-coordinator.js'
 import { createStoryTimeline } from '../tavern-plugin/lib/domain/story-timeline.js'
@@ -11,7 +11,7 @@ import { createForegroundFrameBuilder } from '../tavern-plugin/lib/domain/agent-
 const selection = { provider: 'test', model: 'scripted' }
 const candidates = Array.from({ length: 6 }, (_, n) => ({ ref: 'entry:' + n, text: '候选资料' + n, tokenCost: 10 }))
 
-function harness() {
+function harness(runnerOptions = {}) {
   let value = { id: 'game', sessionId: 'parent', mode: 'story', cardPath: 'card.json', messages: [], _storageRevision: 1 }
   const persistence = createChatPersistence({ data: {
     remove: async () => {},
@@ -24,8 +24,9 @@ function harness() {
   let sequence = 0, fail = false, blocked = false, beforeSubmit = async () => {}
   const timeline = createStoryTimeline({ id: prefix => prefix + '-' + ++sequence })
   const tasks = createBackgroundTaskCoordinator({ store, timeline, blocked: () => blocked })
-  const sessions = new Map(), created = [], resumed = [], calls = []
+  const sessions = new Map(), created = [], resumed = [], calls = [], setupRuns = [], disposed = []
   async function handle(session, setup) {
+    setupRuns.push(session.id)
     const tools = new Map()
     await setup({ systemPrompt: { section() {}, suppressRuntimeContext() {} }, on() {},
       tools: { restrict() {}, register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } } })
@@ -40,7 +41,7 @@ function harness() {
         session.append('assistant/message', { message: { id: 'answer-' + session.events.length, role: 'assistant', content: [{ type: 'text', text: '完成' }], source: { kind: 'model', provider: 'test', model: 'scripted' } } })
       })()
     }, whenIdle: () => work }
-    return { agent, dispose: async () => {} }
+    return { agent, dispose: async () => { disposed.push(session.id) } }
   }
   const agents = { get: id => id === 'parent' ? { id, session: { header: {} } } : undefined,
     async create(input) {
@@ -57,7 +58,7 @@ function harness() {
     },
     async resume(input) { resumed.push(input.resumeSessionId); return handle(sessions.get(input.resumeSessionId), input.setup) }
   }
-  const makeRunner = () => createBackgroundAgentRunner({ agents, id: () => 'background-' + ++sequence,
+  const makeRunner = () => createBackgroundAgentRunner({ ...runnerOptions, agents, id: () => 'background-' + ++sequence,
     needsNewBackgroundSession: async () => (await store.readChat()).timeline?.participants.background?.status === 'needs-session' })
   let runner = makeRunner()
   const filter = createWorldbookFilter({ selection: () => selection, runAgent: input => runner.run(input),
@@ -70,7 +71,7 @@ function harness() {
     await task.commit({ participant: task.participant(result) })
     return result
   }
-  return { store, timeline, tasks, filter, runTask, sessions, created, resumed, calls,
+  return { store, timeline, tasks, filter, runTask, sessions, created, resumed, calls, setupRuns, disposed,
     input: async () => ({ chat: await store.readChat(), userText: '查看资料', candidates }),
     fail: flag => { fail = flag }, block: flag => { blocked = flag }, beforeSubmit: callback => { beforeSubmit = callback },
     restart: async () => { await runner.dispose(); runner = makeRunner() }, dispose: () => runner.dispose() }
@@ -184,3 +185,34 @@ test('筛选期间剧情改变，迟到结果不绑定新剧情或保存正文 F
   assert.equal(saved.timeline.participants.background.boundary, null)
   assert.ok(Object.values(saved.timeline.operations).every(operation => operation.status !== 'completed'))
 })
+
+for (const provider of ['dsh-tavern-background', 'dsh-tavern-background-tools-v1', 'dsh-tavern-background-tools-v2', 'dsh-tavern-background-tools-v3']) {
+  test(`恢复 ${provider} 后重建的会话首轮保留筛选和共享工具`, async t => {
+    const h = harness({
+      backgroundTools: WORLD_BOOK_FILTER_TOOLS,
+      sharedTools: [{
+        tool: { name: 'worldbook_search', description: '搜索世界书', parameters: { type: 'object' } },
+        allowDuringWorldbookFilter: true, execute: async () => '[]'
+      }]
+    })
+    t.after(h.dispose)
+    const first = await h.filter(await h.input())
+    await h.restart()
+    const old = h.sessions.get(first.traceSessionId)
+    old.events.find(event => event.type === 'subagent/descriptor').data.provider = provider
+    const setupStart = h.setupRuns.length
+    const callStart = h.calls.length
+    const disposeStart = h.disposed.length
+
+    const filtered = await h.filter(await h.input())
+
+    assert.notEqual(filtered.traceSessionId, first.traceSessionId)
+    assert.deepEqual(h.setupRuns.slice(setupStart), [first.traceSessionId, filtered.traceSessionId])
+    assert.deepEqual(h.disposed.slice(disposeStart), [first.traceSessionId])
+    assert.equal(h.calls[callStart].sessionId, filtered.traceSessionId)
+    assert.deepEqual(h.calls[callStart].tools, ['worldbook_candidate_read', 'worldbook_filter_submit', 'worldbook_search'])
+    assert.deepEqual(filtered.selected, ['entry:0'])
+    assert.equal((await h.store.readChat()).timeline.participants.background.sessionId, filtered.traceSessionId)
+    assert.deepEqual(h.created, [first.traceSessionId, filtered.traceSessionId])
+  })
+}

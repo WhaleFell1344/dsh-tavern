@@ -227,6 +227,9 @@ export function createBackgroundAgentSessions(options, task) {
           }
         }
         if (handle === undefined) {
+          // A resumed handle may already have run setup before being discarded.
+          // Tool registrations and their cache belong to that handle's context.
+          state = { input: runtimeInput, ctx: null }
           const meta = {
             parentSession: parent.id,
             origin: 'subagent',
