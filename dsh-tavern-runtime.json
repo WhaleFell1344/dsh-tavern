@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "revision": "80be9db287297ed2dd7ae5d0328ba95ae4ec1bd7",
-  "releaseSequence": 418,
+  "revision": "ceb90f2c847350cb6721d7bc39dda09d903f79c7",
+  "releaseSequence": 419,
   "version": "2.4.0",
   "files": [
     {
@@ -356,8 +356,8 @@
     },
     {
       "path": "tavern-plugin/lib/background-agent-sessions.js",
-      "sha256": "923be0038905546e5eaa1bb7eaa8b66b96db00508a8b51cc4116d387d8e15e37",
-      "size": 19495
+      "sha256": "7c0eb186facd4d4d75d041163b666a7407033b80f2c9cbed79fce5b4ab751fb1",
+      "size": 19710
     },
     {
       "path": "tavern-plugin/lib/background-agent-task.js",
