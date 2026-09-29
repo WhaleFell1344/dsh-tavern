@@ -9,6 +9,7 @@
   --dsh-tavern-accent-hairline: var(--dsw-alias-border-l2);
   --dsh-tavern-accent-cream: var(--dsw-alias-bg-base);
   --dsh-tavern-accent-surface: var(--dsw-alias-bg-layer-1);
+  --dsh-tavern-solid-surface: var(--dsw-alias-bg-layer-1, #fffdf8);
   --dsh-tavern-accent-error: var(--dsw-static-red-500, #c64545);
   --dsh-tavern-radius-sm: 6px;
   --dsh-tavern-radius-md: 8px;
@@ -62,15 +63,15 @@ body.dsh-tavern-shell-active .dsh-tavern-landing::before {
 .dsh-tavern-btn.danger:hover { background: color-mix(in srgb, var(--dsh-tavern-accent-error) 20%, transparent); }
 .dsh-tavern-mobile-import { position: fixed; inset: 0; z-index: 2300; display: grid; place-items: center; padding: 18px; background: rgba(0,0,0,.52); }
 .dsh-tavern-mobile-import-shell { display: contents; }
-.dsh-tavern-mobile-import-panel { box-sizing: border-box; width: min(520px, 100%); max-height: min(78vh, 680px); display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 14px; background: var(--dsw-specific-sidebar-fill); color: var(--dsw-alias-label-primary); box-shadow: 0 18px 54px rgba(0,0,0,.35); }
+.dsh-tavern-mobile-import-panel { box-sizing: border-box; width: min(520px, 100%); max-height: min(78vh, 680px); display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 14px; background: var(--dsh-tavern-solid-surface); color: var(--dsw-alias-label-primary); box-shadow: 0 18px 54px rgba(0,0,0,.35); }
 .dsh-tavern-mobile-import-title { font-size: 15px; font-weight: 750; }
 .dsh-tavern-mobile-import-list { display: flex; flex-direction: column; gap: 7px; overflow: auto; }
 .dsh-tavern-mobile-import-file { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 9px; background: var(--dsw-alias-bg-base); color: inherit; text-align: left; cursor: pointer; }
 .dsh-tavern-mobile-import-file span { color: var(--dsw-alias-label-secondary); font-size: 11px; }
 .dsh-tavern-empty { margin: auto; text-align: center; color: var(--dsw-alias-label-secondary); padding: 24px; line-height: 1.8; white-space: pre-wrap; }
 .dsh-tavern-dock-error { color: #ef8f8f; padding: 0 10px 7px; font-size: 12px; }
-.dsh-tavern-picker-error { position: sticky; top: 0; z-index: 2; margin: 0 0 10px; padding: 10px 12px; border: 1px solid rgba(196,95,95,.45); border-radius: 10px; background: color-mix(in srgb, var(--dsw-specific-sidebar-fill) 88%, #c45f5f 12%); color: #c45f5f; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-.dsh-tavern-error-center { position: fixed; z-index: 2200; top: 16px; right: 16px; width: min(480px, calc(100vw - 32px)); max-height: min(70vh, 640px); display: flex; flex-direction: column; overflow: hidden; border: 1px solid rgba(196,95,95,.5); border-radius: 14px; background: var(--dsw-specific-sidebar-fill); box-shadow: 0 18px 54px rgba(0,0,0,.32); color: var(--dsw-alias-label-primary); }
+.dsh-tavern-picker-error { position: sticky; top: 0; z-index: 2; margin: 0 0 10px; padding: 10px 12px; border: 1px solid rgba(196,95,95,.45); border-radius: 10px; background: color-mix(in srgb, var(--dsh-tavern-solid-surface) 88%, #c45f5f 12%); color: #c45f5f; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dsh-tavern-error-center { position: fixed; z-index: 2200; top: 16px; right: 16px; width: min(480px, calc(100vw - 32px)); max-height: min(70vh, 640px); display: flex; flex-direction: column; overflow: hidden; border: 1px solid rgba(196,95,95,.5); border-radius: 14px; background: var(--dsh-tavern-solid-surface); box-shadow: 0 18px 54px rgba(0,0,0,.32); color: var(--dsw-alias-label-primary); }
 .dsh-tavern-error-center-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid rgba(196,95,95,.25); font-size: 13px; font-weight: 700; }
 .dsh-tavern-error-center-head span { flex: 1; }
 .dsh-tavern-error-list { overflow: auto; padding: 8px; }
@@ -138,6 +139,19 @@ body.dsh-tavern-shell-active .dsh-tavern-landing::before {
 .dsh-tavern-sidebar { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; padding: 12px; color: var(--dsw-alias-label-primary); background: var(--dsw-specific-sidebar-fill); }
 .dsh-tavern-sidebar.collapsed { padding: 12px 10px; align-items: center; }
 body.dsh-tavern-shell-active button[aria-label="新建会话"], body.dsh-tavern-shell-active button[aria-label="New session"] { display: none !important; }
+/* The host keeps its logo row when Tavern hides the native new-session brand.
+   Show Tavern's title in that row and remove the duplicate title below it. */
+body.dsh-tavern-shell-active .hHd-Xa_root:not(.hHd-Xa_collapsed) > .hHd-Xa_logoRow::before {
+  content: "🍺 DSH Tavern";
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--dsh-tavern-accent-active);
+  font-size: 16px;
+  font-weight: 800;
+}
+body.dsh-tavern-shell-active [data-slot="sidebar.workspaces"] .dsh-tavern-side-head { display: none; }
 body.dsh-tavern-shell-active [data-turn-tail] > [data-slot="conversation.chat.turnTail"] + div > button { display: none !important; }
 body.dsh-tavern-shell-active [data-turn-tail] [data-slot="conversation.chat.assistant-actions"] > :not(.dsh-tavern-message-fork) { display: none !important; }
 body.dsh-tavern-shell-active .dsh-tavern-hero-preset-row { display: none !important; }
@@ -170,7 +184,7 @@ body.dsh-tavern-shell-active [data-ref-chip="file"] { max-width: calc(100% - 4px
 .dsh-tavern-side-row-more { width: 28px; height: 28px; flex: none; margin-right: 3px; border: 0; border-radius: 7px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; opacity: 0; }
 .dsh-tavern-side-row:hover .dsh-tavern-side-row-more, .dsh-tavern-side-row-more[aria-expanded="true"] { opacity: 1; }
 .dsh-tavern-side-row-more:hover { background: var(--dsw-alias-interactive-bg-hover); color: inherit; }
-.dsh-tavern-side-row-menu { position: absolute; z-index: 30; top: 32px; right: 4px; min-width: 96px; padding: 4px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 9px; background: var(--dsw-specific-sidebar-fill); box-shadow: 0 8px 24px rgba(0,0,0,.14); transform-origin: top right; animation: dsh-tavern-menu-in 150ms cubic-bezier(0.23, 1, 0.32, 1); }
+.dsh-tavern-side-row-menu { position: absolute; z-index: 30; top: 32px; right: 4px; min-width: 96px; padding: 4px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 9px; background: var(--dsh-tavern-solid-surface); box-shadow: 0 8px 24px rgba(0,0,0,.14); transform-origin: top right; animation: dsh-tavern-menu-in 150ms cubic-bezier(0.23, 1, 0.32, 1); }
 .dsh-tavern-side-row-menu button { display: block; width: 100%; border: 0; border-radius: 6px; padding: 7px 10px; text-align: left; background: transparent; color: inherit; cursor: pointer; }
 .dsh-tavern-side-row-menu button:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .dsh-tavern-side-row-menu button.danger { color: #c34f4f; }
@@ -233,7 +247,8 @@ body.dsh-tavern-shell-active [data-ref-chip="file"] { max-width: calc(100% - 4px
 .dsh-tavern-export-action:hover { border-color: var(--dsh-tavern-accent); color: var(--dsh-tavern-accent); background: color-mix(in srgb, var(--dsh-tavern-accent) 8%, transparent); }
 .dsh-tavern-export-action:disabled { opacity: .55; cursor: default; }
 .dsh-tavern-picker-overlay { position: fixed; z-index: 1000; inset: 0; display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 24px; background: rgba(20,18,24,.42); backdrop-filter: blur(2px); }
-.dsh-tavern-card-picker { width: min(860px, calc(100vw - 48px)); max-height: min(80vh, 760px); overflow: auto; box-sizing: border-box; padding: 20px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 16px; background: var(--dsw-specific-sidebar-fill); box-shadow: 0 22px 64px rgba(0,0,0,.30); }
+/* The active sidebar fill can be translucent; dialogs need an opaque surface. */
+.dsh-tavern-card-picker { width: min(860px, calc(100vw - 48px)); max-height: min(80vh, 760px); overflow: auto; box-sizing: border-box; padding: 20px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 16px; background: var(--dsh-tavern-solid-surface); box-shadow: 0 22px 64px rgba(0,0,0,.30); }
 .dsh-tavern-card-picker-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 700; }
 .dsh-tavern-card-picker-help { margin: 4px 0 12px; color: var(--dsw-alias-text-l2); font-size: 13px; }
 .dsh-tavern-card-pick { width: 100%; padding: 9px; margin-top: 5px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
@@ -264,14 +279,14 @@ body.dsh-tavern-shell-active [data-ref-chip="file"] { max-width: calc(100% - 4px
   .dsh-tavern-preset-status { display: none; }
 }
 .dsh-tavern-picker-group { margin-top: 10px; color: var(--dsw-alias-label-secondary); font-size: 11px; font-weight: 700; }
-.dsh-tavern-picker-foot { position: sticky; bottom: -10px; display: flex; justify-content: flex-end; margin: 10px -10px -10px; padding: 10px; border-top: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-specific-sidebar-fill); }
+.dsh-tavern-picker-foot { position: sticky; bottom: -10px; display: flex; justify-content: flex-end; margin: 10px -10px -10px; padding: 10px; border-top: 1px solid var(--dsw-alias-border-l2); background: var(--dsh-tavern-solid-surface); }
 .dsh-tavern-script-file { align-self: center; white-space: nowrap; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: transparent; color: var(--dsw-alias-label-secondary); padding: 6px 8px; cursor: pointer; font-size: 11px; }
 .dsh-tavern-script-file:hover { border-color: var(--dsh-tavern-accent); color: var(--dsh-tavern-accent); }
 .dsh-tavern-choice-trigger { border: 1px solid color-mix(in srgb, var(--dsh-tavern-accent) 40%, transparent); background: color-mix(in srgb, var(--dsh-tavern-accent) 10%, transparent); color: var(--dsh-tavern-accent); cursor: pointer; padding: 3px 9px; border-radius: 7px; font-size: 12px; font-weight: 650; }
 .dsh-tavern-choice-trigger:hover { background: color-mix(in srgb, var(--dsh-tavern-accent) 20%, transparent); color: var(--dsw-alias-brand-primary); }
 .dsh-tavern-dock-actions { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; max-width: var(--dsh-composer-card-max-width, 780px); box-sizing: border-box; margin: 0 auto; padding: 8px 12px 0; flex-wrap: wrap; }
 .dsh-tavern-more-actions { position: relative; }
-.dsh-tavern-more-menu { position: absolute; z-index: 40; right: 0; bottom: calc(100% + 6px); display: grid; min-width: 150px; padding: 5px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 9px; background: var(--dsw-specific-sidebar-fill); box-shadow: 0 8px 24px rgba(0,0,0,.2); transform-origin: bottom right; }
+.dsh-tavern-more-menu { position: absolute; z-index: 40; right: 0; bottom: calc(100% + 6px); display: grid; min-width: 150px; padding: 5px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 9px; background: var(--dsh-tavern-solid-surface); box-shadow: 0 8px 24px rgba(0,0,0,.2); transform-origin: bottom right; }
 .dsh-tavern-more-menu:not([hidden]) { animation: dsh-tavern-menu-in 150ms cubic-bezier(0.23, 1, 0.32, 1); }
 .dsh-tavern-more-menu[hidden] { display: none; }
 .dsh-tavern-more-menu button { width: 100%; border: 0; border-radius: 6px; padding: 8px 10px; background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; text-align: left; white-space: nowrap; }
@@ -393,7 +408,7 @@ body.dsh-tavern-shell-active [data-ref-chip="file"] { max-width: calc(100% - 4px
   padding: 4px;
   border: 1px solid color-mix(in srgb, var(--dsh-tavern-accent-hairline) 60%, var(--dsw-alias-border-l2));
   border-radius: var(--dsh-tavern-radius-lg);
-  background: var(--dsw-specific-sidebar-fill);
+  background: var(--dsh-tavern-solid-surface);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
 }
 .dsh-tavern-resource-menu-popup button {
@@ -735,7 +750,7 @@ body.dsh-tavern-shell-active [data-ref-chip="file"] { max-width: calc(100% - 4px
 .dsh-tavern-worldbook-entry .dsh-tavern-card-field:last-child { margin-bottom: 0; }
 .dsh-tavern-worldbook-editor { padding: 10px 12px 24px; overflow-y: auto; }
 .dsh-tavern-worldbook-summary { margin: 0 0 10px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 1.6; }
-.dsh-tavern-worldbook-editor-actions { position: sticky; bottom: 0; display: flex; justify-content: flex-end; gap: 6px; padding: 10px 0; background: var(--dsw-specific-sidebar-fill); }
+.dsh-tavern-worldbook-editor-actions { position: sticky; bottom: 0; display: flex; justify-content: flex-end; gap: 6px; padding: 10px 0; background: var(--dsh-tavern-solid-surface); }
 .dsh-tavern-worldbook-entry details { margin-top: 7px; }
 .dsh-tavern-worldbook-entry summary { cursor: pointer; color: var(--dsw-alias-label-secondary); font-size: 10px; }
 .dsh-tavern-worldbook-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 7px; }
@@ -743,7 +758,7 @@ body.dsh-tavern-shell-active [data-ref-chip="file"] { max-width: calc(100% - 4px
 .dsh-tavern-worldbook-grid input,.dsh-tavern-worldbook-grid select { min-width: 0; padding: 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; background: var(--dsw-specific-input-major); color: inherit; }
 .dsh-tavern-worldbook-checks { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 7px 0; color: var(--dsw-alias-label-secondary); font-size: 10px; }
 .dsh-tavern-worldbook-checks label { display: inline-flex; align-items: center; gap: 4px; }
-.dsh-tavern-card-save { position: sticky; bottom: 0; display: flex; justify-content: flex-end; padding: 10px 0 2px; background: linear-gradient(transparent, var(--dsw-specific-sidebar-fill) 28%); }
+.dsh-tavern-card-save { position: sticky; bottom: 0; display: flex; justify-content: flex-end; padding: 10px 0 2px; background: linear-gradient(transparent, var(--dsh-tavern-solid-surface) 28%); }
 .dsh-tavern-script-row { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--dsw-alias-border-l3); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11px; color: var(--dsw-alias-label-secondary); }
 .dsh-tavern-script-info { flex: 1; min-width: 150px; line-height: 1.5; }
 .dsh-tavern-script-info b { color: var(--dsh-tavern-accent); }
@@ -944,7 +959,7 @@ body.dsh-tavern-shell-active [data-dsh-panel-host] { overflow: clip; }
   box-sizing: border-box; position: fixed; inset: 0; margin: auto;
   width: min(400px, calc(100vw - 32px)); height: fit-content; max-height: calc(100vh - 32px);
   padding: 16px; border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 14px; background: var(--dsw-specific-sidebar-fill);
+  border-radius: 14px; background: var(--dsh-tavern-solid-surface);
   color: var(--dsw-alias-label-primary); box-shadow: 0 18px 54px rgba(0, 0, 0, .35);
 }
 .dsh-tavern-prompt::backdrop { background: rgba(0, 0, 0, .52); }
@@ -1082,7 +1097,7 @@ body.dsh-tavern-shell-active [data-dsh-panel-host] { overflow: clip; }
 .dsh-tavern-group-picker > summary > span:last-child { opacity: .6; transition: transform .15s; }
 .dsh-tavern-group-picker[open] > summary > span:last-child { transform: rotate(180deg); }
 .dsh-tavern-group-picker > summary:focus-visible { outline: 2px solid color-mix(in srgb, var(--dsh-tavern-accent) 40%, transparent); outline-offset: 2px; }
-.dsh-tavern-group-menu { position: absolute; top: calc(100% + 6px); left: 0; width: min(220px, 75vw); z-index: 50; border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 12px; padding: 5px; background: var(--dsw-specific-sidebar-fill, #202124); box-shadow: 0 8px 24px #0003; transform-origin: top left; }
+.dsh-tavern-group-menu { position: absolute; top: calc(100% + 6px); left: 0; width: min(220px, 75vw); z-index: 50; border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 12px; padding: 5px; background: var(--dsh-tavern-solid-surface); box-shadow: 0 8px 24px #0003; transform-origin: top left; }
 .dsh-tavern-group-menu:popover-open { animation: dsh-tavern-menu-in 150ms cubic-bezier(0.23, 1, 0.32, 1); }
 @keyframes dsh-tavern-menu-in { from { opacity: 0; transform: scale(0.97); } }
 .dsh-tavern-group-options { max-height: 280px; overflow-y: auto; }
@@ -1105,7 +1120,7 @@ body.dsh-tavern-shell-active [data-dsh-panel-host] { overflow: clip; }
   .dsh-tavern-background-task input[role="switch"] { transition: background 150ms cubic-bezier(0.23, 1, 0.32, 1); }
   .dsh-tavern-settings-track::after { transition: background 150ms cubic-bezier(0.23, 1, 0.32, 1); }
 }
-.dsh-tavern-group-manager { width: min(440px, calc(100vw - 32px)); max-height: 80vh; border: 1px solid var(--dsw-alias-border-l2, #454750); border-radius: 12px; background: var(--dsw-specific-sidebar-fill, #202124); color: var(--dsw-alias-label-primary, #eee); padding: 0; }
+.dsh-tavern-group-manager { width: min(440px, calc(100vw - 32px)); max-height: 80vh; border: 1px solid var(--dsw-alias-border-l2, #454750); border-radius: 12px; background: var(--dsh-tavern-solid-surface); color: var(--dsw-alias-label-primary, #eee); padding: 0; }
 .dsh-tavern-group-manager::backdrop { background: #0008; }
 .dsh-tavern-group-manager-content { padding: 20px; }
 .dsh-tavern-group-manager-head, .dsh-tavern-group-manager-row, .dsh-tavern-group-manager-footer { display: flex; align-items: center; gap: 8px; }
@@ -1133,7 +1148,7 @@ body.dsh-tavern-shell-active [data-dsh-panel-host] { overflow: clip; }
 .dsh-tavern-card-row-menu > summary { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 5px; list-style: none; cursor: pointer; color: var(--dsw-alias-label-secondary); font-size: 18px; }
 .dsh-tavern-card-row-menu > summary::-webkit-details-marker { display: none; }
 .dsh-tavern-card-row-menu > summary:hover, .dsh-tavern-card-row-menu[open] > summary { background: var(--dsw-specific-input-major, #ffffff12); color: var(--dsw-alias-label-primary); }
-.dsh-tavern-card-row-popup { position: fixed; inset: auto; margin: 0; z-index: 1000; width: 168px; max-width: calc(100vw - 24px); box-sizing: border-box; overflow-y: auto; padding: 4px; border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 7px; background: var(--dsw-specific-sidebar-fill, #202124); box-shadow: 0 4px 14px #0003; }
+.dsh-tavern-card-row-popup { position: fixed; inset: auto; margin: 0; z-index: 1000; width: 168px; max-width: calc(100vw - 24px); box-sizing: border-box; overflow-y: auto; padding: 4px; border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 7px; background: var(--dsh-tavern-solid-surface); box-shadow: 0 4px 14px #0003; }
 .dsh-tavern-card-row-menu-title { padding: 5px 8px; color: var(--dsw-alias-label-secondary); font-size: 11px; }
 .dsh-tavern-card-row-popup button { display: flex; gap: 8px; align-items: center; width: 100%; min-height: 30px; border: 0; border-radius: 4px; padding: 5px 8px; background: transparent; color: inherit; text-align: left; font: inherit; font-size: 12px; line-height: 20px; overflow-wrap: anywhere; cursor: pointer; }
 .dsh-tavern-card-row-popup button > span { width: 12px; flex-shrink: 0; order: 1; margin-left: auto; color: var(--dsw-alias-label-secondary); font-size: 11px; }
@@ -1255,7 +1270,7 @@ body.dsh-tavern-shell-active [data-dsh-panel-host] { overflow: clip; }
 .dsh-tavern-message-frame-slot > iframe.dsh-tavern-message-frame:fullscreen { width: 100vw !important; height: 100vh !important; max-height: none !important; background: var(--dsw-alias-bg-base, Canvas); }
 
 .dsh-tavern-immersive-header { display: none !important; }
-.dsh-tavern-restore-header { align-self: center; flex: none; border: 1px solid var(--dsw-alias-border-l2); border-top: 0; border-radius: 0 0 9px 9px; padding: 2px 14px; background: var(--dsw-specific-sidebar-fill); color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; cursor: pointer; }
+.dsh-tavern-restore-header { align-self: center; flex: none; border: 1px solid var(--dsw-alias-border-l2); border-top: 0; border-radius: 0 0 9px 9px; padding: 2px 14px; background: var(--dsh-tavern-solid-surface); color: var(--dsw-alias-label-secondary); font: inherit; font-size: 11px; cursor: pointer; }
 .dsh-tavern-restore-header[hidden] { display: none !important; }
 .dsh-tavern-restore-header:focus-visible { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 2px; }
 
